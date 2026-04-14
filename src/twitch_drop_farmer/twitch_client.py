@@ -57,6 +57,8 @@ class TwitchClient:
         for cookie in payload.get("cookies", []):
             self.session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"))
         self.login_state.oauth_token = payload.get("oauth_token", "")
+        if self.login_state.oauth_token:
+            self.session.headers["Authorization"] = f"OAuth {self.login_state.oauth_token}"
 
     def save_cookies(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

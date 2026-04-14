@@ -56,3 +56,9 @@ Nao executes `src/twitch_drop_farmer/twitch_client.py` diretamente: esse ficheir
 
 - A Twitch altera frequentemente o schema GraphQL. Este projeto usa parsing defensivo e pode requerer ajuste dos hashes `persistedQuery` no futuro.
 - O token OAuth deve ser inserido pelo utilizador na UI.
+
+## Troubleshooting
+
+- Se aparecer `ImportError: DLL load failed while importing QtCore` no Windows, evita criar a `.venv` com o Python do Anaconda. O caminho mais estavel e usar um Python oficial do python.org ou Microsoft Store para criar a virtualenv.
+- Se quiseres ficar no ecossistema Conda, cria um ambiente Conda e instala `pyside6` via `conda-forge` em vez de usar a wheel do `pip`.
+- Se o erro persistir mesmo fora do Anaconda, instala o Microsoft Visual C++ Redistributable mais recente e recria a `.venv`.
