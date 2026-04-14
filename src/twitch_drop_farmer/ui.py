@@ -21,9 +21,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import AppConfig, load_config, save_config
-from .farmer import FarmEngine
-from .twitch_client import TwitchClient
+if __package__ in {None, ""}:
+    import sys
+    from pathlib import Path
+
+    src_dir = Path(__file__).resolve().parents[1]
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    from twitch_drop_farmer.config import AppConfig, load_config, save_config
+    from twitch_drop_farmer.farmer import FarmEngine
+    from twitch_drop_farmer.twitch_client import TwitchClient
+else:
+    from .config import AppConfig, load_config, save_config
+    from .farmer import FarmEngine
+    from .twitch_client import TwitchClient
 
 
 THEMES: dict[str, str] = {
@@ -184,3 +195,7 @@ def run() -> None:
     win = MainWindow()
     win.show()
     app.exec()
+
+
+if __name__ == "__main__":
+    run()

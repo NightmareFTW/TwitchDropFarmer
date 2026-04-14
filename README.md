@@ -21,14 +21,21 @@ Ferramenta local (sem Docker e sem Web UI) para automatizar farming de drops da 
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
 ## Execução
 
 ```bash
-PYTHONPATH=src python -m twitch_drop_farmer
+.\.venv\Scripts\python.exe main.py
+```
+
+Também funciona com:
+
+```bash
+.\.venv\Scripts\python.exe src\twitch_drop_farmer\ui.py
+.\.venv\Scripts\python.exe -m twitch_drop_farmer
 ```
 
 ## Observações

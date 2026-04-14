@@ -8,8 +8,17 @@ from typing import Any
 
 import requests
 
-from .config import COOKIE_FILE, CONFIG_DIR
-from .models import DropCampaign, StreamCandidate
+if __package__ in {None, ""}:
+    import sys
+
+    src_dir = Path(__file__).resolve().parents[1]
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    from twitch_drop_farmer.config import COOKIE_FILE, CONFIG_DIR
+    from twitch_drop_farmer.models import DropCampaign, StreamCandidate
+else:
+    from .config import COOKIE_FILE, CONFIG_DIR
+    from .models import DropCampaign, StreamCandidate
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
@@ -38,7 +47,10 @@ class TwitchClient:
         payload = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
         for cookie in payload.get("cookies", []):
             self.session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"))
-        self.login_state.oauth_token = payload.get("oauth_token", "")
+        token = payload.get("oauth_token", "").replace("OAuth ", "").strip()
+        self.login_state.oauth_token = token
+        if token:
+            self.session.headers["Authorization"] = f"OAuth {token}"
 
     def save_cookies(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -134,3 +146,8 @@ class TwitchClient:
                 )
             )
         return output
+
+
+if __name__ == "__main__":
+    print("Este modulo e interno. Arranca a app com: .\\.venv\\Scripts\\python.exe main.py")
+    raise SystemExit(0)
