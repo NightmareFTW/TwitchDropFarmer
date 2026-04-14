@@ -4,12 +4,30 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
-import requests
+try:
+    import requests
+except ModuleNotFoundError as exc:
+    if exc.name == "requests":
+        raise SystemExit(
+            "Falta a dependência 'requests'. "
+            "Instala tudo com `python -m pip install -r requirements.txt` "
+            "e arranca a app com `$env:PYTHONPATH='src'; python -m twitch_drop_farmer` "
+            "na raiz do repositório."
+        ) from exc
+    raise
 
-from .config import COOKIE_FILE, CONFIG_DIR
-from .models import DropCampaign, StreamCandidate
+if __package__ in {None, ""}:
+    package_root = Path(__file__).resolve().parents[1]
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    from twitch_drop_farmer.config import COOKIE_FILE, CONFIG_DIR
+    from twitch_drop_farmer.models import DropCampaign, StreamCandidate
+else:
+    from .config import COOKIE_FILE, CONFIG_DIR
+    from .models import DropCampaign, StreamCandidate
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
@@ -134,3 +152,11 @@ class TwitchClient:
                 )
             )
         return output
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "Este ficheiro e um modulo interno. "
+        "Arranca a aplicacao com `$env:PYTHONPATH='src'; python -m twitch_drop_farmer` "
+        "depois de instalares as dependências com `python -m pip install -r requirements.txt`."
+    )
