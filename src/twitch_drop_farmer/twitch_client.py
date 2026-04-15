@@ -36,12 +36,12 @@ else:
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
-WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+WEB_CLIENT_ID = ""
 WEB_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
-ANDROID_APP_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+ANDROID_APP_CLIENT_ID = ""
 ANDROID_APP_USER_AGENT = (
     "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) "
     "tv.twitch.android.app/25.3.0/2503006"
