@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -473,6 +474,198 @@ class TwitchClient:
             self._note("Drops page fallback could not discover campaigns in the HTML payload.")
         return found
 
+    def _browser_campaign_id(self, title: str, starts_at: datetime, ends_at: datetime) -> str:
+        digest = hashlib.sha1(
+            f"{title}|{starts_at.isoformat()}|{ends_at.isoformat()}".encode("utf-8")
+        ).hexdigest()
+        return f"browser-{digest[:16]}"
+
+    def _parse_browser_campaign_datetime(self, raw: str, utc_offset_hours: int) -> datetime | None:
+        text = re.sub(r"\s+", " ", raw).strip()
+        try:
+            naive = datetime.strptime(text, "%a, %b %d, %I:%M %p")
+        except ValueError:
+            return None
+        now = datetime.now()
+        local_tz = timezone(timedelta(hours=utc_offset_hours))
+        candidate = naive.replace(year=now.year, tzinfo=local_tz)
+        if candidate < now.astimezone(local_tz) - timedelta(days=370):
+            candidate = candidate.replace(year=candidate.year + 1)
+        elif candidate > now.astimezone(local_tz) + timedelta(days=370):
+            candidate = candidate.replace(year=candidate.year - 1)
+        return candidate.astimezone(timezone.utc)
+
+    def _campaign_from_browser_text(self, text: str) -> DropCampaign | None:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) < 3:
+            return None
+        schedule = lines[-1]
+        match = re.search(r"(.+?)\s+-\s+(.+?)\s+GMT([+-]\d+)", schedule)
+        if match is None:
+            return None
+        start_raw, end_raw, offset_raw = match.groups()
+        try:
+            utc_offset_hours = int(offset_raw)
+        except ValueError:
+            return None
+        starts_at = self._parse_browser_campaign_datetime(start_raw, utc_offset_hours)
+        ends_at = self._parse_browser_campaign_datetime(end_raw, utc_offset_hours)
+        if starts_at is None or ends_at is None:
+            return None
+        title = lines[0]
+        if not title:
+            return None
+        if ends_at <= starts_at:
+            return None
+        now = datetime.now(timezone.utc)
+        if now >= ends_at:
+            status = "EXPIRED"
+        elif now < starts_at:
+            status = "UPCOMING"
+        else:
+            status = "ACTIVE"
+        return DropCampaign(
+            id=self._browser_campaign_id(title, starts_at, ends_at),
+            game_name=title,
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            linked=True,
+            link_url=f"{TWITCH_URL}/drops/campaigns",
+            status=status,
+        )
+
+    def _campaigns_from_browser_page(self) -> list[DropCampaign]:
+        try:
+            from PySide6.QtCore import QEventLoop, QTimer, QUrl
+            from PySide6.QtNetwork import QNetworkCookie
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+        except Exception as exc:
+            self._note(f"Browser fallback unavailable: {exc}")
+            return []
+
+        app = QApplication.instance()
+        owned_app = False
+        if app is None:
+            app = QApplication([])
+            owned_app = True
+
+        profile = QWebEngineProfile("twitch-drop-farmer-drops-fallback", app)
+        page = QWebEnginePage(profile, app)
+        cookie_store = profile.cookieStore()
+
+        def push_cookie(name: str, value: str, *, domain: str = ".twitch.tv") -> None:
+            if not value:
+                return
+            cookie = QNetworkCookie()
+            cookie.setName(name.encode("utf-8"))
+            cookie.setValue(value.encode("utf-8"))
+            cookie.setDomain(domain)
+            cookie.setPath("/")
+            cookie.setSecure(True)
+            cookie_store.setCookie(cookie, QUrl(f"{TWITCH_URL}/"))
+
+        auth_token = self.login_state.oauth_token
+        persistent_id = self.login_state.user_id
+        unique_id = (
+            self.device_id
+            or self.session.cookies.get("unique_id", domain=".twitch.tv")
+            or self.session.cookies.get("unique_id", domain="www.twitch.tv")
+            or ""
+        )
+        push_cookie("auth-token", auth_token)
+        push_cookie("auth-token", auth_token, domain="www.twitch.tv")
+        push_cookie("persistent", persistent_id)
+        push_cookie("unique_id", unique_id)
+
+        loop = QEventLoop()
+        payload: dict[str, Any] = {"raw": ""}
+        timed_out = {"value": False}
+
+        def finish() -> None:
+            if loop.isRunning():
+                loop.quit()
+
+        def collect_cards() -> None:
+            script = """
+                JSON.stringify(
+                    Array.from(document.querySelectorAll("button"))
+                        .map((button) => (button.innerText || "").trim())
+                        .filter(
+                            (text) =>
+                                /GMT[+-]\\d+/.test(text) &&
+                                text.split(/\\n+/).filter(Boolean).length >= 3
+                        )
+                        .slice(0, 250)
+                );
+            """
+
+            def on_result(raw: Any) -> None:
+                payload["raw"] = raw if isinstance(raw, str) else ""
+                finish()
+
+            page.runJavaScript(script, on_result)
+
+        def on_loaded(_: bool) -> None:
+            QTimer.singleShot(10_000, collect_cards)
+
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+
+        def on_timeout() -> None:
+            timed_out["value"] = True
+            finish()
+
+        timeout.timeout.connect(on_timeout)
+        page.loadFinished.connect(on_loaded)
+        timeout.start(25_000)
+        page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
+        loop.exec()
+
+        timeout.stop()
+        page.deleteLater()
+        profile.deleteLater()
+        if owned_app:
+            app.quit()
+
+        if timed_out["value"]:
+            self._note("Browser fallback timed out while loading the rendered Drops page.")
+            return []
+
+        raw_cards = payload["raw"]
+        if not raw_cards:
+            self._note("Browser fallback did not capture any rendered campaign cards.")
+            return []
+
+        try:
+            card_texts = json.loads(raw_cards)
+        except json.JSONDecodeError:
+            self._note("Browser fallback returned an unreadable payload.")
+            return []
+
+        campaigns: list[DropCampaign] = []
+        seen: set[str] = set()
+        for card_text in card_texts:
+            if not isinstance(card_text, str):
+                continue
+            campaign = self._campaign_from_browser_text(card_text)
+            if campaign is None or campaign.status == "EXPIRED":
+                continue
+            fingerprint = f"{campaign.game_name}|{campaign.starts_at.isoformat()}|{campaign.ends_at.isoformat()}"
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            campaigns.append(campaign)
+
+        if campaigns:
+            self._note(
+                f"Browser fallback discovered {len(campaigns)} visible active/upcoming campaign(s)."
+            )
+        else:
+            self._note("Browser fallback found the Drops page, but no usable campaign cards were parsed.")
+        return campaigns
+
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:
         game = data.get("game") or {}
         if not game:
@@ -626,6 +819,11 @@ class TwitchClient:
 
         campaigns.sort(key=lambda item: item.starts_at)
         campaigns.sort(key=lambda item: item.active, reverse=True)
+        if not campaigns:
+            self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
+            campaigns = self._campaigns_from_browser_page()
+            campaigns.sort(key=lambda item: item.starts_at)
+            campaigns.sort(key=lambda item: item.active, reverse=True)
         self._note(
             f"Parsed {len(campaigns)} campaign(s), {sum(campaign.eligible for campaign in campaigns)} eligible for farming."
         )
