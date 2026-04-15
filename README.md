@@ -8,9 +8,12 @@ Ferramenta local (sem Docker e sem Web UI) para automatizar farming de drops da 
 - Descoberta automatica de campanhas e atualizacao periodica.
 - Auto-switch entre canais com base em regras.
 - OAuth persistido em cookies locais em `~/.twitch-drop-farmer/cookies.json`.
+- Ajuda contextual na UI para copiares exatamente o valor do cookie `auth-token`.
+- Campanhas nao ligadas continuam visiveis e podem abrir o link de ligacao da conta diretamente a partir da app.
 - Filtros avancados:
   - whitelist de jogos
   - blacklist de jogos (ignora completamente)
+  - whitelist de canais com prioridade
   - blacklist de canais
 - UI local clean com temas:
   - `twitch`
@@ -55,7 +58,7 @@ Nao executes `src/twitch_drop_farmer/twitch_client.py` diretamente: esse ficheir
 ## Observacoes
 
 - A Twitch altera frequentemente o schema GraphQL. Este projeto usa parsing defensivo e pode requerer ajuste dos hashes `persistedQuery` no futuro.
-- O token OAuth deve ser inserido pelo utilizador na UI.
+- O token a colar na UI e o valor do cookie `auth-token` da tua sessao Twitch, sem o nome do cookie e sem o prefixo `OAuth `.
 
 ## Troubleshooting
 

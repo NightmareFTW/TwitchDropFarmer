@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
@@ -13,6 +13,7 @@ class FarmSnapshot:
     decisions: list[FarmDecision]
     available_games: list[str]
     available_channels: list[ChannelOption]
+    messages: list[str] = field(default_factory=list)
 
 
 class FarmEngine:
@@ -35,9 +36,15 @@ class FarmEngine:
         preferred = int(bool(whitelist) and stream.login.casefold() in whitelist)
         return (preferred, int(stream.drops_enabled), stream.viewer_count)
 
-    def choose_stream(self, streams: list[StreamCandidate]) -> StreamCandidate | None:
+    def choose_stream(self, campaign: DropCampaign, streams: list[StreamCandidate]) -> StreamCandidate | None:
         blacklist = {item.casefold() for item in self.config.blacklist_channels}
-        valid = [stream for stream in streams if stream.login.casefold() not in blacklist]
+        allowed = {item.casefold() for item in campaign.allowed_channels}
+        valid = [
+            stream
+            for stream in streams
+            if stream.login.casefold() not in blacklist
+            and (not allowed or stream.login.casefold() in allowed)
+        ]
         valid.sort(key=self._channel_priority, reverse=True)
         return valid[0] if valid else None
 
@@ -57,20 +64,24 @@ class FarmEngine:
             return (-remaining, seconds_until_end, -required)
         return (seconds_until_end, remaining, required)
 
+    def _decision_sort_key(self, decision: FarmDecision) -> tuple[int, tuple[float, ...]]:
+        campaign = decision.campaign
+        if campaign.active:
+            phase = 0
+        elif campaign.upcoming:
+            phase = 1
+        else:
+            phase = 2
+        return (phase, self._campaign_sort_key(campaign))
+
     def poll(self) -> FarmSnapshot:
         campaigns = self.client.fetch_campaigns()
+        messages = self.client.consume_diagnostics()
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
 
         for campaign in campaigns:
-            streams = self.client.fetch_streams(campaign.game_name)
-            for stream in streams:
-                available_channels[stream.login.casefold()] = ChannelOption(
-                    login=stream.login,
-                    display_name=stream.display_name or stream.login,
-                )
-
             if not self._game_is_allowed(campaign.game_name):
                 decisions.append(
                     FarmDecision(
@@ -81,7 +92,39 @@ class FarmEngine:
                 )
                 continue
 
-            selected = self.choose_stream(streams)
+            if not campaign.active:
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="campaign_upcoming" if campaign.upcoming else "campaign_not_active",
+                    )
+                )
+                continue
+
+            if not campaign.eligible:
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="account_not_linked",
+                    )
+                )
+                continue
+
+            try:
+                streams = self.client.fetch_streams(campaign)
+            except Exception as exc:
+                messages.append(f"Failed to fetch streams for {campaign.game_name}: {exc}")
+                streams = []
+            messages.extend(self.client.consume_diagnostics())
+            for stream in streams:
+                available_channels[stream.login.casefold()] = ChannelOption(
+                    login=stream.login,
+                    display_name=stream.display_name or stream.login,
+                )
+
+            selected = self.choose_stream(campaign, streams)
             decisions.append(
                 FarmDecision(
                     campaign=campaign,
@@ -96,10 +139,11 @@ class FarmEngine:
                 )
             )
 
-        decisions.sort(key=lambda item: self._campaign_sort_key(item.campaign))
+        decisions.sort(key=self._decision_sort_key)
         return FarmSnapshot(
             campaigns=campaigns,
             decisions=decisions,
             available_games=available_games,
             available_channels=sorted(available_channels.values(), key=lambda item: item.label.casefold()),
+            messages=messages,
         )
