@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+import requests
+
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -18,8 +20,10 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -218,6 +222,32 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "stop_farm": "Parar farm",
         "campaigns_detected": "Campanhas detetadas",
         "campaigns_detected_count": "Campanhas detetadas ({count})",
+        "tab_farming_now": "A farmar agora",
+        "tab_campaign_explorer": "Campanhas",
+        "farming_now_group": "Estado atual de farming",
+        "farming_now_idle": "Nenhuma campanha ativa a ser farmada neste momento.",
+        "farming_now_game": "Jogo: {game}",
+        "farming_now_campaign": "Campanha: {campaign}",
+        "farming_now_channel": "Canal em visualizacao: {channel}",
+        "farming_now_next_drop": "Proximo drop: {drop}",
+        "farming_now_eta": "Tempo para o proximo drop: {eta}",
+        "farming_now_progress": "Progresso da campanha: {progress}/{required} min",
+        "drop_unknown": "Desconhecido",
+        "campaign_filter_status": "Mostrar:",
+        "campaign_filter_link": "Ligacao:",
+        "campaign_sort_label": "Ordenar por:",
+        "campaign_status_all": "Todas",
+        "campaign_status_active": "Ativas",
+        "campaign_status_upcoming": "Futuras",
+        "campaign_status_farmable": "Farmaveis agora",
+        "campaign_link_all": "Todas",
+        "campaign_link_eligible": "Conta ligada/eligivel",
+        "campaign_link_unlinked": "Por ligar",
+        "campaign_sort_priority": "Prioridade de farm",
+        "campaign_sort_ending": "Terminam mais cedo",
+        "campaign_sort_progress": "Mais progresso",
+        "campaign_sort_remaining": "Menos minutos em falta",
+        "campaign_sort_game": "Jogo (A-Z)",
         "best_target_none": "Sem alvo prioritario neste momento.",
         "best_target": "Melhor alvo atual: {game} -> {channel} | ordenacao: {sort_mode}",
         "best_target_no_stream": "Nenhuma stream valida para {game} | ordenacao: {sort_mode}",
@@ -312,6 +342,32 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "stop_farm": "Stop farming",
         "campaigns_detected": "Detected campaigns",
         "campaigns_detected_count": "Detected campaigns ({count})",
+        "tab_farming_now": "Farming now",
+        "tab_campaign_explorer": "Campaigns",
+        "farming_now_group": "Current farming status",
+        "farming_now_idle": "No active campaign is being farmed right now.",
+        "farming_now_game": "Game: {game}",
+        "farming_now_campaign": "Campaign: {campaign}",
+        "farming_now_channel": "Watching channel: {channel}",
+        "farming_now_next_drop": "Next drop: {drop}",
+        "farming_now_eta": "Time to next drop: {eta}",
+        "farming_now_progress": "Campaign progress: {progress}/{required} min",
+        "drop_unknown": "Unknown",
+        "campaign_filter_status": "Show:",
+        "campaign_filter_link": "Linking:",
+        "campaign_sort_label": "Sort by:",
+        "campaign_status_all": "All",
+        "campaign_status_active": "Active",
+        "campaign_status_upcoming": "Upcoming",
+        "campaign_status_farmable": "Farmable now",
+        "campaign_link_all": "All",
+        "campaign_link_eligible": "Linked/eligible",
+        "campaign_link_unlinked": "Needs linking",
+        "campaign_sort_priority": "Farm priority",
+        "campaign_sort_ending": "Ending soonest",
+        "campaign_sort_progress": "Most progress",
+        "campaign_sort_remaining": "Least remaining",
+        "campaign_sort_game": "Game (A-Z)",
         "best_target_none": "No priority target right now.",
         "best_target": "Current best target: {game} -> {channel} | order: {sort_mode}",
         "best_target_no_stream": "No valid stream for {game} | order: {sort_mode}",
@@ -434,6 +490,7 @@ class MainWindow(QMainWindow):
         self.available_game_entries: list[FilterEntry] = []
         self.available_channel_entries: list[FilterEntry] = []
         self.decision_by_campaign_id: dict[str, FarmDecision] = {}
+        self._thumb_cache: dict[str, QPixmap] = {}
         self._oauth_hidden = bool(self.client.login_state.oauth_token)
 
         self.resize(1280, 800)
@@ -576,6 +633,54 @@ class MainWindow(QMainWindow):
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
         vbox = QVBoxLayout(panel)
+
+        self.tabs_right = QTabWidget()
+
+        farming_tab = QWidget()
+        farming_layout = QVBoxLayout(farming_tab)
+        self.farming_now_group = QGroupBox()
+        farming_group_layout = QVBoxLayout(self.farming_now_group)
+        self.farming_now_game_image = QLabel()
+        self.farming_now_game_image.setFixedSize(144, 192)
+        self.farming_now_game_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.farming_now_game = QLabel()
+        self.farming_now_campaign = QLabel()
+        self.farming_now_channel = QLabel()
+        self.farming_now_next_drop = QLabel()
+        self.farming_now_eta = QLabel()
+        self.farming_now_progress_text = QLabel()
+        self.farming_now_progress = QProgressBar()
+        self.farming_now_progress.setRange(0, 1000)
+        farming_group_layout.addWidget(self.farming_now_game_image, alignment=Qt.AlignmentFlag.AlignHCenter)
+        farming_group_layout.addWidget(self.farming_now_game)
+        farming_group_layout.addWidget(self.farming_now_campaign)
+        farming_group_layout.addWidget(self.farming_now_channel)
+        farming_group_layout.addWidget(self.farming_now_next_drop)
+        farming_group_layout.addWidget(self.farming_now_eta)
+        farming_group_layout.addWidget(self.farming_now_progress_text)
+        farming_group_layout.addWidget(self.farming_now_progress)
+        farming_layout.addWidget(self.farming_now_group)
+        farming_layout.addStretch(1)
+
+        campaigns_tab = QWidget()
+        campaigns_layout = QVBoxLayout(campaigns_tab)
+        filter_row = QHBoxLayout()
+        self.filter_status_label = QLabel()
+        self.filter_status_picker = QComboBox()
+        self.filter_status_picker.currentIndexChanged.connect(self._handle_campaign_filters_changed)
+        self.filter_link_label = QLabel()
+        self.filter_link_picker = QComboBox()
+        self.filter_link_picker.currentIndexChanged.connect(self._handle_campaign_filters_changed)
+        self.campaign_sort_label = QLabel()
+        self.campaign_sort_picker = QComboBox()
+        self.campaign_sort_picker.currentIndexChanged.connect(self._handle_campaign_filters_changed)
+        filter_row.addWidget(self.filter_status_label)
+        filter_row.addWidget(self.filter_status_picker, 1)
+        filter_row.addWidget(self.filter_link_label)
+        filter_row.addWidget(self.filter_link_picker, 1)
+        filter_row.addWidget(self.campaign_sort_label)
+        filter_row.addWidget(self.campaign_sort_picker, 1)
+
         self.best_target_label = QLabel()
         self.best_target_label.setWordWrap(True)
         self.campaigns_label = QLabel()
@@ -593,11 +698,17 @@ class MainWindow(QMainWindow):
         self.log_label = QLabel()
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        vbox.addWidget(self.best_target_label)
-        vbox.addWidget(self.campaigns_label)
-        vbox.addWidget(self.campaign_list, 2)
-        vbox.addWidget(self.campaign_details_label)
-        vbox.addLayout(link_row)
+
+        campaigns_layout.addWidget(self.best_target_label)
+        campaigns_layout.addLayout(filter_row)
+        campaigns_layout.addWidget(self.campaigns_label)
+        campaigns_layout.addWidget(self.campaign_list, 2)
+        campaigns_layout.addWidget(self.campaign_details_label)
+        campaigns_layout.addLayout(link_row)
+
+        self.tabs_right.addTab(farming_tab, "")
+        self.tabs_right.addTab(campaigns_tab, "")
+        vbox.addWidget(self.tabs_right, 3)
         vbox.addWidget(self.log_label)
         vbox.addWidget(self.log_output, 1)
         return panel
@@ -714,7 +825,7 @@ class MainWindow(QMainWindow):
         self.channels_blacklist_list.set_entries(self.available_channel_entries, channels_blacklist, self._t("no_active_channels"))
 
     def _refresh_campaigns_label(self) -> None:
-        count = len(self.latest_snapshot.decisions) if self.latest_snapshot else 0
+        count = len(self._filtered_decisions()) if self.latest_snapshot else 0
         if count:
             self.campaigns_label.setText(self._t("campaigns_detected_count", count=count))
         else:
@@ -722,6 +833,8 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         self.setWindowTitle(self._t("window_title"))
+        self.tabs_right.setTabText(0, self._t("tab_farming_now"))
+        self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
         self.token_input.setPlaceholderText(self._t("oauth_placeholder"))
@@ -750,12 +863,48 @@ class MainWindow(QMainWindow):
         self.btn_save.setText(self._t("save_settings"))
         self.btn_start.setText(self._t("start_farm"))
         self.btn_stop.setText(self._t("stop_farm"))
+        self.filter_status_label.setText(self._t("campaign_filter_status"))
+        self.filter_link_label.setText(self._t("campaign_filter_link"))
+        self.campaign_sort_label.setText(self._t("campaign_sort_label"))
+
+        current_status = self.filter_status_picker.currentData() or "all"
+        current_link = self.filter_link_picker.currentData() or "all"
+        current_sort = self.campaign_sort_picker.currentData() or "priority"
+
+        self.filter_status_picker.blockSignals(True)
+        self.filter_status_picker.clear()
+        self.filter_status_picker.addItem(self._t("campaign_status_all"), "all")
+        self.filter_status_picker.addItem(self._t("campaign_status_active"), "active")
+        self.filter_status_picker.addItem(self._t("campaign_status_upcoming"), "upcoming")
+        self.filter_status_picker.addItem(self._t("campaign_status_farmable"), "farmable")
+        self.filter_status_picker.setCurrentIndex(max(0, self.filter_status_picker.findData(current_status)))
+        self.filter_status_picker.blockSignals(False)
+
+        self.filter_link_picker.blockSignals(True)
+        self.filter_link_picker.clear()
+        self.filter_link_picker.addItem(self._t("campaign_link_all"), "all")
+        self.filter_link_picker.addItem(self._t("campaign_link_eligible"), "eligible")
+        self.filter_link_picker.addItem(self._t("campaign_link_unlinked"), "unlinked")
+        self.filter_link_picker.setCurrentIndex(max(0, self.filter_link_picker.findData(current_link)))
+        self.filter_link_picker.blockSignals(False)
+
+        self.campaign_sort_picker.blockSignals(True)
+        self.campaign_sort_picker.clear()
+        self.campaign_sort_picker.addItem(self._t("campaign_sort_priority"), "priority")
+        self.campaign_sort_picker.addItem(self._t("campaign_sort_ending"), "ending")
+        self.campaign_sort_picker.addItem(self._t("campaign_sort_progress"), "progress")
+        self.campaign_sort_picker.addItem(self._t("campaign_sort_remaining"), "remaining")
+        self.campaign_sort_picker.addItem(self._t("campaign_sort_game"), "game")
+        self.campaign_sort_picker.setCurrentIndex(max(0, self.campaign_sort_picker.findData(current_sort)))
+        self.campaign_sort_picker.blockSignals(False)
+
         self._refresh_campaigns_label()
         self.btn_link_account.setText(self._t("link_account"))
         self.btn_open_drops_page.setText(self._t("open_drops_page"))
         self.log_label.setText(self._t("log_label"))
         self._refresh_filter_lists()
         self._refresh_priority_label()
+        self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
         self._update_auth_status()
@@ -786,6 +935,111 @@ class MainWindow(QMainWindow):
             parts.append(f"{hours}h")
         parts.append(f"{minutes}m")
         return " ".join(parts)
+
+    def _load_box_art_pixmap(self, url: str) -> QPixmap:
+        cached = self._thumb_cache.get(url)
+        if cached is not None:
+            return cached
+        pixmap = QPixmap(144, 192)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        if url:
+            try:
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                loaded = QPixmap()
+                if loaded.loadFromData(response.content):
+                    pixmap = loaded
+            except requests.RequestException:
+                pass
+        scaled = pixmap.scaled(144, 192, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self._thumb_cache[url] = scaled
+        return scaled
+
+    def _filtered_decisions(self) -> list[FarmDecision]:
+        if self.latest_snapshot is None:
+            return []
+        status_filter = self.filter_status_picker.currentData()
+        link_filter = self.filter_link_picker.currentData()
+
+        def status_ok(decision: FarmDecision) -> bool:
+            if status_filter == "active":
+                return decision.campaign.active
+            if status_filter == "upcoming":
+                return decision.campaign.upcoming
+            if status_filter == "farmable":
+                return decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+            return True
+
+        def link_ok(decision: FarmDecision) -> bool:
+            if link_filter == "eligible":
+                return decision.campaign.eligible
+            if link_filter == "unlinked":
+                return decision.campaign.linkable
+            return True
+
+        output = [decision for decision in self.latest_snapshot.decisions if status_ok(decision) and link_ok(decision)]
+        sort_mode = self.campaign_sort_picker.currentData()
+        if sort_mode == "ending":
+            output.sort(key=lambda d: d.campaign.seconds_until_end)
+        elif sort_mode == "progress":
+            output.sort(key=lambda d: d.campaign.completion, reverse=True)
+        elif sort_mode == "remaining":
+            output.sort(key=lambda d: d.campaign.remaining_minutes)
+        elif sort_mode == "game":
+            output.sort(key=lambda d: (d.campaign.game_name.casefold(), d.campaign.title.casefold()))
+        return output
+
+    def _refresh_farming_now(self) -> None:
+        if self.latest_snapshot is None:
+            self.farming_now_group.setTitle(self._t("farming_now_group"))
+            self.farming_now_game.setText(self._t("farming_now_idle"))
+            self.farming_now_campaign.clear()
+            self.farming_now_channel.clear()
+            self.farming_now_next_drop.clear()
+            self.farming_now_eta.clear()
+            self.farming_now_progress_text.clear()
+            self.farming_now_progress.setValue(0)
+            self.farming_now_game_image.clear()
+            return
+
+        active = next(
+            (
+                decision
+                for decision in self.latest_snapshot.decisions
+                if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+            ),
+            None,
+        )
+        self.farming_now_group.setTitle(self._t("farming_now_group"))
+        if active is None:
+            self.farming_now_game.setText(self._t("farming_now_idle"))
+            self.farming_now_campaign.clear()
+            self.farming_now_channel.clear()
+            self.farming_now_next_drop.clear()
+            self.farming_now_eta.clear()
+            self.farming_now_progress_text.clear()
+            self.farming_now_progress.setValue(0)
+            self.farming_now_game_image.clear()
+            return
+
+        campaign = active.campaign
+        channel_name = active.stream.display_name or active.stream.login
+        next_drop_name = campaign.next_drop_name or self._t("drop_unknown")
+        next_drop_eta = self._format_duration(campaign.next_drop_eta_seconds)
+        self.farming_now_game.setText(self._t("farming_now_game", game=campaign.game_name))
+        self.farming_now_campaign.setText(self._t("farming_now_campaign", campaign=campaign.title))
+        self.farming_now_channel.setText(self._t("farming_now_channel", channel=channel_name))
+        self.farming_now_next_drop.setText(self._t("farming_now_next_drop", drop=next_drop_name))
+        self.farming_now_eta.setText(self._t("farming_now_eta", eta=next_drop_eta))
+        self.farming_now_progress_text.setText(
+            self._t(
+                "farming_now_progress",
+                progress=campaign.progress_minutes,
+                required=campaign.required_minutes,
+            )
+        )
+        self.farming_now_progress.setValue(int(campaign.completion * 1000))
+        self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(campaign.game_box_art_url))
 
     def _reason_text(self, decision: FarmDecision) -> str:
         if decision.reason_code == "game_filtered":
@@ -844,7 +1098,12 @@ class MainWindow(QMainWindow):
             self.campaign_list.blockSignals(False)
             return
 
-        for decision in self.latest_snapshot.decisions:
+        decisions = self._filtered_decisions()
+        if self.campaign_sort_picker.currentData() in {None, "priority"}:
+            decisions = list(decisions)
+            decisions.sort(key=self.engine._decision_sort_key)
+
+        for decision in decisions:
             campaign = decision.campaign
             self.decision_by_campaign_id[campaign.id] = decision
             target = decision.stream.display_name if decision.stream else "-"
@@ -949,6 +1208,8 @@ class MainWindow(QMainWindow):
         save_config(self.config)
         self.engine.config = self.config
         self._log(self._t("settings_saved"))
+        if self.latest_snapshot is not None:
+            self.refresh_snapshot()
 
     def handle_start(self) -> None:
         self._with_errors(self._do_start)
@@ -963,6 +1224,11 @@ class MainWindow(QMainWindow):
         self._log(self._t("farming_stopped"))
 
     def handle_campaign_selection_changed(self) -> None:
+        self._refresh_campaign_details()
+
+    def _handle_campaign_filters_changed(self) -> None:
+        self._refresh_campaigns_label()
+        self._refresh_campaign_list()
         self._refresh_campaign_details()
 
     def handle_link_account(self) -> None:
@@ -988,6 +1254,7 @@ class MainWindow(QMainWindow):
         self._refresh_filter_lists()
         self._refresh_campaigns_label()
         self._refresh_priority_label()
+        self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
         self._update_auth_status()

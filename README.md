@@ -55,6 +55,23 @@ PYTHONPATH=src python -m twitch_drop_farmer
 
 Nao executes `src/twitch_drop_farmer/twitch_client.py` diretamente: esse ficheiro e um modulo interno, nao o entrypoint da aplicacao.
 
+### Arranque direto por duplo clique (sem CMD)
+
+- Podes abrir a app diretamente com duplo clique em `TwitchDropFarmer.pyw`.
+- Este launcher usa o codigo da app em `src/` e tenta mostrar erros em janela popup, sem consola.
+
+### Gerar .exe (Windows)
+
+Na raiz do projeto, corre uma vez:
+
+```powershell
+.\build_exe.ps1
+```
+
+Depois abre por duplo clique:
+
+- `dist\TwitchDropFarmer.exe`
+
 ## Observacoes
 
 - A Twitch altera frequentemente o schema GraphQL. Este projeto usa parsing defensivo e pode requerer ajuste dos hashes `persistedQuery` no futuro.
