@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ import re
 import secrets
 import sys
 from typing import Any
+from urllib.parse import quote, urljoin
 
 try:
     import requests
@@ -112,6 +114,37 @@ GAME_DIRECTORY_QUERY = {
         }
     },
 }
+PLAYBACK_ACCESS_TOKEN_QUERY = {
+    "operationName": "PlaybackAccessToken_Template",
+    "query": (
+        "query PlaybackAccessToken_Template(" \
+        "$login: String!, $playerType: String!, $platform: String!, $playerBackend: String!" \
+        ") { " \
+        "streamPlaybackAccessToken(channelName: $login, " \
+        "params: {platform: $platform, playerBackend: $playerBackend, playerType: $playerType}) { " \
+        "value signature __typename" \
+        " } }"
+    ),
+    "variables": {
+        "login": "",
+        "playerType": "site",
+        "platform": "web",
+        "playerBackend": "mediaplayer",
+    },
+}
+STREAM_INFO_QUERY = {
+    "operationName": "VideoPlayerStreamInfoOverlayChannel",
+    "variables": {"channel": ""},
+    "extensions": {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d",
+        }
+    },
+}
+
+SPADE_PATTERN = re.compile(r'"spade_?url"\s*:\s*"(https://[^"\\]+)"', re.I)
+SETTINGS_PATTERN = re.compile(r'src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"', re.I)
 
 
 @dataclass(slots=True)
@@ -140,6 +173,9 @@ class TwitchClient:
         self.login_state = LoginState()
         self._diagnostics: list[str] = []
         self._slug_cache: dict[str, str] = {}
+        self._campaign_cache: list[DropCampaign] = []
+        self._streamless_media_playlist: dict[str, str] = {}
+        self._streamless_spade_url: dict[str, str] = {}
         self.device_id = ""
         self.session_id = secrets.token_hex(16)
         self._load_cookies()
@@ -250,6 +286,236 @@ class TwitchClient:
         if self.login_state.oauth_token:
             headers["Authorization"] = f"OAuth {self.login_state.oauth_token}"
         return headers
+
+    def _stream_headers(self, channel_login: str) -> dict[str, str]:
+        return {
+            "Accept": "*/*",
+            "Accept-Language": "en-US",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Referer": f"{TWITCH_URL}/{channel_login}",
+            "User-Agent": WEB_USER_AGENT,
+        }
+
+    def _post_gql_web(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.session.post(
+            GQL_URL,
+            json=payload,
+            headers=self._gql_headers("web"),
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+        self._note_graphql_errors(payload, data)
+        return data
+
+    def _streamless_media_playlist(self, channel_login: str) -> str:
+        cached = self._streamless_media_playlist.get(channel_login.casefold(), "")
+        if cached:
+            return cached
+
+        payload = self._clone_query(PLAYBACK_ACCESS_TOKEN_QUERY)
+        payload["variables"]["login"] = channel_login
+        token_response = self._post_gql_web(payload)
+        token_data = token_response.get("data", {}).get("streamPlaybackAccessToken", {}) or {}
+        signature = str(token_data.get("signature", "")).strip()
+        token = str(token_data.get("value", "")).strip()
+        if not signature or not token:
+            raise ValueError("PlaybackAccessToken returned an empty signature/token.")
+
+        hls_url = (
+            f"https://usher.ttvnw.net/api/channel/hls/{channel_login}.m3u8"
+            f"?allow_source=true"
+            f"&allow_audio_only=true"
+            f"&fast_bread=true"
+            f"&player_backend=mediaplayer"
+            f"&playlist_include_framerate=true"
+            f"&reassignments_supported=true"
+            f"&sig={quote(signature, safe='')}"
+            f"&token={quote(token, safe='')}"
+            f"&type=any"
+            f"&p={secrets.randbelow(1_000_000)}"
+        )
+        response = self.session.get(
+            hls_url,
+            headers=self._stream_headers(channel_login),
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        media_playlist = ""
+        for line in response.text.splitlines():
+            candidate = line.strip()
+            if not candidate or candidate.startswith("#"):
+                continue
+            media_playlist = urljoin(response.url, candidate)
+            break
+
+        if not media_playlist:
+            raise ValueError("Could not resolve media playlist from HLS master manifest.")
+
+        self._streamless_media_playlist[channel_login.casefold()] = media_playlist
+        return media_playlist
+
+    def _stream_info(self, channel_login: str) -> dict[str, str]:
+        payload = self._clone_query(STREAM_INFO_QUERY)
+        payload["variables"]["channel"] = channel_login
+        response = self._post_gql(payload, client_profile="web")
+        user = response.get("data", {}).get("user") or {}
+        stream = user.get("stream") or {}
+        channel_id = str(user.get("id", "") or "").strip()
+        broadcast_id = str(stream.get("id", "") or "").strip()
+        return {
+            "channel_id": channel_id,
+            "broadcast_id": broadcast_id,
+        }
+
+    def _extract_spade_url(self, html_or_js: str) -> str:
+        match = SPADE_PATTERN.search(html_or_js)
+        if match is None:
+            return ""
+        return match.group(1).replace(r"\/", "/")
+
+    def _streamless_spade_endpoint(self, channel_login: str) -> str:
+        cache_key = channel_login.casefold()
+        cached = self._streamless_spade_url.get(cache_key, "")
+        if cached:
+            return cached
+
+        response = self.session.get(
+            f"https://m.twitch.tv/{channel_login}",
+            headers={"User-Agent": WEB_USER_AGENT},
+            timeout=20,
+        )
+        response.raise_for_status()
+        html = response.text
+
+        spade_url = self._extract_spade_url(html)
+        if not spade_url:
+            settings_match = SETTINGS_PATTERN.search(html)
+            if settings_match is None:
+                raise ValueError("Could not locate Twitch settings script for spade URL extraction.")
+            settings_url = settings_match.group(1)
+            settings_response = self.session.get(
+                settings_url,
+                headers={"User-Agent": WEB_USER_AGENT},
+                timeout=20,
+            )
+            settings_response.raise_for_status()
+            spade_url = self._extract_spade_url(settings_response.text)
+        if not spade_url:
+            raise ValueError("Could not extract spade URL from channel page.")
+
+        self._streamless_spade_url[cache_key] = spade_url
+        return spade_url
+
+    def _streamless_spade_payload(
+        self,
+        *,
+        channel_login: str,
+        channel_id: str,
+        broadcast_id: str,
+    ) -> dict[str, str]:
+        payload = [
+            {
+                "event": "minute-watched",
+                "properties": {
+                    "broadcast_id": broadcast_id,
+                    "channel_id": channel_id,
+                    "channel": channel_login,
+                    "hidden": False,
+                    "live": True,
+                    "location": "channel",
+                    "logged_in": True,
+                    "muted": False,
+                    "player": "site",
+                    "user_id": self.login_state.user_id,
+                },
+            }
+        ]
+        raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+        return {"data": base64.b64encode(raw.encode("utf-8")).decode("ascii")}
+
+    def _streamless_watch_hls_head(self, channel_login: str) -> bool:
+        try:
+            playlist_url = self._streamless_media_playlist(channel_login)
+            playlist_response = self.session.get(
+                playlist_url,
+                headers=self._stream_headers(channel_login),
+                timeout=20,
+            )
+            playlist_response.raise_for_status()
+        except Exception as exc:
+            self._streamless_media_playlist.pop(channel_login.casefold(), None)
+            self._note(f"Streamless HLS fallback failed for {channel_login}: {exc}")
+            return False
+
+        segment_url = ""
+        chunks = [line.strip() for line in playlist_response.text.splitlines() if line.strip()]
+        for candidate in reversed(chunks):
+            if candidate.startswith("#"):
+                continue
+            segment_url = urljoin(playlist_response.url, candidate)
+            break
+        if not segment_url:
+            self._note(f"Streamless HLS fallback did not find media segments for {channel_login}.")
+            return False
+
+        try:
+            segment_response = self.session.head(
+                segment_url,
+                headers=self._stream_headers(channel_login),
+                timeout=20,
+            )
+            segment_response.raise_for_status()
+        except Exception as exc:
+            self._note(f"Streamless HLS HEAD request failed for {channel_login}: {exc}")
+            return False
+        return True
+
+    def streamless_watch_heartbeat(
+        self,
+        channel_login: str,
+        *,
+        channel_id: str = "",
+        broadcast_id: str = "",
+    ) -> bool:
+        login = channel_login.strip()
+        if not login:
+            return False
+        if not self.login_state.oauth_token:
+            self._note("Streamless heartbeat skipped because no auth-token is set.")
+            return False
+
+        try:
+            ids = {"channel_id": channel_id.strip(), "broadcast_id": broadcast_id.strip()}
+            if not ids["channel_id"] or not ids["broadcast_id"]:
+                ids = self._stream_info(login)
+            if not ids["channel_id"] or not ids["broadcast_id"]:
+                self._note(f"Streamless heartbeat could not resolve stream IDs for {login}.")
+                return self._streamless_watch_hls_head(login)
+
+            spade_url = self._streamless_spade_endpoint(login)
+            payload = self._streamless_spade_payload(
+                channel_login=login,
+                channel_id=ids["channel_id"],
+                broadcast_id=ids["broadcast_id"],
+            )
+            response = self.session.post(
+                spade_url,
+                data=payload,
+                headers=self._stream_headers(login),
+                timeout=20,
+            )
+            if response.status_code == 204:
+                self._note(f"Streamless watcher is tracking channel {login}.")
+                return True
+            self._note(f"Spade heartbeat returned HTTP {response.status_code} for {login}.")
+            return self._streamless_watch_hls_head(login)
+        except Exception as exc:
+            self._note(f"Streamless heartbeat failed for {login}: {exc}")
+            self._streamless_spade_url.pop(login.casefold(), None)
+            return self._streamless_watch_hls_head(login)
 
     def set_oauth_token(self, token: str) -> None:
         token = token.replace("OAuth ", "").strip()
@@ -435,6 +701,32 @@ class TwitchClient:
                 if kind in {"BADGE", "EMOTE"}:
                     return True
         return False
+
+    def _extract_drop_like_entries(self, payload: Any) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                looks_like_drop = (
+                    "requiredMinutesWatched" in node
+                    and ("self" in node or "benefitEdges" in node or "preconditionDrops" in node)
+                )
+                if looks_like_drop:
+                    raw_id = str(node.get("id", "")).strip()
+                    fingerprint = raw_id or str(id(node))
+                    if fingerprint not in seen:
+                        seen.add(fingerprint)
+                        output.append(node)
+                for value in node.values():
+                    walk(value)
+                return
+            if isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(payload)
+        return output
 
     def _game_box_art_url(self, game: dict[str, Any]) -> str:
         raw = (game.get("boxArtURL") or game.get("boxArtUrl") or "").strip()
@@ -729,13 +1021,43 @@ class TwitchClient:
         return campaigns
 
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:
-        game = data.get("game") or {}
-        if not game:
+        raw_game = data.get("game")
+        game: dict[str, Any]
+        if isinstance(raw_game, dict):
+            game = raw_game
+        elif isinstance(raw_game, str):
+            game = {"displayName": raw_game}
+        else:
+            game = {}
+
+        game_name = (
+            game.get("displayName")
+            or game.get("name")
+            or data.get("gameName")
+            or data.get("name")
+            or ""
+        )
+        if not isinstance(game_name, str) or not game_name.strip():
             return None
+        game_name = game_name.strip()
+
+        starts_at_raw = data.get("startAt") or data.get("startsAt")
+        ends_at_raw = data.get("endAt") or data.get("endsAt")
 
         drops = data.get("timeBasedDrops", []) or []
+        if not drops:
+            drops = self._extract_drop_like_entries(data)
         total_required, total_remaining = self._drop_totals(drops)
         next_drop_name, next_drop_remaining, next_drop_required = self._next_drop_info(drops)
+        if total_required <= 0:
+            required_fallback = int(data.get("requiredMinutesWatched", 0) or 0)
+            current_fallback = int((data.get("self", {}) or {}).get("currentMinutesWatched", 0) or 0)
+            total_required = max(0, required_fallback)
+            total_remaining = max(0, total_required - current_fallback)
+            if total_required > 0 and not next_drop_name:
+                next_drop_name = str(data.get("name", "")).strip() or "Drop"
+                next_drop_remaining = total_remaining
+                next_drop_required = total_required
         allowed = data.get("allow") or {}
         allowed_channels = []
         if allowed.get("isEnabled", True):
@@ -747,12 +1069,12 @@ class TwitchClient:
 
         campaign = DropCampaign(
             id=data.get("id", ""),
-            game_name=game.get("displayName", "Unknown"),
+            game_name=game_name,
             game_slug=game.get("slug", ""),
             game_box_art_url=self._game_box_art_url(game),
-            title=data.get("name", "Campaign"),
-            starts_at=self._parse_timestamp(data.get("startAt")),
-            ends_at=self._parse_timestamp(data.get("endAt")),
+            title=(data.get("name") or game_name or "Campaign"),
+            starts_at=self._parse_timestamp(starts_at_raw),
+            ends_at=self._parse_timestamp(ends_at_raw),
             progress_minutes=max(0, total_required - total_remaining),
             required_minutes=total_required,
             linked=bool(data.get("self", {}).get("isAccountConnected", False)),
@@ -798,25 +1120,29 @@ class TwitchClient:
         self._note(f"Inventory returned {len(ongoing_campaigns)} in-progress campaign(s).")
 
         campaigns_response: dict[str, Any] = {}
-        campaign_profiles = ("android", "web")
-        for campaign_profile in campaign_profiles:
-            try:
-                attempted_response = self._post_gql(CAMPAIGNS_QUERY, client_profile=campaign_profile)
-            except requests.RequestException as exc:
-                self._note(f"ViewerDropsDashboard query failed with {campaign_profile}: {exc}")
-                continue
+        try:
+            attempted_response = self._post_gql(CAMPAIGNS_QUERY, client_profile="android")
             if isinstance(attempted_response, dict):
                 campaigns_response = attempted_response
-            dashboard_user = campaigns_response.get("data", {}).get("currentUser")
-            available_list = dashboard_user.get("dropCampaigns", []) or [] if dashboard_user else []
-            if available_list:
-                self._note(f"ViewerDropsDashboard returned campaigns with {campaign_profile} headers.")
-                break
+        except requests.RequestException as exc:
+            self._note(f"ViewerDropsDashboard query failed: {exc}")
         if not campaigns_response:
+            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
+            if cached:
+                self._note(
+                    f"ViewerDropsDashboard returned no payload. Using cached campaign list ({len(cached)})."
+                )
+                return cached
             return []
         dashboard_user = campaigns_response.get("data", {}).get("currentUser")
         if dashboard_user is None:
             self._note("ViewerDropsDashboard returned currentUser=null.")
+            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
+            if cached:
+                self._note(
+                    f"Using cached campaign list ({len(cached)}) after currentUser=null from dashboard."
+                )
+                return cached
             return []
 
         available_list = dashboard_user.get("dropCampaigns", []) or []
@@ -826,8 +1152,14 @@ class TwitchClient:
             for campaign in available_list
             if campaign.get("id") and campaign.get("status") in valid_statuses
         }
+        weak_listing = False
+        if available_campaigns:
+            self._note("ViewerDropsDashboard returned campaigns.")
         if not available_campaigns:
+            weak_listing = True
             available_campaigns = self._campaigns_from_drops_page()
+            if available_campaigns:
+                weak_listing = False
         self._note(f"Dashboard returned {len(available_campaigns)} active/upcoming campaign(s).")
 
         detailed_campaigns: dict[str, dict[str, Any]] = {}
@@ -891,6 +1223,36 @@ class TwitchClient:
             campaigns = self._campaigns_from_browser_page()
             campaigns.sort(key=lambda item: item.starts_at)
             campaigns.sort(key=lambda item: item.active, reverse=True)
+            if campaigns:
+                weak_listing = False
+        now = datetime.now(timezone.utc)
+        if campaigns and self._campaign_cache and weak_listing:
+            # Inventory-only responses can hide valid active/upcoming campaigns.
+            merged_by_id: dict[str, DropCampaign] = {
+                campaign.id: campaign
+                for campaign in self._campaign_cache
+                if campaign.ends_at > now
+            }
+            for campaign in campaigns:
+                merged_by_id[campaign.id] = campaign
+            if len(merged_by_id) > len(campaigns):
+                campaigns = list(merged_by_id.values())
+                campaigns.sort(key=lambda item: item.starts_at)
+                campaigns.sort(key=lambda item: item.active, reverse=True)
+                self._note(
+                    f"Merged cached campaigns ({len(campaigns)}) because Twitch listing appears incomplete."
+                )
+        if campaigns:
+            # Keep a best-effort cache so the UI does not go empty when Twitch integrity checks block listing APIs.
+            self._campaign_cache = [campaign for campaign in campaigns if campaign.ends_at > now]
+        elif self._campaign_cache:
+            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
+            if cached:
+                campaigns = cached
+                self._campaign_cache = cached
+                self._note(
+                    f"Using cached campaign list ({len(cached)}) because Twitch returned no active campaigns."
+                )
         self._note(
             f"Parsed {len(campaigns)} campaign(s), {sum(campaign.eligible for campaign in campaigns)} eligible for farming."
         )
@@ -935,6 +1297,8 @@ class TwitchClient:
                     game_name=campaign.game_name,
                     viewer_count=int(node.get("viewersCount", 0) or 0),
                     drops_enabled=True,
+                    channel_id=str(broadcaster.get("id", "") or ""),
+                    broadcast_id=str(node.get("id", "") or ""),
                 )
             )
         self._note(f"Found {len(output)} drops-enabled stream(s) for {campaign.game_name}.")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable
 
@@ -36,6 +37,7 @@ from .twitch_client import TwitchClient
 
 LABEL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 CHECK_MARK = "\u2713"
+BOX_ART_FALLBACK_URL = "https://static-cdn.jtvnw.net/ttv-static/404_boxart.jpg"
 
 
 THEMES: dict[str, str] = {
@@ -179,6 +181,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_placeholder": "Cola aqui o valor do cookie auth-token",
         "oauth_help": (
             "Token necessario: copia o valor do cookie 'auth-token' da sessao em https://www.twitch.tv .\n"
+            "Depois de guardado, a app reutiliza este token automaticamente enquanto continuar valido.\n"
             "Nao copies 'api_token' nem o nome do cookie.\n"
             "Passos rapidos:\n"
             "1. Inicia sessao na Twitch no navegador.\n"
@@ -220,10 +223,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "save_settings": "Guardar definicoes",
         "start_farm": "Iniciar farm",
         "stop_farm": "Parar farm",
+        "farming_start_main": "Iniciar farm",
+        "farming_pause_main": "Pausar farm",
+        "farming_next_game": "Proximo jogo",
+        "farming_next_game_selected": "Alvo manual alterado para: {game} -> {channel}.",
+        "farming_next_game_unavailable": "Nao ha proximo jogo disponivel para alternar.",
         "campaigns_detected": "Campanhas detetadas",
         "campaigns_detected_count": "Campanhas detetadas ({count})",
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
+        "tab_account": "Conta",
+        "tab_filters": "Filtros",
+        "tab_settings": "Definicoes",
         "farming_now_group": "Estado atual de farming",
         "farming_now_idle": "Nenhuma campanha ativa a ser farmada neste momento.",
         "farming_now_game": "Jogo: {game}",
@@ -232,6 +243,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "farming_now_next_drop": "Proximo drop: {drop}",
         "farming_now_eta": "Tempo para o proximo drop: {eta}",
         "farming_now_progress": "Progresso da campanha: {progress}/{required} min",
+        "farming_last_refresh": "Ultima atualizacao: {time}",
+        "farming_last_refresh_never": "Ultima atualizacao: --:--:--",
         "drop_unknown": "Desconhecido",
         "campaign_filter_status": "Mostrar:",
         "campaign_filter_link": "Ligacao:",
@@ -277,6 +290,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_saved": "Definicoes guardadas.",
         "farming_started": "Farm automatico iniciado.",
         "farming_stopped": "Farm parado.",
+        "streamless_running": "Modo streamless ativo para o alvo selecionado.",
+        "streamless_target": "Alvo streamless atual: {channel}.",
+        "streamless_failed": "Falha no heartbeat streamless para {channel}.",
+        "streamless_no_target": "Sem alvo streamless valido neste ciclo.",
         "refresh_done": "Atualizacao concluida: {count} campanhas.",
         "channel_word": "canal",
         "remaining_word": "faltam",
@@ -299,6 +316,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_placeholder": "Paste the auth-token cookie value here",
         "oauth_help": (
             "Required token: copy the value of the 'auth-token' cookie from https://www.twitch.tv .\n"
+            "After saving, the app reuses it automatically while it remains valid.\n"
             "Do not use 'api_token' and do not paste the cookie name.\n"
             "Quick steps:\n"
             "1. Sign in to Twitch in your browser.\n"
@@ -340,10 +358,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "save_settings": "Save settings",
         "start_farm": "Start farming",
         "stop_farm": "Stop farming",
+        "farming_start_main": "Start farming",
+        "farming_pause_main": "Pause farming",
+        "farming_next_game": "Next game",
+        "farming_next_game_selected": "Manual target changed to: {game} -> {channel}.",
+        "farming_next_game_unavailable": "No next game available to switch.",
         "campaigns_detected": "Detected campaigns",
         "campaigns_detected_count": "Detected campaigns ({count})",
         "tab_farming_now": "Farming now",
         "tab_campaign_explorer": "Campaigns",
+        "tab_account": "Account",
+        "tab_filters": "Filters",
+        "tab_settings": "Settings",
         "farming_now_group": "Current farming status",
         "farming_now_idle": "No active campaign is being farmed right now.",
         "farming_now_game": "Game: {game}",
@@ -352,6 +378,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "farming_now_next_drop": "Next drop: {drop}",
         "farming_now_eta": "Time to next drop: {eta}",
         "farming_now_progress": "Campaign progress: {progress}/{required} min",
+        "farming_last_refresh": "Last refresh: {time}",
+        "farming_last_refresh_never": "Last refresh: --:--:--",
         "drop_unknown": "Unknown",
         "campaign_filter_status": "Show:",
         "campaign_filter_link": "Linking:",
@@ -397,6 +425,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_saved": "Settings saved.",
         "farming_started": "Automatic farming started.",
         "farming_stopped": "Farming stopped.",
+        "streamless_running": "Streamless mode active for the selected target.",
+        "streamless_target": "Current streamless target: {channel}.",
+        "streamless_failed": "Streamless heartbeat failed for {channel}.",
+        "streamless_no_target": "No valid streamless target in this cycle.",
         "refresh_done": "Refresh complete: {count} campaigns.",
         "channel_word": "channel",
         "remaining_word": "remaining",
@@ -428,6 +460,10 @@ class MarkerListWidget(QListWidget):
         self._selected_keys: set[str] = set()
         self._has_state = False
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        scrollbar = self.verticalScrollBar()
+        scrollbar.setSingleStep(5)
+        scrollbar.setPageStep(5)
         self.itemClicked.connect(self._toggle_item)
 
     def set_entries(self, entries: list[FilterEntry], selected_keys: list[str], empty_text: str) -> None:
@@ -492,6 +528,11 @@ class MainWindow(QMainWindow):
         self.decision_by_campaign_id: dict[str, FarmDecision] = {}
         self._thumb_cache: dict[str, QPixmap] = {}
         self._oauth_hidden = bool(self.client.login_state.oauth_token)
+        self._streamless_channel: str = ""
+        self._streamless_failure_channel: str = ""
+        self._streamless_no_target_logged = False
+        self._forced_farm_channel: str = ""
+        self._last_refresh_at: str = ""
 
         self.resize(1280, 800)
         root = QWidget()
@@ -505,6 +546,12 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_snapshot)
+        self.live_refresh_timer = QTimer(self)
+        self.live_refresh_timer.setInterval(60_000)
+        self.live_refresh_timer.timeout.connect(self.refresh_snapshot)
+        self.streamless_timer = QTimer(self)
+        self.streamless_timer.setInterval(25_000)
+        self.streamless_timer.timeout.connect(self._streamless_heartbeat_tick)
 
         self._retranslate_ui()
         self._refresh_filter_lists()
@@ -517,6 +564,7 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         panel = QWidget()
         vbox = QVBoxLayout(panel)
+        self.tabs_left = QTabWidget()
 
         self.oauth_group = QGroupBox()
         oauth_layout = QVBoxLayout(self.oauth_group)
@@ -613,18 +661,36 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.handle_start)
         self.btn_stop = QPushButton()
         self.btn_stop.clicked.connect(self.handle_stop)
+        self.btn_stop.setEnabled(False)
 
-        vbox.addWidget(self.oauth_group)
-        vbox.addWidget(self.preferences_group)
-        vbox.addWidget(self.active_lists_note)
-        vbox.addWidget(self.btn_refresh)
-        vbox.addWidget(self.games_whitelist_group)
-        vbox.addWidget(self.games_blacklist_group)
-        vbox.addWidget(self.channels_whitelist_group)
-        vbox.addWidget(self.channels_blacklist_group)
-        vbox.addWidget(self.btn_save)
-        vbox.addWidget(self.btn_start)
-        vbox.addWidget(self.btn_stop)
+        account_tab = QWidget()
+        account_layout = QVBoxLayout(account_tab)
+        account_layout.addWidget(self.oauth_group)
+        account_layout.addWidget(self.active_lists_note)
+        account_layout.addWidget(self.btn_refresh)
+        account_layout.addStretch(1)
+
+        filters_tab = QWidget()
+        filters_layout = QVBoxLayout(filters_tab)
+        filters_layout.addWidget(self.games_whitelist_group)
+        filters_layout.addWidget(self.games_blacklist_group)
+        filters_layout.addWidget(self.channels_whitelist_group)
+        filters_layout.addWidget(self.channels_blacklist_group)
+        filters_layout.addStretch(1)
+
+        control_tab = QWidget()
+        control_layout = QVBoxLayout(control_tab)
+        control_layout.addWidget(self.preferences_group)
+        control_layout.addWidget(self.btn_save)
+        control_layout.addWidget(self.btn_start)
+        control_layout.addWidget(self.btn_stop)
+        control_layout.addStretch(1)
+
+        self.tabs_left.addTab(account_tab, "")
+        self.tabs_left.addTab(filters_tab, "")
+        self.tabs_left.addTab(control_tab, "")
+
+        vbox.addWidget(self.tabs_left)
         vbox.addStretch(1)
 
         scroll.setWidget(panel)
@@ -651,6 +717,17 @@ class MainWindow(QMainWindow):
         self.farming_now_progress_text = QLabel()
         self.farming_now_progress = QProgressBar()
         self.farming_now_progress.setRange(0, 1000)
+        self.farming_now_last_refresh = QLabel()
+        self.btn_farming_start = QPushButton()
+        self.btn_farming_start.clicked.connect(self.handle_start)
+        self.btn_farming_pause = QPushButton()
+        self.btn_farming_pause.clicked.connect(self.handle_stop)
+        self.btn_farming_next = QPushButton()
+        self.btn_farming_next.clicked.connect(self.handle_next_game)
+        farming_action_row = QHBoxLayout()
+        farming_action_row.addWidget(self.btn_farming_start)
+        farming_action_row.addWidget(self.btn_farming_pause)
+        farming_action_row.addWidget(self.btn_farming_next)
         farming_group_layout.addWidget(self.farming_now_game_image, alignment=Qt.AlignmentFlag.AlignHCenter)
         farming_group_layout.addWidget(self.farming_now_game)
         farming_group_layout.addWidget(self.farming_now_campaign)
@@ -659,6 +736,8 @@ class MainWindow(QMainWindow):
         farming_group_layout.addWidget(self.farming_now_eta)
         farming_group_layout.addWidget(self.farming_now_progress_text)
         farming_group_layout.addWidget(self.farming_now_progress)
+        farming_group_layout.addWidget(self.farming_now_last_refresh)
+        farming_group_layout.addLayout(farming_action_row)
         farming_layout.addWidget(self.farming_now_group)
         farming_layout.addStretch(1)
 
@@ -734,6 +813,21 @@ class MainWindow(QMainWindow):
         if widget.has_state():
             return widget.selected_keys()
         return list(fallback)
+
+    def _set_farming_controls(self, running: bool) -> None:
+        self.btn_start.setEnabled(not running)
+        self.btn_stop.setEnabled(running)
+        self.btn_farming_start.setEnabled(not running)
+        self.btn_farming_pause.setEnabled(running)
+        self.btn_farming_next.setEnabled(running)
+
+    def _refresh_last_update_label(self) -> None:
+        if self._last_refresh_at:
+            self.farming_now_last_refresh.setText(
+                self._t("farming_last_refresh", time=self._last_refresh_at)
+            )
+        else:
+            self.farming_now_last_refresh.setText(self._t("farming_last_refresh_never"))
 
     def _selected_decision(self) -> FarmDecision | None:
         item = self.campaign_list.currentItem()
@@ -833,6 +927,9 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         self.setWindowTitle(self._t("window_title"))
+        self.tabs_left.setTabText(0, self._t("tab_account"))
+        self.tabs_left.setTabText(1, self._t("tab_filters"))
+        self.tabs_left.setTabText(2, self._t("tab_settings"))
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         self.oauth_group.setTitle(self._t("oauth_group"))
@@ -863,6 +960,10 @@ class MainWindow(QMainWindow):
         self.btn_save.setText(self._t("save_settings"))
         self.btn_start.setText(self._t("start_farm"))
         self.btn_stop.setText(self._t("stop_farm"))
+        self.btn_farming_start.setText(self._t("farming_start_main"))
+        self.btn_farming_pause.setText(self._t("farming_pause_main"))
+        self.btn_farming_next.setText(self._t("farming_next_game"))
+        self._refresh_last_update_label()
         self.filter_status_label.setText(self._t("campaign_filter_status"))
         self.filter_link_label.setText(self._t("campaign_filter_link"))
         self.campaign_sort_label.setText(self._t("campaign_sort_label"))
@@ -908,6 +1009,7 @@ class MainWindow(QMainWindow):
         self._refresh_campaign_list()
         self._refresh_campaign_details()
         self._update_auth_status()
+        self._set_farming_controls(self.timer.isActive())
 
     def _apply_theme(self, name: str) -> None:
         self.setStyleSheet(THEMES.get(name, THEMES["twitch"]))
@@ -937,22 +1039,22 @@ class MainWindow(QMainWindow):
         return " ".join(parts)
 
     def _load_box_art_pixmap(self, url: str) -> QPixmap:
-        cached = self._thumb_cache.get(url)
+        target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
+        cached = self._thumb_cache.get(target_url)
         if cached is not None:
             return cached
         pixmap = QPixmap(144, 192)
         pixmap.fill(Qt.GlobalColor.transparent)
-        if url:
-            try:
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                loaded = QPixmap()
-                if loaded.loadFromData(response.content):
-                    pixmap = loaded
-            except requests.RequestException:
-                pass
+        try:
+            response = self.client.session.get(target_url, timeout=10)
+            response.raise_for_status()
+            loaded = QPixmap()
+            if loaded.loadFromData(response.content):
+                pixmap = loaded
+        except requests.RequestException:
+            pass
         scaled = pixmap.scaled(144, 192, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        self._thumb_cache[url] = scaled
+        self._thumb_cache[target_url] = scaled
         return scaled
 
     def _filtered_decisions(self) -> list[FarmDecision]:
@@ -1000,16 +1102,10 @@ class MainWindow(QMainWindow):
             self.farming_now_progress_text.clear()
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
+            self._refresh_last_update_label()
             return
 
-        active = next(
-            (
-                decision
-                for decision in self.latest_snapshot.decisions
-                if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
-            ),
-            None,
-        )
+        active = self._current_farm_decision()
         self.farming_now_group.setTitle(self._t("farming_now_group"))
         if active is None:
             self.farming_now_game.setText(self._t("farming_now_idle"))
@@ -1020,6 +1116,7 @@ class MainWindow(QMainWindow):
             self.farming_now_progress_text.clear()
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
+            self._refresh_last_update_label()
             return
 
         campaign = active.campaign
@@ -1040,6 +1137,7 @@ class MainWindow(QMainWindow):
         )
         self.farming_now_progress.setValue(int(campaign.completion * 1000))
         self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(campaign.game_box_art_url))
+        self._refresh_last_update_label()
 
     def _reason_text(self, decision: FarmDecision) -> str:
         if decision.reason_code == "game_filtered":
@@ -1159,6 +1257,95 @@ class MainWindow(QMainWindow):
         self.btn_link_account.setEnabled(can_link)
         self.btn_link_account.setToolTip("" if can_link else self._t("link_button_disabled"))
 
+    def _current_farm_decision(self) -> FarmDecision | None:
+        if self.latest_snapshot is None:
+            return None
+        candidates = [
+            decision
+            for decision in self.latest_snapshot.decisions
+            if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+        ]
+        if not candidates:
+            self._forced_farm_channel = ""
+            return None
+        if self._forced_farm_channel:
+            forced = next(
+                (
+                    decision
+                    for decision in candidates
+                    if decision.stream is not None
+                    and decision.stream.login.casefold() == self._forced_farm_channel.casefold()
+                ),
+                None,
+            )
+            if forced is not None:
+                return forced
+            self._forced_farm_channel = ""
+        return candidates[0]
+
+    def handle_next_game(self) -> None:
+        candidates: list[FarmDecision] = []
+        if self.latest_snapshot is not None:
+            candidates = [
+                decision
+                for decision in self.latest_snapshot.decisions
+                if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+            ]
+        if len(candidates) <= 1:
+            self._log(self._t("farming_next_game_unavailable"))
+            return
+
+        current = self._current_farm_decision()
+        current_index = -1
+        if current is not None and current.stream is not None:
+            for index, decision in enumerate(candidates):
+                if decision.stream is not None and decision.stream.login.casefold() == current.stream.login.casefold():
+                    current_index = index
+                    break
+
+        next_decision = candidates[(current_index + 1) % len(candidates)]
+        assert next_decision.stream is not None
+        self._forced_farm_channel = next_decision.stream.login
+        self._refresh_farming_now()
+        self._streamless_heartbeat_tick()
+        self._log(
+            self._t(
+                "farming_next_game_selected",
+                game=next_decision.campaign.game_name,
+                channel=next_decision.stream.display_name or next_decision.stream.login,
+            )
+        )
+
+    def _streamless_heartbeat_tick(self) -> None:
+        if not self.timer.isActive():
+            return
+        decision = self._current_farm_decision()
+        if decision is None or decision.stream is None:
+            if not self._streamless_no_target_logged:
+                self._log(self._t("streamless_no_target"))
+                self._streamless_no_target_logged = True
+            self._streamless_channel = ""
+            self._streamless_failure_channel = ""
+            return
+
+        self._streamless_no_target_logged = False
+        channel_login = decision.stream.login
+        if channel_login.casefold() != self._streamless_channel.casefold():
+            self._streamless_channel = channel_login
+            self._streamless_failure_channel = ""
+            self._log(self._t("streamless_target", channel=channel_login))
+
+        ok = self.client.streamless_watch_heartbeat(
+            channel_login,
+            channel_id=decision.stream.channel_id,
+            broadcast_id=decision.stream.broadcast_id,
+        )
+        for message in self.client.consume_diagnostics():
+            self._log(message)
+        if not ok and channel_login.casefold() != self._streamless_failure_channel.casefold():
+            self._streamless_failure_channel = channel_login
+            self._log(self._t("streamless_failed", channel=channel_login))
+
     def handle_language_change(self) -> None:
         self.config.language = self._current_language()
         self._retranslate_ui()
@@ -1216,11 +1403,27 @@ class MainWindow(QMainWindow):
 
     def _do_start(self) -> None:
         self.timer.start(self.config.auto_switch_interval_sec * 1000)
+        self.live_refresh_timer.start()
+        self.streamless_timer.start()
+        self._set_farming_controls(True)
+        self._forced_farm_channel = ""
+        self._streamless_channel = ""
+        self._streamless_failure_channel = ""
+        self._streamless_no_target_logged = False
         self.refresh_snapshot()
+        self._streamless_heartbeat_tick()
         self._log(self._t("farming_started"))
+        self._log(self._t("streamless_running"))
 
     def handle_stop(self) -> None:
         self.timer.stop()
+        self.live_refresh_timer.stop()
+        self.streamless_timer.stop()
+        self._set_farming_controls(False)
+        self._forced_farm_channel = ""
+        self._streamless_channel = ""
+        self._streamless_failure_channel = ""
+        self._streamless_no_target_logged = False
         self._log(self._t("farming_stopped"))
 
     def handle_campaign_selection_changed(self) -> None:
@@ -1247,6 +1450,7 @@ class MainWindow(QMainWindow):
 
     def _do_refresh(self) -> None:
         snapshot = self.engine.poll()
+        self._last_refresh_at = datetime.now().strftime("%H:%M:%S")
         self.latest_snapshot = snapshot
         self.engine.config = self.config
         self.available_game_entries = [FilterEntry(key=game_name, label=game_name) for game_name in snapshot.available_games]
