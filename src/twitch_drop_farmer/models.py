@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 
@@ -12,6 +12,13 @@ class DropCampaign:
     ends_at: datetime
     progress_minutes: int = 0
     required_minutes: int = 0
+    starts_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    game_slug: str = ""
+    linked: bool = True
+    link_url: str = ""
+    status: str = ""
+    allowed_channels: list[str] = field(default_factory=list)
+    has_badge_or_emote: bool = False
 
     @property
     def completion(self) -> float:
@@ -32,6 +39,24 @@ class DropCampaign:
         if target.tzinfo is None:
             target = target.replace(tzinfo=timezone.utc)
         return max(0, int((target - now).total_seconds()))
+
+    @property
+    def active(self) -> bool:
+        now = datetime.now(timezone.utc)
+        return self.starts_at <= now < self.ends_at and self.status != "EXPIRED"
+
+    @property
+    def upcoming(self) -> bool:
+        now = datetime.now(timezone.utc)
+        return now < self.starts_at and self.status != "EXPIRED"
+
+    @property
+    def eligible(self) -> bool:
+        return self.linked or self.has_badge_or_emote
+
+    @property
+    def linkable(self) -> bool:
+        return bool(self.link_url and not self.linked)
 
 
 @dataclass(slots=True)
