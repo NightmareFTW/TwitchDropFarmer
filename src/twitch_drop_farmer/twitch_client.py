@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import secrets
 import sys
 from typing import Any
@@ -291,16 +292,56 @@ class TwitchClient:
         *,
         client_profile: str = "web",
     ) -> dict[str, Any] | list[dict[str, Any]]:
-        response = self.session.post(
-            GQL_URL,
-            json=payload,
-            headers=self._gql_headers(client_profile),
-            timeout=20,
-        )
-        response.raise_for_status()
-        data = response.json()
-        self._note_graphql_errors(payload, data)
-        return data
+        retryable_errors = {
+            "service error",
+            "service timeout",
+            "service unavailable",
+            "context deadline exceeded",
+            "PersistedQueryNotFound",
+            "failed integrity check",
+        }
+        profiles_to_try = [client_profile]
+        if client_profile == "web":
+            profiles_to_try.append("android")
+        else:
+            profiles_to_try.append("web")
+
+        last_data: dict[str, Any] | list[dict[str, Any]] = {}
+        for profile in profiles_to_try:
+            response = self.session.post(
+                GQL_URL,
+                json=payload,
+                headers=self._gql_headers(profile),
+                timeout=20,
+            )
+            response.raise_for_status()
+            data = response.json()
+            last_data = data
+            self._note_graphql_errors(payload, data)
+
+            messages = self._graphql_error_messages(data)
+            if not messages:
+                return data
+            if any(any(marker in message for marker in retryable_errors) for message in messages):
+                self._note(f"Retrying GraphQL request using {profile} headers after error: {messages[0]}")
+                continue
+            return data
+        return last_data
+
+    def _graphql_error_messages(
+        self,
+        response_data: dict[str, Any] | list[dict[str, Any]],
+    ) -> list[str]:
+        output: list[str] = []
+        responses = response_data if isinstance(response_data, list) else [response_data]
+        for item in responses:
+            if not isinstance(item, dict):
+                continue
+            for error in item.get("errors", []) or []:
+                message = str(error.get("message", "")).strip()
+                if message:
+                    output.append(message)
+        return output
 
     def _note_graphql_errors(
         self,
@@ -403,6 +444,35 @@ class TwitchClient:
             or ""
         )
 
+    def _campaigns_from_drops_page(self) -> dict[str, dict[str, Any]]:
+        try:
+            response = self.session.get(
+                f"{TWITCH_URL}/drops/campaigns",
+                headers={"User-Agent": WEB_USER_AGENT},
+                timeout=20,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            self._note(f"Drops page fallback failed: {exc}")
+            return {}
+
+        html = response.text
+        patterns = (
+            r'"id":"([0-9a-fA-F-]{36})".{0,600}?"status":"(ACTIVE|UPCOMING)"',
+            r'\\"id\\":\\"([0-9a-fA-F-]{36})\\".{0,600}?\\"status\\":\\"(ACTIVE|UPCOMING)\\"',
+        )
+        found: dict[str, dict[str, Any]] = {}
+        for pattern in patterns:
+            for match in re.finditer(pattern, html, flags=re.DOTALL):
+                campaign_id, status = match.groups()
+                found[campaign_id] = {"id": campaign_id, "status": status}
+
+        if found:
+            self._note(f"Drops page fallback discovered {len(found)} active/upcoming campaign(s).")
+        else:
+            self._note("Drops page fallback could not discover campaigns in the HTML payload.")
+        return found
+
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:
         game = data.get("game") or {}
         if not game:
@@ -496,6 +566,8 @@ class TwitchClient:
             for campaign in available_list
             if campaign.get("id") and campaign.get("status") in valid_statuses
         }
+        if not available_campaigns:
+            available_campaigns = self._campaigns_from_drops_page()
         self._note(f"Dashboard returned {len(available_campaigns)} active/upcoming campaign(s).")
 
         detailed_campaigns: dict[str, dict[str, Any]] = {}
