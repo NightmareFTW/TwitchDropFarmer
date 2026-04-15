@@ -74,6 +74,8 @@ class StreamCandidate:
     game_name: str
     viewer_count: int
     drops_enabled: bool
+    channel_id: str = ""
+    broadcast_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
