@@ -436,6 +436,52 @@ class TwitchClient:
                     return True
         return False
 
+    def _game_box_art_url(self, game: dict[str, Any]) -> str:
+        raw = (game.get("boxArtURL") or game.get("boxArtUrl") or "").strip()
+        if not raw:
+            return ""
+        return raw.replace("{width}", "144").replace("{height}", "192")
+
+    def _next_drop_info(self, drops: list[dict[str, Any]]) -> tuple[str, int, int]:
+        by_id = {drop.get("id", ""): drop for drop in drops if drop.get("id")}
+        memo: dict[str, int] = {}
+
+        def remaining_with_preconditions(drop_id: str) -> int:
+            if drop_id in memo:
+                return memo[drop_id]
+            drop = by_id.get(drop_id, {})
+            required = int(drop.get("requiredMinutesWatched", 0) or 0)
+            current = int(drop.get("self", {}).get("currentMinutesWatched", 0) or 0)
+            own_remaining = max(0, required - current)
+            chained_remaining = 0
+            for item in drop.get("preconditionDrops", []) or []:
+                pre_id = item.get("id", "")
+                if not pre_id:
+                    continue
+                chained_remaining = max(chained_remaining, remaining_with_preconditions(pre_id))
+            memo[drop_id] = own_remaining + chained_remaining
+            return memo[drop_id]
+
+        candidates: list[tuple[int, int, str]] = []
+        for drop in drops:
+            drop_id = drop.get("id", "")
+            if not drop_id:
+                continue
+            if bool(drop.get("self", {}).get("isClaimed", False)):
+                continue
+            remaining = remaining_with_preconditions(drop_id)
+            required = int(drop.get("requiredMinutesWatched", 0) or 0)
+            if remaining <= 0 and required <= 0:
+                continue
+            name = str(drop.get("name", "")).strip() or "Drop"
+            candidates.append((remaining, required, name))
+
+        if not candidates:
+            return "", 0, 0
+        candidates.sort(key=lambda item: (item[0], item[1], item[2].casefold()))
+        remaining, required, name = candidates[0]
+        return name, remaining, required
+
     def _channel_login_from_acl(self, channel: dict[str, Any]) -> str:
         return (
             channel.get("login")
@@ -551,8 +597,12 @@ class TwitchClient:
             app = QApplication([])
             owned_app = True
 
-        profile = QWebEngineProfile("twitch-drop-farmer-drops-fallback", app)
-        page = QWebEnginePage(profile, app)
+        class SilentWebEnginePage(QWebEnginePage):
+            def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
+                return
+
+        profile = QWebEngineProfile(app)
+        page = SilentWebEnginePage(profile, app)
         cookie_store = profile.cookieStore()
 
         def push_cookie(name: str, value: str, *, domain: str = ".twitch.tv") -> None:
@@ -582,6 +632,9 @@ class TwitchClient:
         loop = QEventLoop()
         payload: dict[str, Any] = {"raw": ""}
         timed_out = {"value": False}
+        poll_timer = QTimer()
+        poll_timer.setInterval(2_000)
+        poll_timer.setSingleShot(False)
 
         def finish() -> None:
             if loop.isRunning():
@@ -602,13 +655,20 @@ class TwitchClient:
             """
 
             def on_result(raw: Any) -> None:
-                payload["raw"] = raw if isinstance(raw, str) else ""
-                finish()
+                text = raw if isinstance(raw, str) else ""
+                if text and text != "[]":
+                    payload["raw"] = text
+                    finish()
 
             page.runJavaScript(script, on_result)
 
-        def on_loaded(_: bool) -> None:
-            QTimer.singleShot(10_000, collect_cards)
+        def on_loaded(ok: bool) -> None:
+            if not ok:
+                self._note("Browser fallback failed to load the rendered Drops page.")
+                finish()
+                return
+            collect_cards()
+            poll_timer.start()
 
         timeout = QTimer()
         timeout.setSingleShot(True)
@@ -618,11 +678,13 @@ class TwitchClient:
             finish()
 
         timeout.timeout.connect(on_timeout)
+        poll_timer.timeout.connect(collect_cards)
         page.loadFinished.connect(on_loaded)
-        timeout.start(25_000)
+        timeout.start(60_000)
         page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
         loop.exec()
 
+        poll_timer.stop()
         timeout.stop()
         page.deleteLater()
         profile.deleteLater()
@@ -673,6 +735,7 @@ class TwitchClient:
 
         drops = data.get("timeBasedDrops", []) or []
         total_required, total_remaining = self._drop_totals(drops)
+        next_drop_name, next_drop_remaining, next_drop_required = self._next_drop_info(drops)
         allowed = data.get("allow") or {}
         allowed_channels = []
         if allowed.get("isEnabled", True):
@@ -686,6 +749,7 @@ class TwitchClient:
             id=data.get("id", ""),
             game_name=game.get("displayName", "Unknown"),
             game_slug=game.get("slug", ""),
+            game_box_art_url=self._game_box_art_url(game),
             title=data.get("name", "Campaign"),
             starts_at=self._parse_timestamp(data.get("startAt")),
             ends_at=self._parse_timestamp(data.get("endAt")),
@@ -696,6 +760,9 @@ class TwitchClient:
             status=data.get("status", "") or "",
             allowed_channels=allowed_channels,
             has_badge_or_emote=self._campaign_has_badge_or_emote(drops),
+            next_drop_name=next_drop_name,
+            next_drop_remaining_minutes=next_drop_remaining,
+            next_drop_required_minutes=next_drop_required,
         )
         return campaign
 

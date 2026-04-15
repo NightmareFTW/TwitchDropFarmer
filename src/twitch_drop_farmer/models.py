@@ -14,11 +14,15 @@ class DropCampaign:
     required_minutes: int = 0
     starts_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     game_slug: str = ""
+    game_box_art_url: str = ""
     linked: bool = True
     link_url: str = ""
     status: str = ""
     allowed_channels: list[str] = field(default_factory=list)
     has_badge_or_emote: bool = False
+    next_drop_name: str = ""
+    next_drop_remaining_minutes: int = 0
+    next_drop_required_minutes: int = 0
 
     @property
     def completion(self) -> float:
@@ -57,6 +61,10 @@ class DropCampaign:
     @property
     def linkable(self) -> bool:
         return bool(self.link_url and not self.linked)
+
+    @property
+    def next_drop_eta_seconds(self) -> int:
+        return max(0, self.next_drop_remaining_minutes * 60)
 
 
 @dataclass(slots=True)
