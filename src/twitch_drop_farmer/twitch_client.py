@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import secrets
 import sys
 from typing import Any
 
@@ -31,10 +32,15 @@ else:
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
-CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
-USER_AGENT = (
+WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+WEB_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
+ANDROID_APP_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+ANDROID_APP_USER_AGENT = (
+    "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) "
+    "tv.twitch.android.app/25.3.0/2503006"
 )
 TWITCH_URL = "https://www.twitch.tv"
 
@@ -123,8 +129,8 @@ class TwitchClient:
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "Client-Id": CLIENT_ID,
-                "User-Agent": USER_AGENT,
+                "Client-Id": WEB_CLIENT_ID,
+                "User-Agent": WEB_USER_AGENT,
                 "Origin": TWITCH_URL,
                 "Referer": f"{TWITCH_URL}/",
             }
@@ -132,6 +138,8 @@ class TwitchClient:
         self.login_state = LoginState()
         self._diagnostics: list[str] = []
         self._slug_cache: dict[str, str] = {}
+        self.device_id = ""
+        self.session_id = secrets.token_hex(16)
         self._load_cookies()
 
     def _note(self, message: str) -> None:
@@ -154,6 +162,8 @@ class TwitchClient:
         self.login_state.oauth_token = payload.get("oauth_token", "")
         self.login_state.user_id = payload.get("user_id", "")
         self.login_state.login_name = payload.get("login_name", "")
+        self.device_id = payload.get("device_id", "")
+        self.session_id = payload.get("session_id", self.session_id)
         if self.login_state.oauth_token:
             self._apply_oauth_token(self.login_state.oauth_token)
 
@@ -170,6 +180,8 @@ class TwitchClient:
                     "oauth_token": self.login_state.oauth_token,
                     "user_id": self.login_state.user_id,
                     "login_name": self.login_state.login_name,
+                    "device_id": self.device_id,
+                    "session_id": self.session_id,
                 },
                 indent=2,
             ),
@@ -180,6 +192,62 @@ class TwitchClient:
         self.session.headers["Authorization"] = f"OAuth {token}"
         self.session.cookies.set("auth-token", token, domain="www.twitch.tv")
         self.session.cookies.set("auth-token", token, domain=".twitch.tv")
+
+    def _ensure_device_id(self) -> str:
+        if self.device_id:
+            return self.device_id
+        cookie_value = self.session.cookies.get("unique_id", domain=".twitch.tv") or self.session.cookies.get(
+            "unique_id",
+            domain="www.twitch.tv",
+        )
+        if cookie_value:
+            self.device_id = cookie_value
+            return self.device_id
+
+        try:
+            response = self.session.get(
+                TWITCH_URL,
+                headers={"User-Agent": WEB_USER_AGENT},
+                timeout=20,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            self.device_id = secrets.token_hex(16)
+            self._note("Falling back to a generated X-Device-Id for Twitch GraphQL.")
+            return self.device_id
+
+        cookie_value = self.session.cookies.get("unique_id", domain=".twitch.tv") or self.session.cookies.get(
+            "unique_id",
+            domain="www.twitch.tv",
+        )
+        self.device_id = cookie_value or secrets.token_hex(16)
+        return self.device_id
+
+    def _gql_headers(self, client_profile: str) -> dict[str, str]:
+        device_id = self._ensure_device_id()
+        if client_profile == "android":
+            client_id = ANDROID_APP_CLIENT_ID
+            user_agent = ANDROID_APP_USER_AGENT
+        else:
+            client_id = WEB_CLIENT_ID
+            user_agent = WEB_USER_AGENT
+
+        headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip",
+            "Accept-Language": "en-US",
+            "Cache-Control": "no-cache",
+            "Client-Id": client_id,
+            "Client-Session-Id": self.session_id,
+            "Origin": TWITCH_URL,
+            "Pragma": "no-cache",
+            "Referer": f"{TWITCH_URL}/",
+            "User-Agent": user_agent,
+            "X-Device-Id": device_id,
+        }
+        if self.login_state.oauth_token:
+            headers["Authorization"] = f"OAuth {self.login_state.oauth_token}"
+        return headers
 
     def set_oauth_token(self, token: str) -> None:
         token = token.replace("OAuth ", "").strip()
@@ -220,8 +288,15 @@ class TwitchClient:
     def _post_gql(
         self,
         payload: dict[str, Any] | list[dict[str, Any]],
+        *,
+        client_profile: str = "web",
     ) -> dict[str, Any] | list[dict[str, Any]]:
-        response = self.session.post(GQL_URL, json=payload, timeout=20)
+        response = self.session.post(
+            GQL_URL,
+            json=payload,
+            headers=self._gql_headers(client_profile),
+            timeout=20,
+        )
         response.raise_for_status()
         data = response.json()
         self._note_graphql_errors(payload, data)
@@ -374,7 +449,7 @@ class TwitchClient:
             return []
 
         try:
-            inventory_response = self._post_gql(INVENTORY_QUERY)
+            inventory_response = self._post_gql(INVENTORY_QUERY, client_profile="android")
         except requests.RequestException as exc:
             self._note(f"Inventory query failed: {exc}")
             return []
@@ -392,10 +467,22 @@ class TwitchClient:
         }
         self._note(f"Inventory returned {len(ongoing_campaigns)} in-progress campaign(s).")
 
-        try:
-            campaigns_response = self._post_gql(CAMPAIGNS_QUERY)
-        except requests.RequestException as exc:
-            self._note(f"ViewerDropsDashboard query failed: {exc}")
+        campaigns_response: dict[str, Any] = {}
+        campaign_profiles = ("android", "web")
+        for campaign_profile in campaign_profiles:
+            try:
+                attempted_response = self._post_gql(CAMPAIGNS_QUERY, client_profile=campaign_profile)
+            except requests.RequestException as exc:
+                self._note(f"ViewerDropsDashboard query failed with {campaign_profile}: {exc}")
+                continue
+            if isinstance(attempted_response, dict):
+                campaigns_response = attempted_response
+            dashboard_user = campaigns_response.get("data", {}).get("currentUser")
+            available_list = dashboard_user.get("dropCampaigns", []) or [] if dashboard_user else []
+            if available_list:
+                self._note(f"ViewerDropsDashboard returned campaigns with {campaign_profile} headers.")
+                break
+        if not campaigns_response:
             return []
         dashboard_user = campaigns_response.get("data", {}).get("currentUser")
         if dashboard_user is None:
@@ -431,7 +518,7 @@ class TwitchClient:
                 if not chunk:
                     continue
                 try:
-                    responses = self._post_gql(chunk)
+                    responses = self._post_gql(chunk, client_profile="android")
                 except requests.RequestException as exc:
                     self._note(f"DropCampaignDetails query failed: {exc}")
                     continue
