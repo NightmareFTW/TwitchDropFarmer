@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import requests
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+
+_ASSETS_DIR = Path(__file__).parent / "assets"
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1469,6 +1472,10 @@ class MainWindow(QMainWindow):
 
 def run() -> None:
     app = QApplication([])
+    _icon = QIcon(str(_ASSETS_DIR / "icon.png"))
+    if not _icon.isNull():
+        app.setWindowIcon(_icon)
     win = MainWindow()
+    win.setWindowIcon(_icon)
     win.show()
     app.exec()
