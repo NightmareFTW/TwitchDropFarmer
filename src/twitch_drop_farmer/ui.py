@@ -4,6 +4,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 import requests
 
@@ -14,6 +15,7 @@ _ASSETS_DIR = Path(__file__).parent / "assets"
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -183,11 +185,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_token_label": "Token auth-token",
         "oauth_placeholder": "Cola aqui o valor do cookie auth-token",
         "oauth_help": (
-            "Token necessario: copia o valor do cookie 'auth-token' da sessao em https://www.twitch.tv .\n"
-            "Depois de guardado, a app reutiliza este token automaticamente enquanto continuar valido.\n"
-            "Nao copies 'api_token' nem o nome do cookie.\n"
-            "Passos rapidos:\n"
-            "1. Inicia sessao na Twitch no navegador.\n"
+            "Token necessário: copia o valor do cookie 'auth-token' da sessão em https://www.twitch.tv .\n"
+            "Depois de guardado, a app reutiliza este token automaticamente enquanto continuar válido.\n"
+            "Não copies 'api_token' nem o nome do cookie.\n"
+            "Passos rápidos:\n"
+            "1. Inicia sessão na Twitch no navegador.\n"
             "2. Abre as ferramentas de programador ou um editor de cookies.\n"
             "3. Encontra o cookie 'auth-token' em www.twitch.tv.\n"
             "4. Copia apenas o valor do cookie.\n"
@@ -198,8 +200,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "auth_not_saved": "Nenhum auth-token guardado.",
         "auth_saved_hidden": "auth-token guardado e oculto.",
         "auth_valid": "Ligado como {login} (user {user_id}).",
-        "auth_invalid": "O auth-token atual nao foi validado.",
-        "preferences_group": "Preferencias",
+        "auth_invalid": "O auth-token actual não foi validado.",
+        "preferences_group": "Preferências",
         "language_label": "Idioma:",
         "theme_label": "Tema:",
         "sort_label": "Prioridade de farm:",
@@ -209,65 +211,67 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sort_ending_soonest": "Terminam mais cedo",
         "sort_least_remaining": "Menos minutos em falta",
         "sort_most_remaining": "Mais minutos em falta",
-        "sort_shortest_campaign": "Menor duracao total",
-        "sort_longest_campaign": "Maior duracao total",
-        "refresh_active": "Atualizar campanhas e streams",
-        "active_lists_note": "As listas abaixo sao geradas a partir das campanhas e canais ativos devolvidos pela Twitch.",
+        "sort_shortest_campaign": "Menor duração total",
+        "sort_longest_campaign": "Maior duração total",
+        "refresh_active": "Actualizar campanhas e streams",
+        "active_lists_note": "As listas abaixo são geradas a partir das campanhas e canais activos devolvidos pela Twitch.",
         "games_whitelist_group": "Whitelist de jogos",
         "games_blacklist_group": "Blacklist de jogos",
         "channels_whitelist_group": "Whitelist de canais",
         "channels_blacklist_group": "Blacklist de canais",
-        "games_whitelist_hint": "✓ Seleciona apenas os jogos que queres farmar. Se nada estiver marcado, todos os jogos ativos podem ser farmados.",
-        "games_blacklist_hint": "X Marca os jogos que devem ser ignorados. Se nada estiver marcado, nenhum jogo e excluido.",
-        "channels_whitelist_hint": "✓ Estes canais tem prioridade. Se nenhum estiver disponivel, a app usa os restantes canais ativos.",
-        "channels_blacklist_hint": "X Estes canais nunca serao usados. Se nada estiver marcado, nenhum canal e bloqueado.",
-        "no_active_games": "Ainda nao ha jogos ativos para mostrar.",
-        "no_active_channels": "Ainda nao ha canais ativos para mostrar.",
-        "save_settings": "Guardar definicoes",
+        "games_whitelist_hint": "✓ Selecciona apenas os jogos que queres farmar. Se nada estiver marcado, todos os jogos activos podem ser farmados.",
+        "games_blacklist_hint": "X Marca os jogos que devem ser ignorados. Se nada estiver marcado, nenhum jogo é excluído.",
+        "channels_whitelist_hint": "✓ Estes canais têm prioridade. Se nenhum estiver disponível, a app usa os restantes canais activos.",
+        "channels_blacklist_hint": "X Estes canais nunca serão usados. Se nada estiver marcado, nenhum canal é bloqueado.",
+        "no_active_games": "Ainda não há jogos activos para mostrar.",
+        "no_active_channels": "Ainda não há canais activos para mostrar.",
+        "save_settings": "Guardar definições",
         "start_farm": "Iniciar farm",
         "stop_farm": "Parar farm",
         "farming_start_main": "Iniciar farm",
         "farming_pause_main": "Pausar farm",
-        "farming_next_game": "Proximo jogo",
+        "farming_next_game": "Próximo jogo",
         "farming_next_game_selected": "Alvo manual alterado para: {game} -> {channel}.",
-        "farming_next_game_unavailable": "Nao ha proximo jogo disponivel para alternar.",
+        "farming_next_game_unavailable": "Não há próximo jogo disponível para alternar.",
         "campaigns_detected": "Campanhas detetadas",
         "campaigns_detected_count": "Campanhas detetadas ({count})",
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
         "tab_account": "Conta",
         "tab_filters": "Filtros",
-        "tab_settings": "Definicoes",
-        "farming_now_group": "Estado atual de farming",
+        "tab_settings": "Definições",
+        "farming_now_group": "Estado actual de farming",
+        "farming_state_running": "Estado: Em execução",
+        "farming_state_stopped": "Estado: Parado",
         "farming_now_idle": "Nenhuma campanha ativa a ser farmada neste momento.",
         "farming_now_game": "Jogo: {game}",
         "farming_now_campaign": "Campanha: {campaign}",
-        "farming_now_channel": "Canal em visualizacao: {channel}",
-        "farming_now_next_drop": "Proximo drop: {drop}",
-        "farming_now_eta": "Tempo para o proximo drop: {eta}",
+        "farming_now_channel": "Canal em visualização: {channel}",
+        "farming_now_next_drop": "Próximo drop: {drop}",
+        "farming_now_eta": "Tempo para o próximo drop: {eta}",
         "farming_now_progress": "Progresso da campanha: {progress}/{required} min",
-        "farming_last_refresh": "Ultima atualizacao: {time}",
-        "farming_last_refresh_never": "Ultima atualizacao: --:--:--",
+        "farming_last_refresh": "Última actualização: {time}",
+        "farming_last_refresh_never": "Última actualização: --:--:--",
         "drop_unknown": "Desconhecido",
         "campaign_filter_status": "Mostrar:",
-        "campaign_filter_link": "Ligacao:",
+        "campaign_filter_link": "Ligação:",
         "campaign_sort_label": "Ordenar por:",
         "campaign_status_all": "Todas",
         "campaign_status_active": "Ativas",
         "campaign_status_upcoming": "Futuras",
-        "campaign_status_farmable": "Farmaveis agora",
+        "campaign_status_farmable": "Farmáveis agora",
         "campaign_link_all": "Todas",
-        "campaign_link_eligible": "Conta ligada/eligivel",
+        "campaign_link_eligible": "Conta ligada/elegível",
         "campaign_link_unlinked": "Por ligar",
         "campaign_sort_priority": "Prioridade de farm",
         "campaign_sort_ending": "Terminam mais cedo",
         "campaign_sort_progress": "Mais progresso",
         "campaign_sort_remaining": "Menos minutos em falta",
         "campaign_sort_game": "Jogo (A-Z)",
-        "best_target_none": "Sem alvo prioritario neste momento.",
-        "best_target": "Melhor alvo atual: {game} -> {channel} | ordenacao: {sort_mode}",
-        "best_target_no_stream": "Nenhuma stream valida para {game} | ordenacao: {sort_mode}",
-        "campaign_details_none": "Seleciona uma campanha para veres o estado da ligacao e o link de conta.",
+        "best_target_none": "Sem alvo prioritário neste momento.",
+        "best_target": "Melhor alvo actual: {game} -> {channel} | ordenação: {sort_mode}",
+        "best_target_no_stream": "Nenhuma stream válida para {game} | ordenação: {sort_mode}",
+        "campaign_details_none": "Selecciona uma campanha para veres o estado da ligação e o link de conta.",
         "campaign_details": (
             "Jogo: {game}\n"
             "Campanha: {title}\n"
@@ -275,42 +279,63 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Conta ligada: {linked}\n"
             "Progresso: {progress}/{required} min\n"
             "Canais permitidos pela campanha: {allowed}\n"
-            "Ligacao da conta: {link_status}"
+            "Ligação da conta: {link_status}"
         ),
         "linked_yes": "Sim",
-        "linked_no": "Nao",
+        "linked_no": "Não",
         "linked_label": "ligada",
         "allowed_any": "Qualquer canal drops-enabled",
-        "link_status_open_browser": "Disponivel pelo botao abaixo",
-        "link_status_unavailable": "Nao necessario ou indisponivel",
+        "link_status_open_browser": "Disponível pelo botão abaixo",
+        "link_status_unavailable": "Não necessário ou indisponível",
         "link_account": "Ligar conta desta campanha",
-        "open_drops_page": "Abrir pagina de Drops",
+        "open_drops_page": "Abrir página de Drops",
         "link_button_disabled": "Seleciona uma campanha com conta por ligar.",
         "log_label": "Log",
         "error_title": "Erro",
         "oauth_saved": "auth-token guardado e validado.",
-        "oauth_refreshing": "Token validado. A atualizar campanhas...",
-        "settings_saved": "Definicoes guardadas.",
-        "farming_started": "Farm automatico iniciado.",
+        "oauth_refreshing": "Token validado. A actualizar campanhas...",
+        "settings_saved": "Definições guardadas.",
+        "farming_started": "Farm automático iniciado.",
         "farming_stopped": "Farm parado.",
         "streamless_running": "Modo streamless ativo para o alvo selecionado.",
         "streamless_target": "Alvo streamless atual: {channel}.",
         "streamless_failed": "Falha no heartbeat streamless para {channel}.",
-        "streamless_no_target": "Sem alvo streamless valido neste ciclo.",
-        "refresh_done": "Atualizacao concluida: {count} campanhas.",
+        "streamless_no_target": "Sem alvo streamless válido neste ciclo.",
+        "refresh_done": "Actualização concluída: {count} campanhas.",
         "channel_word": "canal",
+        "channel_unknown": "desconhecido",
         "remaining_word": "faltam",
         "ends_in_word": "termina em",
         "reason_game_filtered": "Jogo filtrado por whitelist/blacklist.",
-        "reason_no_valid_stream": "Sem stream valida depois dos filtros.",
+        "reason_no_valid_stream": "Sem stream válida depois dos filtros.",
         "reason_stream_selected": "Melhor stream por drops ativos e viewers.",
         "reason_channel_priority": "Whitelist de canais aplicada.",
-        "reason_account_not_linked": "Conta do jogo ainda nao ligada a esta campanha.",
-        "reason_campaign_upcoming": "Campanha ainda nao comecou.",
-        "reason_campaign_not_active": "Campanha nao esta ativa neste momento.",
+        "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
+        "reason_campaign_upcoming": "Campanha ainda não começou.",
+        "reason_campaign_not_active": "Campanha não está activa neste momento.",
         "link_opened": "Link de campanha aberto no navegador.",
-        "drops_page_opened": "Pagina de Drops aberta no navegador.",
+        "drops_page_opened": "Página de Drops aberta no navegador.",
         "token_required": "Tens de colar o valor do cookie auth-token antes de guardar.",
+        "auth_quick_token": "Token Rápido",
+        "auth_session_export": "Sessão Duradoura",
+        "session_group": "Sessão do Browser",
+        "session_export_label": "Exporta a sessão completa para durabilidade prolongada:",
+        "btn_export_session": "Exportar Sessão JSON",
+        "session_import_label": "Importa uma sessão guardada (JSON):",
+        "btn_import_session": "Importar Sessão",
+        "btn_validate_session": "Validar Sessão",
+        "session_auth_status": "Estado da sessão: {status}",
+        "session_not_imported": "Nenhuma sessão importada.",
+        "session_imported": "Sessão importada e validada.",
+        "session_imported_hidden": "Sessão importada (oculta).",
+        "session_import_error": "Erro ao importar sessão: {error}",
+        "session_export_success": "Sessão exportada. Copia o JSON abaixo e guarda-o num local seguro.",
+        "session_export_copied": "JSON da sessão copiado para a área de transferência.",
+        "auto_claim_checkbox": "Redimir drops automaticamente",
+        "redeem_drops": "Redimir drops",
+        "redeem_done": "Drops redimidos: {count}.",
+        "redeem_none": "Nenhum drop pronto para redimir.",
+        "redeem_auto_done": "Auto-redimir executado: {count} drops.",
     },
     "en": {
         "window_title": "Twitch Drop Farmer",
@@ -374,6 +399,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_filters": "Filters",
         "tab_settings": "Settings",
         "farming_now_group": "Current farming status",
+        "farming_state_running": "Status: Running",
+        "farming_state_stopped": "Status: Stopped",
         "farming_now_idle": "No active campaign is being farmed right now.",
         "farming_now_game": "Game: {game}",
         "farming_now_campaign": "Campaign: {campaign}",
@@ -434,6 +461,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "streamless_no_target": "No valid streamless target in this cycle.",
         "refresh_done": "Refresh complete: {count} campaigns.",
         "channel_word": "channel",
+        "channel_unknown": "unknown",
         "remaining_word": "remaining",
         "ends_in_word": "ends in",
         "reason_game_filtered": "Game filtered by whitelist/blacklist.",
@@ -446,6 +474,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "link_opened": "Campaign link opened in the browser.",
         "drops_page_opened": "Drops page opened in the browser.",
         "token_required": "You need to paste the auth-token cookie value before saving.",
+        "auth_quick_token": "Quick Token",
+        "auth_session_export": "Lasting Session",
+        "session_group": "Browser Session",
+        "session_export_label": "Export full session for extended durability:",
+        "btn_export_session": "Export Session JSON",
+        "session_import_label": "Import a saved session (JSON):",
+        "btn_import_session": "Import Session",
+        "btn_validate_session": "Validate Session",
+        "session_auth_status": "Session status: {status}",
+        "session_not_imported": "No session imported yet.",
+        "session_imported": "Session imported and validated.",
+        "session_imported_hidden": "Session imported (hidden).",
+        "session_import_error": "Error importing session: {error}",
+        "session_export_success": "Session exported. Copy the JSON below and save it securely.",
+        "session_export_copied": "Session JSON copied to clipboard.",
+        "auto_claim_checkbox": "Redeem drops automatically",
+        "redeem_drops": "Redeem drops",
+        "redeem_done": "Redeemed drops: {count}.",
+        "redeem_none": "No drops are ready to redeem.",
+        "redeem_auto_done": "Auto-redeem completed: {count} drops.",
     },
 }
 
@@ -536,6 +584,8 @@ class MainWindow(QMainWindow):
         self._streamless_no_target_logged = False
         self._forced_farm_channel: str = ""
         self._last_refresh_at: str = ""
+        self._last_auto_claim_at: datetime | None = None
+        self._last_display_decision: FarmDecision | None = None
 
         self.resize(1280, 800)
         root = QWidget()
@@ -620,6 +670,37 @@ class MainWindow(QMainWindow):
         preferences_layout.addLayout(language_row)
         preferences_layout.addLayout(theme_row)
         preferences_layout.addLayout(sort_row)
+        self.auto_claim_checkbox = QCheckBox()
+        self.auto_claim_checkbox.setChecked(bool(self.config.auto_claim_drops))
+        preferences_layout.addWidget(self.auto_claim_checkbox)
+
+        # Session-based authentication group
+        self.session_group = QGroupBox()
+        session_layout = QVBoxLayout(self.session_group)
+        self.session_export_label = QLabel()
+        self.session_export_label.setWordWrap(True)
+        self.btn_export_session = QPushButton()
+        self.btn_export_session.clicked.connect(self.handle_export_session)
+        self.session_import_label = QLabel()
+        self.session_import_label.setWordWrap(True)
+        self.session_input = QTextEdit()
+        self.session_input.setPlaceholderText("Colas aqui o JSON da sessão exportada do browser...")
+        self.session_input.setMaximumHeight(100)
+        self.session_auth_status_label = QLabel()
+        self.session_auth_status_label.setWordWrap(True)
+        session_buttons = QHBoxLayout()
+        self.btn_import_session = QPushButton()
+        self.btn_import_session.clicked.connect(self.handle_import_session)
+        self.btn_validate_session = QPushButton()
+        self.btn_validate_session.clicked.connect(self.handle_validate_session)
+        session_buttons.addWidget(self.btn_import_session)
+        session_buttons.addWidget(self.btn_validate_session)
+        session_layout.addWidget(self.session_export_label)
+        session_layout.addWidget(self.btn_export_session)
+        session_layout.addWidget(self.session_import_label)
+        session_layout.addWidget(self.session_input)
+        session_layout.addWidget(self.session_auth_status_label)
+        session_layout.addLayout(session_buttons)
 
         self.active_lists_note = QLabel()
         self.active_lists_note.setWordWrap(True)
@@ -666,9 +747,25 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self.handle_stop)
         self.btn_stop.setEnabled(False)
 
+        # Account tab with internal tabs for different auth methods
         account_tab = QWidget()
         account_layout = QVBoxLayout(account_tab)
-        account_layout.addWidget(self.oauth_group)
+        
+        self.auth_tabs = QTabWidget()
+        quick_auth_tab = QWidget()
+        quick_auth_layout = QVBoxLayout(quick_auth_tab)
+        quick_auth_layout.addWidget(self.oauth_group)
+        quick_auth_layout.addStretch(1)
+        
+        session_auth_tab = QWidget()
+        session_auth_layout = QVBoxLayout(session_auth_tab)
+        session_auth_layout.addWidget(self.session_group)
+        session_auth_layout.addStretch(1)
+        
+        self.auth_tabs.addTab(quick_auth_tab, "")
+        self.auth_tabs.addTab(session_auth_tab, "")
+        
+        account_layout.addWidget(self.auth_tabs)
         account_layout.addWidget(self.active_lists_note)
         account_layout.addWidget(self.btn_refresh)
         account_layout.addStretch(1)
@@ -717,6 +814,7 @@ class MainWindow(QMainWindow):
         self.farming_now_channel = QLabel()
         self.farming_now_next_drop = QLabel()
         self.farming_now_eta = QLabel()
+        self.farming_now_state = QLabel()
         self.farming_now_progress_text = QLabel()
         self.farming_now_progress = QProgressBar()
         self.farming_now_progress.setRange(0, 1000)
@@ -727,16 +825,20 @@ class MainWindow(QMainWindow):
         self.btn_farming_pause.clicked.connect(self.handle_stop)
         self.btn_farming_next = QPushButton()
         self.btn_farming_next.clicked.connect(self.handle_next_game)
+        self.btn_redeem_drops = QPushButton()
+        self.btn_redeem_drops.clicked.connect(self.handle_redeem_drops)
         farming_action_row = QHBoxLayout()
         farming_action_row.addWidget(self.btn_farming_start)
         farming_action_row.addWidget(self.btn_farming_pause)
         farming_action_row.addWidget(self.btn_farming_next)
+        farming_action_row.addWidget(self.btn_redeem_drops)
         farming_group_layout.addWidget(self.farming_now_game_image, alignment=Qt.AlignmentFlag.AlignHCenter)
         farming_group_layout.addWidget(self.farming_now_game)
         farming_group_layout.addWidget(self.farming_now_campaign)
         farming_group_layout.addWidget(self.farming_now_channel)
         farming_group_layout.addWidget(self.farming_now_next_drop)
         farming_group_layout.addWidget(self.farming_now_eta)
+        farming_group_layout.addWidget(self.farming_now_state)
         farming_group_layout.addWidget(self.farming_now_progress_text)
         farming_group_layout.addWidget(self.farming_now_progress)
         farming_group_layout.addWidget(self.farming_now_last_refresh)
@@ -823,6 +925,7 @@ class MainWindow(QMainWindow):
         self.btn_farming_start.setEnabled(not running)
         self.btn_farming_pause.setEnabled(running)
         self.btn_farming_next.setEnabled(running)
+        self.farming_now_state.setText(self._t("farming_state_running") if running else self._t("farming_state_stopped"))
 
     def _refresh_last_update_label(self) -> None:
         if self._last_refresh_at:
@@ -876,6 +979,18 @@ class MainWindow(QMainWindow):
             self.auth_status_label.setText(self._t("auth_saved_hidden") if self._oauth_hidden else self._t("auth_invalid"))
         else:
             self.auth_status_label.setText(self._t("auth_not_saved"))
+        
+        # Update session status
+        if state.logged_in:
+            self.session_auth_status_label.setText(
+                self._t("session_auth_status", status=f"{state.login_name} ({state.user_id})")
+            )
+        elif state.login_name:
+            self.session_auth_status_label.setText(
+                self._t("session_imported_hidden")
+            )
+        else:
+            self.session_auth_status_label.setText(self._t("session_not_imported"))
 
     def _repopulate_language_picker(self) -> None:
         current = self.config.language
@@ -935,6 +1050,10 @@ class MainWindow(QMainWindow):
         self.tabs_left.setTabText(2, self._t("tab_settings"))
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
+        
+        self.auth_tabs.setTabText(0, self._t("auth_quick_token"))
+        self.auth_tabs.setTabText(1, self._t("auth_session_export"))
+        
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
         self.token_input.setPlaceholderText(self._t("oauth_placeholder"))
@@ -942,10 +1061,18 @@ class MainWindow(QMainWindow):
         self.btn_login.setText(self._t("save_oauth"))
         self.btn_edit_oauth.setText(self._t("edit_oauth"))
 
+        self.session_group.setTitle(self._t("session_group"))
+        self.session_export_label.setText(self._t("session_export_label"))
+        self.btn_export_session.setText(self._t("btn_export_session"))
+        self.session_import_label.setText(self._t("session_import_label"))
+        self.btn_import_session.setText(self._t("btn_import_session"))
+        self.btn_validate_session.setText(self._t("btn_validate_session"))
+
         self.preferences_group.setTitle(self._t("preferences_group"))
         self.language_label.setText(self._t("language_label"))
         self.theme_label.setText(self._t("theme_label"))
         self.sort_label.setText(self._t("sort_label"))
+        self.auto_claim_checkbox.setText(self._t("auto_claim_checkbox"))
         self._repopulate_language_picker()
         self._repopulate_theme_picker()
         self._repopulate_sort_picker()
@@ -966,6 +1093,7 @@ class MainWindow(QMainWindow):
         self.btn_farming_start.setText(self._t("farming_start_main"))
         self.btn_farming_pause.setText(self._t("farming_pause_main"))
         self.btn_farming_next.setText(self._t("farming_next_game"))
+        self.btn_redeem_drops.setText(self._t("redeem_drops"))
         self._refresh_last_update_label()
         self.filter_status_label.setText(self._t("campaign_filter_status"))
         self.filter_link_label.setText(self._t("campaign_filter_link"))
@@ -1055,10 +1183,22 @@ class MainWindow(QMainWindow):
             if loaded.loadFromData(response.content):
                 pixmap = loaded
         except requests.RequestException:
-            pass
+            if target_url != BOX_ART_FALLBACK_URL:
+                try:
+                    response = self.client.session.get(BOX_ART_FALLBACK_URL, timeout=10)
+                    response.raise_for_status()
+                    loaded = QPixmap()
+                    if loaded.loadFromData(response.content):
+                        pixmap = loaded
+                except requests.RequestException:
+                    pass
         scaled = pixmap.scaled(144, 192, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self._thumb_cache[target_url] = scaled
         return scaled
+
+    def _guess_box_art_url(self, game_name: str) -> str:
+        slug = quote(game_name.strip(), safe="")
+        return f"https://static-cdn.jtvnw.net/ttv-boxart/{slug}-144x192.jpg"
 
     def _filtered_decisions(self) -> list[FarmDecision]:
         if self.latest_snapshot is None:
@@ -1105,10 +1245,22 @@ class MainWindow(QMainWindow):
             self.farming_now_progress_text.clear()
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
+            self.farming_now_state.setText(self._t("farming_state_running") if self.timer.isActive() else self._t("farming_state_stopped"))
             self._refresh_last_update_label()
             return
 
         active = self._current_farm_decision()
+        if active is None:
+            active = next(
+                (
+                    decision
+                    for decision in self.latest_snapshot.decisions
+                    if decision.campaign.active and decision.campaign.eligible
+                ),
+                None,
+            )
+        if active is None and self.timer.isActive() and self._last_display_decision is not None:
+            active = self._last_display_decision
         self.farming_now_group.setTitle(self._t("farming_now_group"))
         if active is None:
             self.farming_now_game.setText(self._t("farming_now_idle"))
@@ -1119,11 +1271,17 @@ class MainWindow(QMainWindow):
             self.farming_now_progress_text.clear()
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
+            self.farming_now_state.setText(self._t("farming_state_running") if self.timer.isActive() else self._t("farming_state_stopped"))
             self._refresh_last_update_label()
             return
 
         campaign = active.campaign
-        channel_name = active.stream.display_name or active.stream.login
+        self._last_display_decision = active
+        channel_name = (
+            active.stream.display_name or active.stream.login
+            if active.stream is not None
+            else self._t("channel_unknown")
+        )
         next_drop_name = campaign.next_drop_name or self._t("drop_unknown")
         next_drop_eta = self._format_duration(campaign.next_drop_eta_seconds)
         self.farming_now_game.setText(self._t("farming_now_game", game=campaign.game_name))
@@ -1131,6 +1289,7 @@ class MainWindow(QMainWindow):
         self.farming_now_channel.setText(self._t("farming_now_channel", channel=channel_name))
         self.farming_now_next_drop.setText(self._t("farming_now_next_drop", drop=next_drop_name))
         self.farming_now_eta.setText(self._t("farming_now_eta", eta=next_drop_eta))
+        self.farming_now_state.setText(self._t("farming_state_running") if self.timer.isActive() else self._t("farming_state_stopped"))
         self.farming_now_progress_text.setText(
             self._t(
                 "farming_now_progress",
@@ -1139,7 +1298,8 @@ class MainWindow(QMainWindow):
             )
         )
         self.farming_now_progress.setValue(int(campaign.completion * 1000))
-        self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(campaign.game_box_art_url))
+        box_art_url = campaign.game_box_art_url or self._guess_box_art_url(campaign.game_name)
+        self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(box_art_url))
         self._refresh_last_update_label()
 
     def _reason_text(self, decision: FarmDecision) -> str:
@@ -1384,6 +1544,36 @@ class MainWindow(QMainWindow):
         self._update_auth_status()
         self.token_input.setFocus()
 
+    def handle_export_session(self) -> None:
+        self._with_errors(self._do_export_session)
+
+    def _do_export_session(self) -> None:
+        session_json = self.client.export_session_json()
+        self.session_input.setText(session_json)
+        self._log(self._t("session_export_success"))
+
+    def handle_import_session(self) -> None:
+        self._with_errors(self._do_import_session)
+
+    def _do_import_session(self) -> None:
+        session_json = self.session_input.toPlainText().strip()
+        if not session_json:
+            raise ValueError("Tens de colar o JSON da sessão antes de importar.")
+        self.client.import_session_json(session_json)
+        self._update_auth_status()
+        self._log("Sessão importada com sucesso!")
+
+    def handle_validate_session(self) -> None:
+        self._with_errors(self._do_validate_session)
+
+    def _do_validate_session(self) -> None:
+        if not self.client.login_state.oauth_token:
+            raise ValueError("Nenhuma sessão importada para validar.")
+        self.client.validate_oauth_token()
+        self._update_auth_status()
+        self._log(self._t("oauth_refreshing"))
+        self._do_refresh()
+
     def handle_save_config(self) -> None:
         self._with_errors(self._do_save_config)
 
@@ -1395,6 +1585,7 @@ class MainWindow(QMainWindow):
         self.config.language = self._current_language()
         self.config.theme = self._current_theme()
         self.config.sort_mode = self._current_sort_mode()
+        self.config.auto_claim_drops = self.auto_claim_checkbox.isChecked()
         save_config(self.config)
         self.engine.config = self.config
         self._log(self._t("settings_saved"))
@@ -1448,6 +1639,19 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl("https://www.twitch.tv/drops/inventory"))
         self._log(self._t("drops_page_opened"))
 
+    def handle_redeem_drops(self) -> None:
+        self._with_errors(self._do_redeem_drops)
+
+    def _do_redeem_drops(self, *, auto_mode: bool = False) -> None:
+        claimed = self.client.claim_available_drops()
+        for message in self.client.consume_diagnostics():
+            self._log(message)
+        if claimed > 0:
+            self._log(self._t("redeem_auto_done", count=claimed) if auto_mode else self._t("redeem_done", count=claimed))
+            return
+        if not auto_mode:
+            self._log(self._t("redeem_none"))
+
     def refresh_snapshot(self) -> None:
         self._with_errors(self._do_refresh)
 
@@ -1465,6 +1669,11 @@ class MainWindow(QMainWindow):
         self._refresh_campaign_list()
         self._refresh_campaign_details()
         self._update_auth_status()
+        if self.config.auto_claim_drops:
+            now = datetime.now()
+            if self._last_auto_claim_at is None or (now - self._last_auto_claim_at).total_seconds() >= 120:
+                self._last_auto_claim_at = now
+                self._do_redeem_drops(auto_mode=True)
         for message in snapshot.messages:
             self._log(message)
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))

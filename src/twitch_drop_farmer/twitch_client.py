@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import sys
 from typing import Any
 from urllib.parse import quote, urljoin
@@ -225,6 +226,47 @@ class TwitchClient:
             ),
             encoding="utf-8",
         )
+
+    def export_session_json(self) -> str:
+        """Exporta a sessão completa como JSON para importar depois (modo duradouro)."""
+        serialized = [
+            {"name": cookie.name, "value": cookie.value, "domain": cookie.domain}
+            for cookie in self.session.cookies
+        ]
+        export_data = {
+            "cookies": serialized,
+            "user_id": self.login_state.user_id,
+            "login_name": self.login_state.login_name,
+            "device_id": self.device_id,
+            "session_id": self.session_id,
+        }
+        return json.dumps(export_data, indent=2)
+
+    def import_session_json(self, session_json: str) -> None:
+        """Importa uma sessão completa de JSON (modo duradouro)."""
+        try:
+            data = json.loads(session_json)
+            for cookie in data.get("cookies", []):
+                self.session.cookies.set(
+                    cookie["name"], 
+                    cookie["value"], 
+                    domain=cookie.get("domain")
+                )
+            self.login_state.user_id = data.get("user_id", "")
+            self.login_state.login_name = data.get("login_name", "")
+            self.device_id = data.get("device_id", "")
+            self.session_id = data.get("session_id", self.session_id)
+            
+            # Se houver auth-token nos cookies, usá-lo como fallback
+            auth_token = self.session.cookies.get("auth-token", domain=".twitch.tv")
+            if auth_token and not self.login_state.oauth_token:
+                self.login_state.oauth_token = auth_token
+                self._apply_oauth_token(auth_token)
+            
+            self._note("Session imported successfully from browser export.")
+            self.save_cookies()
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            raise ValueError(f"Invalid session JSON format: {e}")
 
     def _apply_oauth_token(self, token: str) -> None:
         self.session.headers["Authorization"] = f"OAuth {token}"
@@ -728,6 +770,36 @@ class TwitchClient:
         walk(payload)
         return output
 
+    def _extract_campaign_progress_data(self, campaign_data: dict[str, Any]) -> tuple[int, int]:
+        """Extract progress data from campaign, trying multiple paths."""
+        # Try to get drops array first
+        drops = campaign_data.get("timeBasedDrops", []) or []
+        if not drops:
+            drops = self._extract_drop_like_entries(campaign_data)
+        
+        if drops:
+            total_required, total_remaining = self._drop_totals(drops)
+            if total_required > 0:
+                return total_required, total_remaining
+        
+        # Try campaign-level progress fields (inventory format)
+        required = int(campaign_data.get("requiredMinutesWatched", 0) or 0)
+        if required > 0:
+            current = int((campaign_data.get("self", {}) or {}).get("currentMinutesWatched", 0) or 0)
+            remaining = max(0, required - current)
+            return required, remaining
+        
+        # Try nested campaign structure
+        campaign_obj = campaign_data.get("campaign", {}) or {}
+        if isinstance(campaign_obj, dict):
+            required = int(campaign_obj.get("requiredMinutesWatched", 0) or 0)
+            if required > 0:
+                current = int((campaign_obj.get("self", {}) or {}).get("currentMinutesWatched", 0) or 0)
+                remaining = max(0, required - current)
+                return required, remaining
+        
+        return 0, 0
+
     def _game_box_art_url(self, game: dict[str, Any]) -> str:
         raw = (game.get("boxArtURL") or game.get("boxArtUrl") or "").strip()
         if not raw:
@@ -879,6 +951,7 @@ class TwitchClient:
             from PySide6.QtNetwork import QNetworkCookie
             from PySide6.QtWidgets import QApplication
             from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+            from shiboken6 import delete as shiboken_delete
         except Exception as exc:
             self._note(f"Browser fallback unavailable: {exc}")
             return []
@@ -907,6 +980,13 @@ class TwitchClient:
             cookie.setPath("/")
             cookie.setSecure(True)
             cookie_store.setCookie(cookie, QUrl(f"{TWITCH_URL}/"))
+
+        for session_cookie in self.session.cookies:
+            push_cookie(
+                session_cookie.name,
+                session_cookie.value,
+                domain=session_cookie.domain or ".twitch.tv",
+            )
 
         auth_token = self.login_state.oauth_token
         persistent_id = self.login_state.user_id
@@ -978,8 +1058,8 @@ class TwitchClient:
 
         poll_timer.stop()
         timeout.stop()
-        page.deleteLater()
-        profile.deleteLater()
+        shiboken_delete(page)
+        shiboken_delete(profile)
         if owned_app:
             app.quit()
 
@@ -1020,6 +1100,143 @@ class TwitchClient:
             self._note("Browser fallback found the Drops page, but no usable campaign cards were parsed.")
         return campaigns
 
+    def claim_available_drops(self) -> int:
+        try:
+            from PySide6.QtCore import QEventLoop, QTimer, QUrl
+            from PySide6.QtNetwork import QNetworkCookie
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+            from shiboken6 import delete as shiboken_delete
+        except Exception as exc:
+            self._note(f"Drop claim is unavailable: {exc}")
+            return 0
+
+        app = QApplication.instance()
+        owned_app = False
+        if app is None:
+            app = QApplication([])
+            owned_app = True
+
+        class SilentWebEnginePage(QWebEnginePage):
+            def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
+                return
+
+        profile = QWebEngineProfile(app)
+        page = SilentWebEnginePage(profile, app)
+        cookie_store = profile.cookieStore()
+
+        def push_cookie(name: str, value: str, *, domain: str = ".twitch.tv") -> None:
+            if not value:
+                return
+            cookie = QNetworkCookie()
+            cookie.setName(name.encode("utf-8"))
+            cookie.setValue(value.encode("utf-8"))
+            cookie.setDomain(domain)
+            cookie.setPath("/")
+            cookie.setSecure(True)
+            cookie_store.setCookie(cookie, QUrl(f"{TWITCH_URL}/"))
+
+        for session_cookie in self.session.cookies:
+            push_cookie(
+                session_cookie.name,
+                session_cookie.value,
+                domain=session_cookie.domain or ".twitch.tv",
+            )
+
+        loop = QEventLoop()
+        poll_timer = QTimer()
+        poll_timer.setInterval(1_500)
+        poll_timer.setSingleShot(False)
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+
+        state = {
+            "clicked_total": 0,
+            "empty_rounds": 0,
+            "timed_out": False,
+            "loaded": False,
+        }
+
+        def finish() -> None:
+            if loop.isRunning():
+                loop.quit()
+
+        def scan_and_claim() -> None:
+            script = """
+                (() => {
+                    const labels = ["claim", "redeem", "resgatar", "reivindicar", "collect"];
+                    const buttons = Array.from(document.querySelectorAll("button"));
+                    let clicked = 0;
+                    for (const button of buttons) {
+                        if (!button || button.disabled) {
+                            continue;
+                        }
+                        const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                        if (!text) {
+                            continue;
+                        }
+                        if (!labels.some((label) => text.includes(label))) {
+                            continue;
+                        }
+                        button.click();
+                        clicked += 1;
+                    }
+                    return clicked;
+                })();
+            """
+
+            def on_result(raw: Any) -> None:
+                clicked = 0
+                if isinstance(raw, int):
+                    clicked = raw
+                elif isinstance(raw, float):
+                    clicked = int(raw)
+                if clicked > 0:
+                    state["clicked_total"] += clicked
+                    state["empty_rounds"] = 0
+                    return
+                state["empty_rounds"] += 1
+                if state["loaded"] and state["empty_rounds"] >= 3:
+                    finish()
+
+            page.runJavaScript(script, on_result)
+
+        def on_loaded(ok: bool) -> None:
+            state["loaded"] = True
+            if not ok:
+                self._note("Drop claim page failed to load.")
+                finish()
+                return
+            scan_and_claim()
+            poll_timer.start()
+
+        def on_timeout() -> None:
+            state["timed_out"] = True
+            finish()
+
+        page.loadFinished.connect(on_loaded)
+        poll_timer.timeout.connect(scan_and_claim)
+        timeout.timeout.connect(on_timeout)
+
+        timeout.start(35_000)
+        page.load(QUrl(f"{TWITCH_URL}/drops/inventory"))
+        loop.exec()
+
+        poll_timer.stop()
+        timeout.stop()
+        shiboken_delete(page)
+        shiboken_delete(profile)
+        if owned_app:
+            app.quit()
+
+        if state["timed_out"]:
+            self._note("Drop claim timed out while waiting for the inventory page.")
+
+        clicked_total = int(state["clicked_total"])
+        if clicked_total > 0:
+            self._note(f"Claimed {clicked_total} drop reward button(s) from inventory page.")
+        return clicked_total
+
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:
         raw_game = data.get("game")
         game: dict[str, Any]
@@ -1049,11 +1266,10 @@ class TwitchClient:
             drops = self._extract_drop_like_entries(data)
         total_required, total_remaining = self._drop_totals(drops)
         next_drop_name, next_drop_remaining, next_drop_required = self._next_drop_info(drops)
+        
+        # If no drops found in standard locations, try alternative extraction
         if total_required <= 0:
-            required_fallback = int(data.get("requiredMinutesWatched", 0) or 0)
-            current_fallback = int((data.get("self", {}) or {}).get("currentMinutesWatched", 0) or 0)
-            total_required = max(0, required_fallback)
-            total_remaining = max(0, total_required - current_fallback)
+            total_required, total_remaining = self._extract_campaign_progress_data(data)
             if total_required > 0 and not next_drop_name:
                 next_drop_name = str(data.get("name", "")).strip() or "Drop"
                 next_drop_remaining = total_remaining
@@ -1098,6 +1314,15 @@ class TwitchClient:
             self.validate_oauth_token()
         except ValueError as exc:
             self._note(str(exc))
+            return []
+        except requests.RequestException as exc:
+            self._note(f"OAuth validation request failed: {exc}")
+            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
+            if cached:
+                self._note(
+                    f"Using cached campaign list ({len(cached)}) after transient validation failure."
+                )
+                return cached
             return []
 
         try:
@@ -1192,6 +1417,11 @@ class TwitchClient:
                     campaign_data = response.get("data", {}).get("user", {}).get("dropCampaign")
                     if campaign_data and campaign_data.get("id"):
                         attempted_details[campaign_data["id"]] = campaign_data
+                    else:
+                        # Try alternative path for campaign details
+                        alt_data = response.get("data", {}).get("dropCampaign")
+                        if alt_data and alt_data.get("id"):
+                            attempted_details[alt_data["id"]] = alt_data
             if attempted_details:
                 detailed_campaigns = attempted_details
                 self._note(
@@ -1215,9 +1445,53 @@ class TwitchClient:
             campaign = self._parse_campaign(payload)
             if campaign is not None:
                 campaigns.append(campaign)
+                if campaign.required_minutes == 0 and campaign.progress_minutes == 0:
+                    self._note(f"Campaign '{campaign.title}' has no progress data (0/0 min)")
 
         campaigns.sort(key=lambda item: item.starts_at)
         campaigns.sort(key=lambda item: item.active, reverse=True)
+        if campaigns and weak_listing and len(campaigns) <= max(1, len(inventory_data)):
+            self._note(
+                "Inventory returned only in-progress campaigns. Trying rendered browser fallback for the full list."
+            )
+            browser_campaigns = self._campaigns_from_browser_page()
+            if browser_campaigns:
+                # Merge by both ID and game name to preserve progress data
+                merged_by_id = {campaign.id: campaign for campaign in campaigns}
+                merged_by_game = {campaign.game_name.lower(): campaign for campaign in campaigns}
+                
+                for browser_campaign in browser_campaigns:
+                    # Try exact ID match first
+                    if browser_campaign.id in merged_by_id:
+                        existing = merged_by_id[browser_campaign.id]
+                        # Use browser campaign for better schedule/details, but keep progress from existing
+                        browser_campaign.progress_minutes = existing.progress_minutes
+                        browser_campaign.required_minutes = existing.required_minutes
+                        browser_campaign.next_drop_name = existing.next_drop_name
+                        browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
+                        browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
+                        merged_by_id[browser_campaign.id] = browser_campaign
+                    # Try game name match (case-insensitive)
+                    elif browser_campaign.game_name.lower() in merged_by_game:
+                        existing = merged_by_game[browser_campaign.game_name.lower()]
+                        # Use browser campaign for schedule but keep progress from inventory
+                        browser_campaign.progress_minutes = existing.progress_minutes
+                        browser_campaign.required_minutes = existing.required_minutes
+                        browser_campaign.next_drop_name = existing.next_drop_name
+                        browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
+                        browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
+                        # Remove old campaign and add merged one
+                        del merged_by_id[existing.id]
+                        merged_by_id[browser_campaign.id] = browser_campaign
+                        merged_by_game[browser_campaign.game_name.lower()] = browser_campaign
+                    else:
+                        # New campaign from browser
+                        merged_by_id[browser_campaign.id] = browser_campaign
+                
+                campaigns = list(merged_by_id.values())
+                campaigns.sort(key=lambda item: item.starts_at)
+                campaigns.sort(key=lambda item: item.active, reverse=True)
+                weak_listing = False
         if not campaigns:
             self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
             campaigns = self._campaigns_from_browser_page()
@@ -1226,11 +1500,24 @@ class TwitchClient:
             if campaigns:
                 weak_listing = False
         now = datetime.now(timezone.utc)
+        cached_campaigns = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
+        if campaigns and cached_campaigns:
+            inventory_ids = set(inventory_data)
+            fresh_ids = {campaign.id for campaign in campaigns}
+            cached_ids = {campaign.id for campaign in cached_campaigns}
+            dashboard_matches_inventory = bool(inventory_ids) and fresh_ids == inventory_ids
+            cache_has_more_campaigns = len(cached_ids) > len(fresh_ids) and bool(cached_ids - fresh_ids)
+            if dashboard_matches_inventory and cache_has_more_campaigns:
+                weak_listing = True
+                self._note(
+                    "Dashboard listing mirrors only in-progress inventory campaigns. "
+                    "Keeping cached active/upcoming campaigns as fallback."
+                )
         if campaigns and self._campaign_cache and weak_listing:
             # Inventory-only responses can hide valid active/upcoming campaigns.
             merged_by_id: dict[str, DropCampaign] = {
                 campaign.id: campaign
-                for campaign in self._campaign_cache
+                for campaign in cached_campaigns
                 if campaign.ends_at > now
             }
             for campaign in campaigns:
@@ -1306,8 +1593,14 @@ class TwitchClient:
 
 
 if __name__ == "__main__":
-    raise SystemExit(
-        "Este ficheiro e um modulo interno. "
-        "Arranca a aplicacao com `$env:PYTHONPATH='src'; python -m twitch_drop_farmer` "
-        "depois de instalares as dependências com `python -m pip install -r requirements.txt`."
-    )
+    _root = Path(__file__).resolve().parents[2]
+    _launcher = _root / "TwitchDropFarmer.pyw"
+    _pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if sys.platform == "win32" and _launcher.exists() and _pythonw.exists():
+        subprocess.Popen([str(_pythonw), str(_launcher)], cwd=str(_root))
+        raise SystemExit(0)
+
+    if str(_root / "src") not in sys.path:
+        sys.path.insert(0, str(_root / "src"))
+    from twitch_drop_farmer.__main__ import main as _main
+    raise SystemExit(_main())
