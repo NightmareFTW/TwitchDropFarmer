@@ -25,9 +25,9 @@ def main() -> int:
         _show_error(
             "Twitch Drop Farmer",
             (
-                "Falha ao iniciar a aplicacao.\n\n"
+                "Falha ao iniciar a aplicação.\n\n"
                 f"Detalhes: {exc}\n\n"
-                "Confirma que instalaste as dependencias com\n"
+                "Confirma que instalaste as dependências com\n"
                 "python -m pip install -r requirements.txt"
             ),
         )

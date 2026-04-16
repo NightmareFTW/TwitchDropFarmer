@@ -1,3 +1,48 @@
+# Python
 __pycache__/
 *.py[cod]
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 .venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Application data (local configuration, credentials, logs)
+.twitch-drop-farmer/
+~/.twitch-drop-farmer/
+cookies.json
+*.log
+*.tmp
+*.db
+
+# Temporary files
+*.bak
+*.orig
+GRAPHQL_STRUCTURE.md
+TwitchDropFarmer/.vscode/

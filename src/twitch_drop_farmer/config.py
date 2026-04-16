@@ -20,6 +20,8 @@ class AppConfig:
     whitelist_channels: list[str] = field(default_factory=list)
     blacklist_channels: list[str] = field(default_factory=list)
     auto_switch_interval_sec: int = 120
+    auto_claim_drops: bool = False
+    auth_mode: str = "token"  # "token" ou "session"
 
 
 def load_config() -> AppConfig:
