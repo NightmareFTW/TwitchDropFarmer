@@ -2,36 +2,18 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/Status-Active%20Development-2ea44f)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-Aplicacao desktop em Python + Tkinter para automatizar Twitch Drops com controlo local, filtros de campanhas e rotacao de canais.
-
-## Screenshots
-
-### Vista de Farming
-
-![Vista de Farming](docs/images/ui-farming.png)
-
-### Vista de Campanhas
-
-![Vista de Campanhas](docs/images/ui-campaigns.png)
-
-### Vista de Definicoes
-
-![Vista de Definicoes](docs/images/ui-settings.png)
+Aplicação desktop em Python + Tkinter para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
 ## Funcionalidades
 
-- Descoberta automática de campanhas ativas e futuras.
-- Seleção automática do melhor alvo de farm por regras (campanha, elegibilidade e stream disponível).
-- Auto-switch de jogo/canal com intervalo configurável.
-- Filtros por whitelist e blacklist de jogos e canais.
-- Botão manual para redimir drops.
+- Descoberta automática de campanhas activas e futuras.
+- Selecção automática do melhor alvo de farm por regras de campanha, elegibilidade e stream disponível.
+- Troca automática de jogo/canal com intervalo configurável.
+- Filtros por lista branca e lista negra de jogos e canais.
+- Botão manual para resgatar drops.
 - Opção de redenção automática periódica.
 - Estado de farming em tempo real (jogo, campanha, canal, progresso e ETA).
-- Suporte multi-tema na UI.
+- Suporte a vários temas na interface.
 - Persistência local de sessão e configurações.
 
 ## Requisitos
@@ -80,7 +62,7 @@ PYTHONPATH=src python -m twitch_drop_farmer
 - Executa o ficheiro `TwitchDropFarmer.pyw`.
 - Este launcher evita abrir a janela de consola por defeito.
 
-## Build para EXE (Windows)
+## Compilação para EXE (Windows)
 
 ```powershell
 .\build_exe.ps1
@@ -105,10 +87,24 @@ Notas:
 ## Privacidade e segurança
 
 - Credenciais e sessão ficam guardadas localmente.
-- Dados sensíveis não devem ser commitados para GitHub.
-- O projeto inclui regras de .gitignore para evitar leak de dados locais.
+- Dados sensíveis não devem ser enviados para o GitHub.
+- O projecto inclui regras de `.gitignore` para evitar exposição de dados locais.
 
-## Estrutura do projeto
+## Capturas de ecrã
+
+### Vista de Farming
+
+![Vista de Farming](docs/images/ui-farming.png)
+
+### Vista de Campanhas
+
+![Vista de Campanhas](docs/images/ui-campaigns.png)
+
+### Vista de Definições
+
+![Vista de Definições](docs/images/ui-settings.png)
+
+## Estrutura do projecto
 
 ```text
 src/twitch_drop_farmer/
@@ -124,21 +120,21 @@ TwitchDropFarmer.pyw
 requirements.txt
 ```
 
-## Troubleshooting
+## Resolução de problemas
 
-- Erro QtCore DLL no Windows:
+- Erro `QtCore` DLL no Windows:
   - Evita criar o ambiente virtual com Python do Anaconda.
-  - Usa Python oficial (python.org) para criar a .venv.
+  - Usa Python oficial (python.org) para criar a `.venv`.
 - Se usares Conda:
-  - Instala PySide6 via conda-forge.
+  - Instala `PySide6` via `conda-forge`.
 - Se persistir:
-  - Reinstala Microsoft Visual C++ Redistributable e recria a .venv.
+  - Reinstala o Microsoft Visual C++ Redistributable e recria a `.venv`.
 
 ## Aviso
 
-Este projeto depende de endpoints e comportamentos da Twitch que podem mudar sem aviso.
-Se algum fluxo deixar de funcionar, pode ser necessário atualizar queries GraphQL e adaptadores de parsing.
+Este projecto depende de endpoints e comportamentos da Twitch que podem mudar sem aviso.
+Se algum fluxo deixar de funcionar, pode ser necessário actualizar queries GraphQL e adaptadores de parsing.
 
 ## Licença
 
-Este projeto está licenciado sob a licença MIT. Consulta o ficheiro LICENSE.
+Este projecto está licenciado sob a licença MIT. Consulta o ficheiro LICENSE.
