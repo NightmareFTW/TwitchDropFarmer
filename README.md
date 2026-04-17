@@ -1,14 +1,12 @@
 # Twitch Drop Farmer
 
+[PT-PT](README.md) | [EN](README.en.md)
+
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-2ea44f)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Aplicação desktop para farm de Twitch Drops com foco em controlo local, filtros de campanhas e automação de troca de canal.
-
-Sem Docker, sem browser embutido para visualização contínua, e com configuração guardada localmente.
-
-English quick version: [README.en.md](README.en.md)
+Aplicacao desktop em Python + Tkinter para automatizar Twitch Drops com controlo local, filtros de campanhas e rotacao de canais.
 
 ## Screenshots
 

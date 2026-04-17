@@ -1,10 +1,12 @@
-# Twitch Drop Farmer (EN)
+# Twitch Drop Farmer
+
+[PT-PT](README.md) | [EN](README.en.md)
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-2ea44f)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A desktop app to automate Twitch Drops farming with local control, campaign filters, and channel switching.
+A Python + Tkinter desktop app to automate Twitch Drops farming with local control, campaign filters, and channel rotation.
 
 ## Highlights
 
