@@ -2,11 +2,7 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/Status-Active%20Development-2ea44f)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-A Python + Tkinter desktop app to automate Twitch Drops farming with local control, campaign filters, and channel rotation.
+A Python + Tkinter desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
 
 ## Highlights
 
@@ -16,12 +12,6 @@ A Python + Tkinter desktop app to automate Twitch Drops farming with local contr
 - Whitelist and blacklist filters (games and channels)
 - Manual and automatic drop redemption
 - Real-time farming status (game, campaign, channel, progress, ETA)
-
-## Screenshots
-
-![Farming View](docs/images/ui-farming.png)
-![Campaigns View](docs/images/ui-campaigns.png)
-![Settings View](docs/images/ui-settings.png)
 
 ## Quick Start
 
@@ -61,6 +51,12 @@ Use your Twitch auth-token cookie value inside the app (Account tab).
 - Paste only the cookie value
 - Do not include the cookie name
 - Do not include the OAuth prefix
+
+## Screenshots
+
+![Farming View](docs/images/ui-farming.png)
+![Campaigns View](docs/images/ui-campaigns.png)
+![Settings View](docs/images/ui-settings.png)
 
 ## Notes
 
