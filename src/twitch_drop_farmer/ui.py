@@ -313,6 +313,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
         "reason_campaign_upcoming": "Campanha ainda não começou.",
         "reason_campaign_not_active": "Campanha não está activa neste momento.",
+        "reason_campaign_completed": "Campanha concluída (todos os drops já completos).",
         "link_opened": "Link de campanha aberto no navegador.",
         "drops_page_opened": "Página de Drops aberta no navegador.",
         "token_required": "Tens de colar o valor do cookie auth-token antes de guardar.",
@@ -471,6 +472,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_account_not_linked": "Game account is not linked for this campaign yet.",
         "reason_campaign_upcoming": "Campaign has not started yet.",
         "reason_campaign_not_active": "Campaign is not active right now.",
+        "reason_campaign_completed": "Campaign completed (all drops already finished).",
         "link_opened": "Campaign link opened in the browser.",
         "drops_page_opened": "Drops page opened in the browser.",
         "token_required": "You need to paste the auth-token cookie value before saving.",
@@ -583,6 +585,7 @@ class MainWindow(QMainWindow):
         self._streamless_failure_channel: str = ""
         self._streamless_no_target_logged = False
         self._forced_farm_channel: str = ""
+        self._forced_farm_campaign_id: str = ""
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
@@ -1169,6 +1172,14 @@ class MainWindow(QMainWindow):
         parts.append(f"{minutes}m")
         return " ".join(parts)
 
+    def _decision_is_farmable_now(self, decision: FarmDecision) -> bool:
+        campaign = decision.campaign
+        if not (campaign.active and campaign.eligible and decision.stream is not None):
+            return False
+        if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
+            return False
+        return True
+
     def _load_box_art_pixmap(self, url: str) -> QPixmap:
         target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
         cached = self._thumb_cache.get(target_url)
@@ -1212,7 +1223,7 @@ class MainWindow(QMainWindow):
             if status_filter == "upcoming":
                 return decision.campaign.upcoming
             if status_filter == "farmable":
-                return decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+                return self._decision_is_farmable_now(decision)
             return True
 
         def link_ok(decision: FarmDecision) -> bool:
@@ -1255,11 +1266,16 @@ class MainWindow(QMainWindow):
                 (
                     decision
                     for decision in self.latest_snapshot.decisions
-                    if decision.campaign.active and decision.campaign.eligible
+                    if self._decision_is_farmable_now(decision)
                 ),
                 None,
             )
-        if active is None and self.timer.isActive() and self._last_display_decision is not None:
+        if (
+            active is None
+            and self.timer.isActive()
+            and self._last_display_decision is not None
+            and not self.latest_snapshot.decisions
+        ):
             active = self._last_display_decision
         self.farming_now_group.setTitle(self._t("farming_now_group"))
         if active is None:
@@ -1309,6 +1325,8 @@ class MainWindow(QMainWindow):
             return self._t("reason_campaign_upcoming")
         if decision.reason_code == "campaign_not_active":
             return self._t("reason_campaign_not_active")
+        if decision.reason_code == "campaign_completed":
+            return self._t("reason_campaign_completed")
         if decision.reason_code == "no_valid_stream":
             return self._t("reason_no_valid_stream")
         if decision.reason_code == "account_not_linked":
@@ -1321,13 +1339,13 @@ class MainWindow(QMainWindow):
         if not self.latest_snapshot or not self.latest_snapshot.decisions:
             self.best_target_label.setText(self._t("best_target_none"))
             return
-        top = next((decision for decision in self.latest_snapshot.decisions if decision.stream is not None), None)
+        top = next((decision for decision in self.latest_snapshot.decisions if self._decision_is_farmable_now(decision)), None)
         if top is None:
             top = next(
                 (
                     decision
                     for decision in self.latest_snapshot.decisions
-                    if decision.campaign.active and decision.campaign.eligible
+                    if self._decision_is_farmable_now(decision)
                 ),
                 None,
             )
@@ -1426,11 +1444,20 @@ class MainWindow(QMainWindow):
         candidates = [
             decision
             for decision in self.latest_snapshot.decisions
-            if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+            if self._decision_is_farmable_now(decision)
         ]
         if not candidates:
             self._forced_farm_channel = ""
+            self._forced_farm_campaign_id = ""
             return None
+        if self._forced_farm_campaign_id:
+            forced_by_campaign = next(
+                (decision for decision in candidates if decision.campaign.id == self._forced_farm_campaign_id),
+                None,
+            )
+            if forced_by_campaign is not None:
+                return forced_by_campaign
+            self._forced_farm_campaign_id = ""
         if self._forced_farm_channel:
             forced = next(
                 (
@@ -1452,7 +1479,7 @@ class MainWindow(QMainWindow):
             candidates = [
                 decision
                 for decision in self.latest_snapshot.decisions
-                if decision.campaign.active and decision.campaign.eligible and decision.stream is not None
+                if self._decision_is_farmable_now(decision)
             ]
         if len(candidates) <= 1:
             self._log(self._t("farming_next_game_unavailable"))
@@ -1460,14 +1487,15 @@ class MainWindow(QMainWindow):
 
         current = self._current_farm_decision()
         current_index = -1
-        if current is not None and current.stream is not None:
+        if current is not None:
             for index, decision in enumerate(candidates):
-                if decision.stream is not None and decision.stream.login.casefold() == current.stream.login.casefold():
+                if decision.campaign.id == current.campaign.id:
                     current_index = index
                     break
 
         next_decision = candidates[(current_index + 1) % len(candidates)]
         assert next_decision.stream is not None
+        self._forced_farm_campaign_id = next_decision.campaign.id
         self._forced_farm_channel = next_decision.stream.login
         self._refresh_farming_now()
         self._streamless_heartbeat_tick()
@@ -1601,6 +1629,7 @@ class MainWindow(QMainWindow):
         self.streamless_timer.start()
         self._set_farming_controls(True)
         self._forced_farm_channel = ""
+        self._forced_farm_campaign_id = ""
         self._streamless_channel = ""
         self._streamless_failure_channel = ""
         self._streamless_no_target_logged = False
@@ -1615,6 +1644,7 @@ class MainWindow(QMainWindow):
         self.streamless_timer.stop()
         self._set_farming_controls(False)
         self._forced_farm_channel = ""
+        self._forced_farm_campaign_id = ""
         self._streamless_channel = ""
         self._streamless_failure_channel = ""
         self._streamless_no_target_logged = False
