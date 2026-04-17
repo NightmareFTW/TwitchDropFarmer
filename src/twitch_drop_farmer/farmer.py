@@ -92,6 +92,16 @@ class FarmEngine:
                 )
                 continue
 
+            if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="campaign_completed",
+                    )
+                )
+                continue
+
             if not campaign.active:
                 decisions.append(
                     FarmDecision(
