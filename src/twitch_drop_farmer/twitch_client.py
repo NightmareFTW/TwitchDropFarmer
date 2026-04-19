@@ -1260,6 +1260,20 @@ class TwitchClient:
 
         starts_at_raw = data.get("startAt") or data.get("startsAt")
         ends_at_raw = data.get("endAt") or data.get("endsAt")
+        starts_at = self._parse_timestamp(starts_at_raw)
+        ends_at = self._parse_timestamp(ends_at_raw)
+        status = str(data.get("status", "") or "").strip().upper()
+        now = datetime.now(timezone.utc)
+
+        if ends_at <= starts_at:
+            self._note(
+                f"Skipping campaign '{data.get('name') or game_name}' due to invalid schedule "
+                f"({starts_at.isoformat()} -> {ends_at.isoformat()})."
+            )
+            return None
+
+        if ends_at <= now:
+            status = "EXPIRED"
 
         drops = data.get("timeBasedDrops", []) or []
         if not drops:
@@ -1289,13 +1303,13 @@ class TwitchClient:
             game_slug=game.get("slug", ""),
             game_box_art_url=self._game_box_art_url(game),
             title=(data.get("name") or game_name or "Campaign"),
-            starts_at=self._parse_timestamp(starts_at_raw),
-            ends_at=self._parse_timestamp(ends_at_raw),
+            starts_at=starts_at,
+            ends_at=ends_at,
             progress_minutes=max(0, total_required - total_remaining),
             required_minutes=total_required,
             linked=bool(data.get("self", {}).get("isAccountConnected", False)),
             link_url=data.get("accountLinkURL", "") or "",
-            status=data.get("status", "") or "",
+            status=status,
             allowed_channels=allowed_channels,
             has_badge_or_emote=self._campaign_has_badge_or_emote(drops),
             next_drop_name=next_drop_name,
@@ -1447,6 +1461,18 @@ class TwitchClient:
                 campaigns.append(campaign)
                 if campaign.required_minutes == 0 and campaign.progress_minutes == 0:
                     self._note(f"Campaign '{campaign.title}' has no progress data (0/0 min)")
+
+        now = datetime.now(timezone.utc)
+        before_time_filter = len(campaigns)
+        campaigns = [
+            campaign
+            for campaign in campaigns
+            if campaign.ends_at > now and campaign.status != "EXPIRED"
+        ]
+        if len(campaigns) != before_time_filter:
+            self._note(
+                f"Dropped {before_time_filter - len(campaigns)} expired campaign(s) from the parsed list."
+            )
 
         campaigns.sort(key=lambda item: item.starts_at)
         campaigns.sort(key=lambda item: item.active, reverse=True)

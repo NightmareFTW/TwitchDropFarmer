@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import requests
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -84,6 +87,60 @@ THEMES: dict[str, str] = {
             border-radius: 9px;
             font-weight: 700;
         }
+        QFrame#DashboardGameCard {
+            background: #18181b;
+            border: 1px solid #2f2f35;
+            border-radius: 12px;
+            padding: 10px 8px 8px 8px;
+            min-height: 208px;
+        }
+        QFrame#DashboardGameCard[hovered="true"] {
+            border: 1px solid #7f52c6;
+            background: #1f1f24;
+        }
+        QFrame#DashboardGameCard[selected="true"] {
+            border: 2px solid #a970ff;
+            background: #241b34;
+        }
+        QFrame#DashboardGameCard[farmable="false"] {
+            border: 1px solid #34343b;
+        }
+        QLabel#DashboardTitle {
+            font-weight: 600;
+            color: #efeff1;
+        }
+        QFrame#DashboardGameCard[farmable="false"] QLabel#DashboardTitle {
+            color: #a8a8af;
+        }
+        QLabel#DashboardBadge {
+            background: #28303b;
+            color: #b7d7ff;
+            border-radius: 7px;
+            padding: 2px 6px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        QFrame#DashboardGameCard[status="active"] QLabel#DashboardBadge {
+            background: #213729;
+            color: #96f2ad;
+        }
+        QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
+            background: #3a3120;
+            color: #ffd892;
+        }
+        QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
+            background: #2d2f36;
+            color: #c6c9d3;
+        }
+        QLabel#DashboardRibbon {
+            background: #a970ff;
+            color: #ffffff;
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
     """,
     "black_red": """
         QWidget { background: #050505; color: #f2f2f2; }
@@ -123,6 +180,60 @@ THEMES: dict[str, str] = {
             border-radius: 9px;
             font-weight: 700;
         }
+        QFrame#DashboardGameCard {
+            background: #111111;
+            border: 1px solid #402020;
+            border-radius: 12px;
+            padding: 10px 8px 8px 8px;
+            min-height: 208px;
+        }
+        QFrame#DashboardGameCard[hovered="true"] {
+            border: 1px solid #b83a44;
+            background: #1a1010;
+        }
+        QFrame#DashboardGameCard[selected="true"] {
+            border: 2px solid #ff5d6d;
+            background: #2a1317;
+        }
+        QFrame#DashboardGameCard[farmable="false"] {
+            border: 1px solid #3a2a2c;
+        }
+        QLabel#DashboardTitle {
+            font-weight: 600;
+            color: #f2f2f2;
+        }
+        QFrame#DashboardGameCard[farmable="false"] QLabel#DashboardTitle {
+            color: #b8a6a8;
+        }
+        QLabel#DashboardBadge {
+            background: #3a2222;
+            color: #ffb0b0;
+            border-radius: 7px;
+            padding: 2px 6px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        QFrame#DashboardGameCard[status="active"] QLabel#DashboardBadge {
+            background: #203227;
+            color: #98ecac;
+        }
+        QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
+            background: #3b2f1d;
+            color: #ffd48a;
+        }
+        QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
+            background: #2f2729;
+            color: #c5b6b8;
+        }
+        QLabel#DashboardRibbon {
+            background: #ff5d6d;
+            color: #ffffff;
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
     """,
     "light": """
         QWidget { background: #f6f4fb; color: #1b1b1f; }
@@ -161,6 +272,60 @@ THEMES: dict[str, str] = {
             color: white;
             border-radius: 9px;
             font-weight: 700;
+        }
+        QFrame#DashboardGameCard {
+            background: #ffffff;
+            border: 1px solid #d3cfe0;
+            border-radius: 12px;
+            padding: 10px 8px 8px 8px;
+            min-height: 208px;
+        }
+        QFrame#DashboardGameCard[hovered="true"] {
+            border: 1px solid #8a6ec7;
+            background: #fbf9ff;
+        }
+        QFrame#DashboardGameCard[selected="true"] {
+            border: 2px solid #7b57bf;
+            background: #f0e9ff;
+        }
+        QFrame#DashboardGameCard[farmable="false"] {
+            border: 1px solid #d9d5e3;
+        }
+        QLabel#DashboardTitle {
+            font-weight: 600;
+            color: #1b1b1f;
+        }
+        QFrame#DashboardGameCard[farmable="false"] QLabel#DashboardTitle {
+            color: #7d748f;
+        }
+        QLabel#DashboardBadge {
+            background: #ebe7f6;
+            color: #554776;
+            border-radius: 7px;
+            padding: 2px 6px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        QFrame#DashboardGameCard[status="active"] QLabel#DashboardBadge {
+            background: #daf0e0;
+            color: #1f6b36;
+        }
+        QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
+            background: #f8ecd3;
+            color: #7f5b15;
+        }
+        QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
+            background: #ebe9ef;
+            color: #675f77;
+        }
+        QLabel#DashboardRibbon {
+            background: #7b57bf;
+            color: #ffffff;
+            border-radius: 6px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
         }
     """,
 }
@@ -237,9 +402,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "campaigns_detected_count": "Campanhas detetadas ({count})",
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
+        "tab_dashboard": "Dashboard",
         "tab_account": "Conta",
         "tab_filters": "Filtros",
         "tab_settings": "Definições",
+        "dashboard_group": "Jogos da whitelist",
+        "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
+        "dashboard_empty": "Adiciona jogos na whitelist para aparecerem aqui.",
+        "dashboard_selected": "Alvo manual por jogo: {game}.",
+        "dashboard_unset": "Sem alvo manual por jogo.",
+        "dashboard_ribbon": "▶ Selecionado",
+        "dashboard_game_unavailable": "O jogo selecionado ({game}) não está farmável agora.",
+        "dashboard_badge_active": "Ativo",
+        "dashboard_badge_upcoming": "Brevemente",
+        "dashboard_badge_offline": "Sem stream",
+        "dashboard_badge_no_data": "Sem dados",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -396,9 +573,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "campaigns_detected_count": "Detected campaigns ({count})",
         "tab_farming_now": "Farming now",
         "tab_campaign_explorer": "Campaigns",
+        "tab_dashboard": "Dashboard",
         "tab_account": "Account",
         "tab_filters": "Filters",
         "tab_settings": "Settings",
+        "dashboard_group": "Whitelisted games",
+        "dashboard_hint": "Click a game to make it your manual farming target.",
+        "dashboard_empty": "Add games to your whitelist to show them here.",
+        "dashboard_selected": "Manual game target: {game}.",
+        "dashboard_unset": "No manual game target.",
+        "dashboard_ribbon": "▶ Selected",
+        "dashboard_game_unavailable": "Selected game ({game}) is not farmable right now.",
+        "dashboard_badge_active": "Active",
+        "dashboard_badge_upcoming": "Upcoming",
+        "dashboard_badge_offline": "No stream",
+        "dashboard_badge_no_data": "No data",
         "farming_now_group": "Current farming status",
         "farming_state_running": "Status: Running",
         "farming_state_stopped": "Status: Stopped",
@@ -566,6 +755,111 @@ class MarkerListWidget(QListWidget):
         item.setFont(font)
 
 
+class DashboardGameCard(QFrame):
+    def __init__(
+        self,
+        *,
+        game_name: str,
+        title_text: str,
+        pixmap: QPixmap,
+        badge_text: str,
+        ribbon_text: str,
+        farmable: bool,
+        status_kind: str,
+        selected: bool,
+        on_click: Callable[[str], None],
+    ) -> None:
+        super().__init__()
+        self._game_name = game_name
+        self._on_click = on_click
+        self.setObjectName("DashboardGameCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("farmable", farmable)
+        self.setProperty("status", status_kind)
+        self.setProperty("selected", selected)
+        self.setProperty("hovered", False)
+
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setColor(Qt.GlobalColor.black)
+        self._shadow.setBlurRadius(10)
+        self._shadow.setOffset(0, 2)
+        self.setGraphicsEffect(self._shadow)
+
+        self._hover_animation = QPropertyAnimation(self._shadow, b"blurRadius", self)
+        self._hover_animation.setDuration(140)
+        self._hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        self.ribbon = QLabel(ribbon_text)
+        self.ribbon.setObjectName("DashboardRibbon")
+        self.ribbon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ribbon.setVisible(selected)
+        self.ribbon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        badge_row.addWidget(self.ribbon, alignment=Qt.AlignmentFlag.AlignLeft)
+        badge_row.addStretch(1)
+        self.badge = QLabel(badge_text)
+        self.badge.setObjectName("DashboardBadge")
+        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        badge_row.addWidget(self.badge)
+
+        self.cover = QLabel()
+        self.cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.cover.setPixmap(
+            pixmap.scaled(
+                108,
+                144,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+        self.title = QLabel(title_text)
+        self.title.setObjectName("DashboardTitle")
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setWordWrap(True)
+        self.title.setMaximumHeight(38)
+        self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        layout.addLayout(badge_row)
+        layout.addWidget(self.cover, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.title)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._on_click(self._game_name)
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event) -> None:  # type: ignore[override]
+        self.setProperty("hovered", True)
+        self._restyle()
+        self._animate_shadow(22)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        self.setProperty("hovered", False)
+        self._restyle()
+        self._animate_shadow(10)
+        super().leaveEvent(event)
+
+    def _animate_shadow(self, target_blur: float) -> None:
+        self._hover_animation.stop()
+        self._hover_animation.setStartValue(float(self._shadow.blurRadius()))
+        self._hover_animation.setEndValue(float(target_blur))
+        self._hover_animation.start()
+
+    def _restyle(self) -> None:
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -586,6 +880,8 @@ class MainWindow(QMainWindow):
         self._streamless_no_target_logged = False
         self._forced_farm_channel: str = ""
         self._forced_farm_campaign_id: str = ""
+        self._forced_farm_game: str = ""
+        self._dashboard_game_cards: list[DashboardGameCard] = []
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
@@ -750,6 +1046,31 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self.handle_stop)
         self.btn_stop.setEnabled(False)
 
+        dashboard_tab = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard_tab)
+        self.dashboard_group = QGroupBox()
+        self.dashboard_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        dashboard_group_layout = QVBoxLayout(self.dashboard_group)
+        self.dashboard_hint_label = QLabel()
+        self.dashboard_hint_label.setWordWrap(True)
+        self.dashboard_games_scroll = QScrollArea()
+        self.dashboard_games_scroll.setWidgetResizable(True)
+        self.dashboard_games_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.dashboard_games_scroll.setMinimumHeight(252)
+        self.dashboard_games_container = QWidget()
+        self.dashboard_games_grid = QGridLayout(self.dashboard_games_container)
+        self.dashboard_games_grid.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_games_grid.setHorizontalSpacing(12)
+        self.dashboard_games_grid.setVerticalSpacing(12)
+        self.dashboard_games_scroll.setWidget(self.dashboard_games_container)
+        dashboard_group_layout.addWidget(self.dashboard_hint_label)
+        dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
+        self.dashboard_target_label = QLabel()
+        self.dashboard_target_label.setWordWrap(True)
+        dashboard_layout.addWidget(self.dashboard_group, 1)
+        dashboard_layout.addWidget(self.dashboard_target_label)
+        dashboard_layout.addStretch(1)
+
         # Account tab with internal tabs for different auth methods
         account_tab = QWidget()
         account_layout = QVBoxLayout(account_tab)
@@ -789,6 +1110,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.btn_stop)
         control_layout.addStretch(1)
 
+        self.tabs_left.addTab(dashboard_tab, "")
         self.tabs_left.addTab(account_tab, "")
         self.tabs_left.addTab(filters_tab, "")
         self.tabs_left.addTab(control_tab, "")
@@ -922,6 +1244,41 @@ class MainWindow(QMainWindow):
             return widget.selected_keys()
         return list(fallback)
 
+    def _dashboard_whitelist_games(self) -> list[str]:
+        raw = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
+        output: list[str] = []
+        seen: set[str] = set()
+        for game in raw:
+            key = game.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append(game)
+        output.sort(key=str.casefold)
+        return output
+
+    def _dashboard_card_title(self, game_name: str) -> str:
+        cleaned = " ".join(game_name.split())
+        if len(cleaned) <= 32:
+            midpoint = len(cleaned) // 2
+            split = cleaned.rfind(" ", 0, midpoint + 1)
+            if split <= 0:
+                return cleaned
+            first = cleaned[:split].strip()
+            second = cleaned[split + 1:].strip()
+            if len(first) <= 16 and len(second) <= 16:
+                return f"{first}\n{second}"
+            return cleaned
+        truncated = cleaned[:29].rstrip()
+        if " " in truncated:
+            truncated = truncated[:truncated.rfind(" ")]
+        truncated = (truncated or cleaned[:29]).rstrip()
+        midpoint = len(truncated) // 2
+        split = truncated.rfind(" ", 0, midpoint + 1)
+        if split <= 0:
+            return f"{truncated}..."
+        return f"{truncated[:split].strip()}\n{truncated[split + 1:].strip()}..."
+
     def _set_farming_controls(self, running: bool) -> None:
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
@@ -1039,6 +1396,80 @@ class MainWindow(QMainWindow):
         self.channels_whitelist_list.set_entries(self.available_channel_entries, channels_whitelist, self._t("no_active_channels"))
         self.channels_blacklist_list.set_entries(self.available_channel_entries, channels_blacklist, self._t("no_active_channels"))
 
+    def _refresh_dashboard_games(self) -> None:
+        selected_game = self._forced_farm_game.casefold() if self._forced_farm_game else ""
+        whitelist_games = self._dashboard_whitelist_games()
+        by_game: dict[str, DropCampaign] = {}
+        if self.latest_snapshot is not None:
+            for campaign in self.latest_snapshot.campaigns:
+                key = campaign.game_name.casefold()
+                if key not in by_game:
+                    by_game[key] = campaign
+                elif campaign.active and not by_game[key].active:
+                    by_game[key] = campaign
+
+        while self.dashboard_games_grid.count():
+            child = self.dashboard_games_grid.takeAt(0)
+            widget = child.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._dashboard_game_cards.clear()
+
+        columns = 3
+        for index, game in enumerate(whitelist_games):
+            key = game.casefold()
+            campaign = by_game.get(key)
+            art_url = ""
+            if campaign is not None:
+                art_url = campaign.game_box_art_url or self._guess_box_art_url(campaign.game_name)
+            else:
+                art_url = self._guess_box_art_url(game)
+            is_farmable_game = False
+            if self.latest_snapshot is not None:
+                is_farmable_game = any(
+                    self._decision_is_farmable_now(decision)
+                    and decision.campaign.game_name.casefold() == key
+                    for decision in self.latest_snapshot.decisions
+                )
+            status_kind = "offline"
+            badge_text = self._t("dashboard_badge_no_data")
+            if campaign is not None:
+                if campaign.active and is_farmable_game:
+                    status_kind = "active"
+                    badge_text = self._t("dashboard_badge_active")
+                elif campaign.upcoming:
+                    status_kind = "upcoming"
+                    badge_text = self._t("dashboard_badge_upcoming")
+                else:
+                    status_kind = "offline"
+                    badge_text = self._t("dashboard_badge_offline")
+            card = DashboardGameCard(
+                game_name=game,
+                title_text=self._dashboard_card_title(game),
+                pixmap=self._load_box_art_pixmap(art_url),
+                badge_text=badge_text,
+                ribbon_text=self._t("dashboard_ribbon"),
+                farmable=is_farmable_game,
+                status_kind=status_kind,
+                selected=(key == selected_game),
+                on_click=self.handle_dashboard_game_clicked,
+            )
+            row = index // columns
+            col = index % columns
+            self.dashboard_games_grid.addWidget(card, row, col)
+            self._dashboard_game_cards.append(card)
+
+        for col in range(columns):
+            self.dashboard_games_grid.setColumnStretch(col, 1)
+
+        if not whitelist_games:
+            self.dashboard_target_label.setText(self._t("dashboard_empty"))
+            return
+        if self._forced_farm_game:
+            self.dashboard_target_label.setText(self._t("dashboard_selected", game=self._forced_farm_game))
+            return
+        self.dashboard_target_label.setText(self._t("dashboard_unset"))
+
     def _refresh_campaigns_label(self) -> None:
         count = len(self._filtered_decisions()) if self.latest_snapshot else 0
         if count:
@@ -1048,14 +1479,18 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         self.setWindowTitle(self._t("window_title"))
-        self.tabs_left.setTabText(0, self._t("tab_account"))
-        self.tabs_left.setTabText(1, self._t("tab_filters"))
-        self.tabs_left.setTabText(2, self._t("tab_settings"))
+        self.tabs_left.setTabText(0, self._t("tab_dashboard"))
+        self.tabs_left.setTabText(1, self._t("tab_account"))
+        self.tabs_left.setTabText(2, self._t("tab_filters"))
+        self.tabs_left.setTabText(3, self._t("tab_settings"))
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         
         self.auth_tabs.setTabText(0, self._t("auth_quick_token"))
         self.auth_tabs.setTabText(1, self._t("auth_session_export"))
+
+        self.dashboard_group.setTitle(self._t("dashboard_group"))
+        self.dashboard_hint_label.setText(self._t("dashboard_hint"))
         
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
@@ -1138,6 +1573,7 @@ class MainWindow(QMainWindow):
         self.btn_open_drops_page.setText(self._t("open_drops_page"))
         self.log_label.setText(self._t("log_label"))
         self._refresh_filter_lists()
+        self._refresh_dashboard_games()
         self._refresh_priority_label()
         self._refresh_farming_now()
         self._refresh_campaign_list()
@@ -1179,6 +1615,30 @@ class MainWindow(QMainWindow):
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
         return True
+
+    def _select_dashboard_game(self, game_name: str) -> None:
+        self._forced_farm_game = game_name
+        self._forced_farm_campaign_id = ""
+        self._forced_farm_channel = ""
+        self._refresh_dashboard_games()
+        self._refresh_farming_now()
+        if self.timer.isActive():
+            self._streamless_heartbeat_tick()
+
+    def handle_dashboard_game_clicked(self, game_name: str) -> None:
+        if not isinstance(game_name, str) or not game_name.strip():
+            return
+        game_name = game_name.strip()
+        self._select_dashboard_game(game_name)
+        self._log(self._t("dashboard_selected", game=game_name))
+        if self.latest_snapshot is not None:
+            has_candidate = any(
+                self._decision_is_farmable_now(decision)
+                and decision.campaign.game_name.casefold() == game_name.casefold()
+                for decision in self.latest_snapshot.decisions
+            )
+            if not has_candidate:
+                self._log(self._t("dashboard_game_unavailable", game=game_name))
 
     def _load_box_art_pixmap(self, url: str) -> QPixmap:
         target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
@@ -1449,7 +1909,18 @@ class MainWindow(QMainWindow):
         if not candidates:
             self._forced_farm_channel = ""
             self._forced_farm_campaign_id = ""
+            self._forced_farm_game = ""
             return None
+        if self._forced_farm_game:
+            game_candidates = [
+                decision
+                for decision in candidates
+                if decision.campaign.game_name.casefold() == self._forced_farm_game.casefold()
+            ]
+            if game_candidates:
+                candidates = game_candidates
+            else:
+                self._forced_farm_game = ""
         if self._forced_farm_campaign_id:
             forced_by_campaign = next(
                 (decision for decision in candidates if decision.campaign.id == self._forced_farm_campaign_id),
@@ -1495,8 +1966,10 @@ class MainWindow(QMainWindow):
 
         next_decision = candidates[(current_index + 1) % len(candidates)]
         assert next_decision.stream is not None
+        self._forced_farm_game = ""
         self._forced_farm_campaign_id = next_decision.campaign.id
         self._forced_farm_channel = next_decision.stream.login
+        self._refresh_dashboard_games()
         self._refresh_farming_now()
         self._streamless_heartbeat_tick()
         self._log(
@@ -1693,6 +2166,7 @@ class MainWindow(QMainWindow):
         self.available_game_entries = [FilterEntry(key=game_name, label=game_name) for game_name in snapshot.available_games]
         self.available_channel_entries = [FilterEntry(key=channel.login, label=channel.label) for channel in snapshot.available_channels]
         self._refresh_filter_lists()
+        self._refresh_dashboard_games()
         self._refresh_campaigns_label()
         self._refresh_priority_label()
         self._refresh_farming_now()
