@@ -8,8 +8,19 @@ from urllib.parse import quote
 
 import requests
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtCore import Qt, QTimer, QUrl, QPoint, QRect, QRectF
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygon,
+)
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
 from PySide6.QtWidgets import (
@@ -43,6 +54,157 @@ from .twitch_client import TwitchClient
 LABEL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 CHECK_MARK = "\u2713"
 BOX_ART_FALLBACK_URL = "https://static-cdn.jtvnw.net/ttv-static/404_boxart.jpg"
+
+# ── Ribbon constants ────────────────────────────────────────────────────────
+RIBBON_FARMING = ("FARMING", "#9147ff")  # purple
+RIBBON_LIVE    = ("LIVE",    "#00b167")  # green
+
+
+class GameCard(QWidget):
+    """Card moderno para o dashboard: box art com ribbon de estado, hover fade e borda animada."""
+
+    CARD_W = 130
+    CARD_H = 185
+
+    def __init__(
+        self,
+        game_key: str,
+        game_label: str,
+        pixmap: QPixmap,
+        ribbon: tuple[str, str] | None = None,
+        is_farming: bool = False,
+        on_click: Callable | None = None,
+    ) -> None:
+        super().__init__()
+        self.game_key    = game_key
+        self.game_label  = game_label
+        self._pixmap     = pixmap
+        self._ribbon     = ribbon        # (text, hex_color) or None
+        self._is_farming = is_farming
+        self._on_click   = on_click
+        self._hover_t    = 0.0            # 0.0 → 1.0 for hover fade
+
+        self.setFixedSize(self.CARD_W, self.CARD_H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setToolTip(game_label)
+
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(16)   # ~60 fps
+        self._anim_direction = 0
+        self._anim_timer.timeout.connect(self._tick_anim)
+
+    # ── animation ─────────────────────────────────────────────────────────
+
+    def _tick_anim(self) -> None:
+        self._hover_t = max(0.0, min(1.0, self._hover_t + 0.09 * self._anim_direction))
+        self.update()
+        if self._hover_t <= 0.0 or self._hover_t >= 1.0:
+            self._anim_timer.stop()
+
+    def enterEvent(self, event) -> None:
+        self._anim_direction = 1
+        self._anim_timer.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._anim_direction = -1
+        self._anim_timer.start()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if self._on_click:
+            self._on_click(self.game_key, self.game_label)
+        super().mousePressEvent(event)
+
+    # ── painting ──────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        w, h = self.width(), self.height()
+        rect = self.rect()
+
+        # -- rounded clip mask --
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(rect), 10, 10)
+        painter.setClipPath(clip)
+
+        # -- box art (fill card, centre-crop) --
+        if not self._pixmap.isNull():
+            scaled = self._pixmap.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x_off = (scaled.width()  - w) // 2
+            y_off = (scaled.height() - h) // 2
+            painter.drawPixmap(-x_off, -y_off, scaled)
+        else:
+            painter.fillRect(rect, QColor("#1a1a22"))
+
+        # -- bottom gradient for name legibility --
+        grad = QLinearGradient(0, h * 0.42, 0, h)
+        grad.setColorAt(0.0, QColor(0, 0, 0, 0))
+        grad.setColorAt(1.0, QColor(0, 0, 0, 215))
+        painter.fillRect(rect, grad)
+
+        # -- hover bright overlay --
+        if self._hover_t > 0.0:
+            overlay = QColor(255, 255, 255, int(32 * self._hover_t))
+            painter.fillRect(rect, overlay)
+
+        # -- diagonal ribbon (top-left) --
+        if self._ribbon:
+            ribbon_text, ribbon_hex = self._ribbon
+            ribbon_size = 58
+            pts = QPolygon([QPoint(0, 0), QPoint(ribbon_size, 0), QPoint(0, ribbon_size)])
+            painter.setBrush(QColor(ribbon_hex))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawPolygon(pts)
+            painter.save()
+            painter.translate(ribbon_size // 3, ribbon_size // 3 - 2)
+            painter.rotate(-45)
+            rib_font = QFont()
+            rib_font.setPixelSize(8)
+            rib_font.setBold(True)
+            painter.setFont(rib_font)
+            painter.setPen(QColor("white"))
+            painter.drawText(QRect(-22, -7, 44, 14), Qt.AlignmentFlag.AlignCenter, ribbon_text)
+            painter.restore()
+
+        # -- border (outside clip so it sits on the rounded edge) --
+        painter.setClipping(False)
+        if self._is_farming:
+            border_color = QColor("#9147ff")
+            border_w = 2.5
+        else:
+            alpha = int(55 + 100 * self._hover_t)
+            border_color = QColor(145, 71, 255, alpha)
+            border_w = 1.5
+        pen = QPen(border_color, border_w)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1), 9, 9)
+
+        # -- game name text (bottom overlay) --
+        painter.setClipPath(clip)
+        name_font = QFont()
+        name_font.setPixelSize(11)
+        name_font.setBold(True)
+        painter.setFont(name_font)
+        alpha_text = int(210 + 45 * self._hover_t)
+        painter.setPen(QColor(255, 255, 255, alpha_text))
+        text_rect = QRect(5, h - 46, w - 10, 42)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap,
+            self.game_label,
+        )
+
+        painter.end()
 
 
 THEMES: dict[str, str] = {
@@ -237,9 +399,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "campaigns_detected_count": "Campanhas detetadas ({count})",
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
+        "tab_dashboard": "Dashboard",
         "tab_account": "Conta",
         "tab_filters": "Filtros",
         "tab_settings": "Definições",
+        "dashboard_empty": "Nenhum jogo na whitelist. Adiciona jogos nos filtros!",
+        "dashboard_game_selected": "Farm iniciado: {game}",
+        "dashboard_no_stream": "Nenhuma stream disponível para {game}.",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -396,9 +562,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "campaigns_detected_count": "Detected campaigns ({count})",
         "tab_farming_now": "Farming now",
         "tab_campaign_explorer": "Campaigns",
+        "tab_dashboard": "Dashboard",
         "tab_account": "Account",
         "tab_filters": "Filters",
         "tab_settings": "Settings",
+        "dashboard_empty": "No games in whitelist. Add games in filters!",
+        "dashboard_game_selected": "Game farm started: {game}",
+        "dashboard_no_stream": "No stream available for {game}.",
         "farming_now_group": "Current farming status",
         "farming_state_running": "Status: Running",
         "farming_state_stopped": "Status: Stopped",
@@ -789,6 +959,21 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.btn_stop)
         control_layout.addStretch(1)
 
+        # Dashboard tab
+        dashboard_tab = QWidget()
+        dashboard_scroll = QScrollArea()
+        dashboard_scroll.setWidgetResizable(True)
+        self.dashboard_container = QWidget()
+        self.dashboard_grid = QGridLayout(self.dashboard_container)
+        self.dashboard_grid.setSpacing(10)
+        self.dashboard_grid.setContentsMargins(10, 10, 10, 10)
+        self.dashboard_no_games = QLabel()
+        self.dashboard_no_games.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dashboard_scroll.setWidget(self.dashboard_container)
+        dashboard_layout = QVBoxLayout(dashboard_tab)
+        dashboard_layout.addWidget(dashboard_scroll)
+
+        self.tabs_left.addTab(dashboard_tab, "")
         self.tabs_left.addTab(account_tab, "")
         self.tabs_left.addTab(filters_tab, "")
         self.tabs_left.addTab(control_tab, "")
@@ -1048,9 +1233,10 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         self.setWindowTitle(self._t("window_title"))
-        self.tabs_left.setTabText(0, self._t("tab_account"))
-        self.tabs_left.setTabText(1, self._t("tab_filters"))
-        self.tabs_left.setTabText(2, self._t("tab_settings"))
+        self.tabs_left.setTabText(0, self._t("tab_dashboard"))
+        self.tabs_left.setTabText(1, self._t("tab_account"))
+        self.tabs_left.setTabText(2, self._t("tab_filters"))
+        self.tabs_left.setTabText(3, self._t("tab_settings"))
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         
@@ -1142,6 +1328,7 @@ class MainWindow(QMainWindow):
         self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
+        self._refresh_dashboard()
         self._update_auth_status()
         self._set_farming_controls(self.timer.isActive())
 
@@ -1438,6 +1625,107 @@ class MainWindow(QMainWindow):
         self.btn_link_account.setEnabled(can_link)
         self.btn_link_account.setToolTip("" if can_link else self._t("link_button_disabled"))
 
+    def _refresh_dashboard(self) -> None:
+        """Atualiza o dashboard com os jogos da whitelist em grelha."""
+        # Limpa a grelha
+        while self.dashboard_grid.count() > 0:
+            item = self.dashboard_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Obtém os jogos da whitelist
+        whitelist_keys = set(self.games_whitelist_list.selected_keys())
+        if not whitelist_keys:
+            self.dashboard_no_games.setText(self._t("dashboard_empty"))
+            self.dashboard_grid.addWidget(self.dashboard_no_games, 0, 0)
+            return
+
+        # Filtra apenas os jogos na whitelist
+        filtered_games = [entry for entry in self.available_game_entries if entry.key in whitelist_keys]
+
+        if not filtered_games:
+            self.dashboard_no_games.setText(self._t("dashboard_empty"))
+            self.dashboard_grid.addWidget(self.dashboard_no_games, 0, 0)
+            return
+
+        # Determina o jogo atualmente em farm e os que têm stream farmável
+        active_decision = self._current_farm_decision()
+        active_game_label = active_decision.campaign.game_name if active_decision else ""
+        farmable_game_labels: set[str] = set()
+        if self.latest_snapshot:
+            for decision in self.latest_snapshot.decisions:
+                if self._decision_is_farmable_now(decision):
+                    farmable_game_labels.add(decision.campaign.game_name)
+
+        # Popula a grelha (3 colunas)
+        columns = 3
+        for idx, entry in enumerate(sorted(filtered_games, key=lambda e: e.label.casefold())):
+            row = idx // columns
+            col = idx % columns
+
+            is_farming = (entry.label == active_game_label and active_decision is not None)
+            has_live   = entry.label in farmable_game_labels
+
+            # Ribbon de estado
+            if is_farming:
+                ribbon = RIBBON_FARMING
+            elif has_live:
+                ribbon = RIBBON_LIVE
+            else:
+                ribbon = None
+
+            # Box art: prefere URL da campanha se disponível
+            best_decision = None
+            if self.latest_snapshot:
+                for decision in self.latest_snapshot.decisions:
+                    if decision.campaign.game_name == entry.label and self._decision_is_farmable_now(decision):
+                        best_decision = decision
+                        break
+            if best_decision:
+                box_art_url = best_decision.campaign.game_box_art_url or self._guess_box_art_url(entry.label)
+            else:
+                box_art_url = self._guess_box_art_url(entry.label)
+            pixmap = self._load_box_art_pixmap(box_art_url)
+
+            card = GameCard(
+                game_key=entry.key,
+                game_label=entry.label,
+                pixmap=pixmap,
+                ribbon=ribbon,
+                is_farming=is_farming,
+                on_click=self._force_farm_game,
+            )
+
+            self.dashboard_grid.addWidget(card, row, col)
+
+    def _force_farm_game(self, game_key: str, game_label: str) -> None:
+        """Força o farm de um jogo específico clicado no dashboard."""
+        if self.latest_snapshot is None:
+            return
+
+        # Encontra o melhor stream para este jogo
+        best_decision = None
+        for decision in self.latest_snapshot.decisions:
+            if decision.campaign.game_name == game_label and self._decision_is_farmable_now(decision):
+                if best_decision is None or decision.stream.display_name.casefold() < best_decision.stream.display_name.casefold():
+                    best_decision = decision
+
+        if best_decision is None or best_decision.stream is None:
+            self._log(self._t("dashboard_no_stream", game=game_label))
+            return
+
+        # Força o farm deste jogo
+        self._forced_farm_campaign_id = best_decision.campaign.id
+        self._forced_farm_channel = best_decision.stream.login
+        self._refresh_farming_now()
+        self._streamless_heartbeat_tick()
+        self._log(
+            self._t(
+                "dashboard_game_selected",
+                game=game_label,
+            )
+        )
+
     def _current_farm_decision(self) -> FarmDecision | None:
         if self.latest_snapshot is None:
             return None
@@ -1657,6 +1945,7 @@ class MainWindow(QMainWindow):
         self._refresh_campaigns_label()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
+        self._refresh_dashboard()
 
     def handle_link_account(self) -> None:
         decision = self._selected_decision()
@@ -1698,6 +1987,7 @@ class MainWindow(QMainWindow):
         self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
+        self._refresh_dashboard()
         self._update_auth_status()
         if self.config.auto_claim_drops:
             now = datetime.now()
