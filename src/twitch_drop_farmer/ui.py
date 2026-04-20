@@ -8,8 +8,8 @@ from urllib.parse import quote
 
 import requests
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QUrl, QPoint
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap, QPolygon
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
 from PySide6.QtWidgets import (
@@ -283,6 +283,10 @@ THEMES: dict[str, str] = {
             background: #2d2f36;
             color: #c6c9d3;
         }
+        QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
+            background: #0f3f2c;
+            color: #9cf2cb;
+        }
         QLabel#DashboardRibbon {
             background: #a970ff;
             color: #ffffff;
@@ -376,6 +380,10 @@ THEMES: dict[str, str] = {
             background: #2f2729;
             color: #c5b6b8;
         }
+        QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
+            background: #103425;
+            color: #8de6ba;
+        }
         QLabel#DashboardRibbon {
             background: #ff5d6d;
             color: #ffffff;
@@ -468,6 +476,10 @@ THEMES: dict[str, str] = {
         QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
             background: #ebe9ef;
             color: #675f77;
+        }
+        QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
+            background: #d7f1e4;
+            color: #19603d;
         }
         QLabel#DashboardRibbon {
             background: #7b57bf;
@@ -564,11 +576,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_selected": "Alvo manual por jogo: {game}.",
         "dashboard_unset": "Sem alvo manual por jogo.",
         "dashboard_ribbon": "▶ Selecionado",
+        "dashboard_ribbon_completed": "CONCLUIDO",
         "dashboard_game_unavailable": "O jogo selecionado ({game}) não está farmável agora.",
         "dashboard_badge_active": "Ativo",
         "dashboard_badge_upcoming": "Brevemente",
         "dashboard_badge_offline": "Sem stream",
         "dashboard_badge_no_data": "Sem dados",
+        "dashboard_badge_completed": "Completo",
+        "dashboard_completed_tooltip": "Todos os drops deste jogo ja foram concluidos nesta conta.",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -736,11 +751,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_selected": "Manual game target: {game}.",
         "dashboard_unset": "No manual game target.",
         "dashboard_ribbon": "▶ Selected",
+        "dashboard_ribbon_completed": "COMPLETED",
         "dashboard_game_unavailable": "Selected game ({game}) is not farmable right now.",
         "dashboard_badge_active": "Active",
         "dashboard_badge_upcoming": "Upcoming",
         "dashboard_badge_offline": "No stream",
         "dashboard_badge_no_data": "No data",
+        "dashboard_badge_completed": "Completed",
+        "dashboard_completed_tooltip": "All drops for this game are already completed on this account.",
         "farming_now_group": "Current farming status",
         "farming_state_running": "Status: Running",
         "farming_state_stopped": "Status: Stopped",
@@ -917,6 +935,8 @@ class DashboardGameCard(QFrame):
         pixmap: QPixmap,
         badge_text: str,
         ribbon_text: str,
+        completion_ribbon_text: str,
+        tooltip_text: str,
         farmable: bool,
         status_kind: str,
         selected: bool,
@@ -925,12 +945,14 @@ class DashboardGameCard(QFrame):
         super().__init__()
         self._game_name = game_name
         self._on_click = on_click
+        self._completion_ribbon_text = completion_ribbon_text
         self.setObjectName("DashboardGameCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("farmable", farmable)
         self.setProperty("status", status_kind)
         self.setProperty("selected", selected)
         self.setProperty("hovered", False)
+        self.setToolTip(tooltip_text)
 
         self._shadow = QGraphicsDropShadowEffect(self)
         self._shadow.setColor(Qt.GlobalColor.black)
@@ -1011,6 +1033,47 @@ class DashboardGameCard(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        if not self._completion_ribbon_text:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        band = QPolygon(
+            [
+                QPoint(-24, int(h * 0.30)),
+                QPoint(int(w * 0.38), -24),
+                QPoint(w + 24, int(h * 0.70)),
+                QPoint(int(w * 0.62), h + 24),
+            ]
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(8, 160, 96, 228))
+        painter.drawPolygon(band)
+
+        painter.save()
+        painter.translate(w / 2, h / 2)
+        painter.rotate(-36)
+        font = QFont(self.font())
+        font.setBold(True)
+        font.setPixelSize(14)
+        painter.setFont(font)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            int(-w * 0.45),
+            -12,
+            int(w * 0.90),
+            24,
+            Qt.AlignmentFlag.AlignCenter,
+            self._completion_ribbon_text,
+        )
+        painter.restore()
+        painter.end()
 
 
 class MainWindow(QMainWindow):
@@ -1243,8 +1306,8 @@ class MainWindow(QMainWindow):
         session_auth_layout.addWidget(self.session_group)
         session_auth_layout.addStretch(1)
         
-        self.auth_tabs.addTab(quick_auth_tab, "")
         self.auth_tabs.addTab(session_auth_tab, "")
+        self.auth_tabs.addTab(quick_auth_tab, "")
         
         account_layout.addWidget(self.auth_tabs)
         account_layout.addWidget(self.active_lists_note)
@@ -1562,9 +1625,11 @@ class MainWindow(QMainWindow):
         selected_game = self._forced_farm_game.casefold() if self._forced_farm_game else ""
         whitelist_games = self._dashboard_whitelist_games()
         by_game: dict[str, DropCampaign] = {}
+        campaigns_by_game: dict[str, list[DropCampaign]] = {}
         if self.latest_snapshot is not None:
             for campaign in self.latest_snapshot.campaigns:
                 key = campaign.game_name.casefold()
+                campaigns_by_game.setdefault(key, []).append(campaign)
                 if key not in by_game:
                     by_game[key] = campaign
                 elif campaign.active and not by_game[key].active:
@@ -1581,6 +1646,7 @@ class MainWindow(QMainWindow):
         for index, game in enumerate(whitelist_games):
             key = game.casefold()
             campaign = by_game.get(key)
+            related_campaigns = campaigns_by_game.get(key, [])
             art_url = ""
             if campaign is not None:
                 art_url = campaign.game_box_art_url or self._guess_box_art_url(
@@ -1596,9 +1662,20 @@ class MainWindow(QMainWindow):
                     and decision.campaign.game_name.casefold() == key
                     for decision in self.latest_snapshot.decisions
                 )
+
+            trackable_campaigns = [item for item in related_campaigns if item.required_minutes > 0]
+            is_game_completed = bool(trackable_campaigns) and all(item.remaining_minutes <= 0 for item in trackable_campaigns)
+
             status_kind = "offline"
             badge_text = self._t("dashboard_badge_no_data")
-            if campaign is not None:
+            completion_ribbon_text = ""
+            tooltip_text = game
+            if is_game_completed:
+                status_kind = "completed"
+                badge_text = self._t("dashboard_badge_completed")
+                completion_ribbon_text = self._t("dashboard_ribbon_completed")
+                tooltip_text = self._t("dashboard_completed_tooltip")
+            elif campaign is not None:
                 if campaign.active and is_farmable_game:
                     status_kind = "active"
                     badge_text = self._t("dashboard_badge_active")
@@ -1614,6 +1691,8 @@ class MainWindow(QMainWindow):
                 pixmap=self._load_box_art_pixmap(art_url),
                 badge_text=badge_text,
                 ribbon_text=self._t("dashboard_ribbon"),
+                completion_ribbon_text=completion_ribbon_text,
+                tooltip_text=tooltip_text,
                 farmable=is_farmable_game,
                 status_kind=status_kind,
                 selected=(key == selected_game),
@@ -1655,8 +1734,8 @@ class MainWindow(QMainWindow):
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         
-        self.auth_tabs.setTabText(0, self._t("auth_quick_token"))
-        self.auth_tabs.setTabText(1, self._t("auth_session_export"))
+        self.auth_tabs.setTabText(0, self._t("auth_session_export"))
+        self.auth_tabs.setTabText(1, self._t("auth_quick_token"))
 
         self.dashboard_group.setTitle(self._t("dashboard_group"))
         self.dashboard_hint_label.setText(self._t("dashboard_hint"))
