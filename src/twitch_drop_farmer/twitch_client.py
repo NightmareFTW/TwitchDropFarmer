@@ -174,6 +174,8 @@ class TwitchClient:
         self.login_state = LoginState()
         self._diagnostics: list[str] = []
         self._slug_cache: dict[str, str] = {}
+        self._game_box_art_cache: dict[str, str] = {}
+        self._external_box_art_cache: dict[str, str] = {}
         self._campaign_cache: list[DropCampaign] = []
         self._streamless_media_playlist: dict[str, str] = {}
         self._streamless_spade_url: dict[str, str] = {}
@@ -1586,6 +1588,93 @@ class TwitchClient:
         if not slug:
             self._note(f"Could not resolve a Twitch directory slug for {game_name}.")
         return slug
+
+    def resolve_game_box_art_url(self, game_name: str, *, game_slug: str = "") -> str:
+        cache_key = game_name.casefold()
+        cached = self._game_box_art_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        slug = (game_slug or "").strip() or self.resolve_game_slug(game_name)
+        if slug:
+            try:
+                payload = self._clone_query(GAME_DIRECTORY_QUERY)
+                payload["variables"]["slug"] = slug
+                payload["variables"]["limit"] = 1
+                response = self._post_gql(payload)
+                game = response.get("data", {}).get("game", {}) or {}
+                art_url = self._game_box_art_url(game)
+                if art_url:
+                    self._game_box_art_cache[cache_key] = art_url
+                    return art_url
+            except requests.RequestException as exc:
+                self._note(f"DirectoryPage_Game failed while resolving box art for {game_name}: {exc}")
+
+        try:
+            payload = self._clone_query(GAME_REDIRECT_QUERY)
+            payload["variables"]["name"] = game_name
+            response = self._post_gql(payload)
+            game = response.get("data", {}).get("game", {}) or {}
+            art_url = self._game_box_art_url(game)
+            if art_url:
+                self._game_box_art_cache[cache_key] = art_url
+                return art_url
+        except requests.RequestException as exc:
+            self._note(f"DirectoryGameRedirect failed while resolving box art for {game_name}: {exc}")
+
+        external_url = self._resolve_external_game_box_art_url(game_name)
+        if external_url:
+            self._game_box_art_cache[cache_key] = external_url
+            return external_url
+
+        self._game_box_art_cache[cache_key] = ""
+        return ""
+
+    def _resolve_external_game_box_art_url(self, game_name: str) -> str:
+        cache_key = game_name.casefold()
+        cached = self._external_box_art_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        api_url = "https://store.steampowered.com/api/storesearch/"
+        try:
+            response = self.session.get(
+                api_url,
+                params={"term": game_name, "l": "english", "cc": "us"},
+                headers={"User-Agent": WEB_USER_AGENT},
+                timeout=12,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            self._note(f"Steam store search failed while resolving box art for {game_name}: {exc}")
+            self._external_box_art_cache[cache_key] = ""
+            return ""
+
+        items = payload.get("items", []) or []
+        normalized = game_name.casefold().strip()
+
+        best_item: dict[str, Any] | None = None
+        for item in items:
+            name = str(item.get("name", "") or "").casefold().strip()
+            if name and name == normalized:
+                best_item = item
+                break
+        if best_item is None and items:
+            best_item = items[0]
+        if best_item is None:
+            self._external_box_art_cache[cache_key] = ""
+            return ""
+
+        app_id = str(best_item.get("id", "") or "").strip()
+        if app_id:
+            library_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_600x900_2x.jpg"
+            self._external_box_art_cache[cache_key] = library_url
+            return library_url
+
+        tiny_image = str(best_item.get("tiny_image", "") or "").strip()
+        self._external_box_art_cache[cache_key] = tiny_image
+        return tiny_image
 
     def fetch_streams(self, campaign: DropCampaign) -> list[StreamCandidate]:
         slug = campaign.game_slug or self.resolve_game_slug(campaign.game_name)

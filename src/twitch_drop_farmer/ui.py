@@ -1065,11 +1065,12 @@ class MainWindow(QMainWindow):
         self._update_auth_status()
 
     def _build_left_panel(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
         panel = QWidget()
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         vbox = QVBoxLayout(panel)
+        vbox.setContentsMargins(0, 0, 0, 0)
         self.tabs_left = QTabWidget()
+        self.tabs_left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.oauth_group = QGroupBox()
         oauth_layout = QVBoxLayout(self.oauth_group)
@@ -1164,6 +1165,7 @@ class MainWindow(QMainWindow):
         self.games_whitelist_hint = QLabel()
         self.games_whitelist_hint.setWordWrap(True)
         self.games_whitelist_list = MarkerListWidget("✓")
+        self.games_whitelist_list.itemClicked.connect(lambda _item: self._refresh_dashboard_games())
         games_whitelist_layout.addWidget(self.games_whitelist_hint)
         games_whitelist_layout.addWidget(self.games_whitelist_list)
 
@@ -1216,13 +1218,15 @@ class MainWindow(QMainWindow):
         self.dashboard_games_grid.setHorizontalSpacing(12)
         self.dashboard_games_grid.setVerticalSpacing(12)
         self.dashboard_games_scroll.setWidget(self.dashboard_games_container)
+        self.dashboard_no_games = QLabel()
+        self.dashboard_no_games.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dashboard_no_games.setWordWrap(True)
         dashboard_group_layout.addWidget(self.dashboard_hint_label)
         dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
         self.dashboard_target_label = QLabel()
         self.dashboard_target_label.setWordWrap(True)
         dashboard_layout.addWidget(self.dashboard_group, 1)
         dashboard_layout.addWidget(self.dashboard_target_label)
-        dashboard_layout.addStretch(1)
 
         # Account tab with internal tabs for different auth methods
         account_tab = QWidget()
@@ -1268,11 +1272,9 @@ class MainWindow(QMainWindow):
         self.tabs_left.addTab(filters_tab, "")
         self.tabs_left.addTab(control_tab, "")
 
-        vbox.addWidget(self.tabs_left)
-        vbox.addStretch(1)
+        vbox.addWidget(self.tabs_left, 1)
 
-        scroll.setWidget(panel)
-        return scroll
+        return panel
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -1399,14 +1401,21 @@ class MainWindow(QMainWindow):
 
     def _dashboard_whitelist_games(self) -> list[str]:
         raw = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
+        key_to_label = {entry.key.casefold(): entry.label for entry in self.available_game_entries}
+        label_lookup = {entry.label.casefold(): entry.label for entry in self.available_game_entries}
         output: list[str] = []
         seen: set[str] = set()
         for game in raw:
-            key = game.casefold()
-            if key in seen:
+            token = (game or "").strip()
+            if not token:
                 continue
-            seen.add(key)
-            output.append(game)
+            normalized = token.casefold()
+            resolved_label = key_to_label.get(normalized) or label_lookup.get(normalized) or token
+            marker = resolved_label.casefold()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            output.append(resolved_label)
         output.sort(key=str.casefold)
         return output
 
@@ -1574,7 +1583,10 @@ class MainWindow(QMainWindow):
             campaign = by_game.get(key)
             art_url = ""
             if campaign is not None:
-                art_url = campaign.game_box_art_url or self._guess_box_art_url(campaign.game_name)
+                art_url = campaign.game_box_art_url or self._guess_box_art_url(
+                    campaign.game_name,
+                    campaign.game_slug,
+                )
             else:
                 art_url = self._guess_box_art_url(game)
             is_farmable_game = False
@@ -1735,7 +1747,6 @@ class MainWindow(QMainWindow):
         self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
-        self._refresh_dashboard()
         self._update_auth_status()
         self._set_farming_controls(self.timer.isActive())
 
@@ -1825,7 +1836,10 @@ class MainWindow(QMainWindow):
         self._thumb_cache[target_url] = scaled
         return scaled
 
-    def _guess_box_art_url(self, game_name: str) -> str:
+    def _guess_box_art_url(self, game_name: str, game_slug: str = "") -> str:
+        resolved = self.client.resolve_game_box_art_url(game_name, game_slug=game_slug)
+        if resolved:
+            return resolved
         slug = quote(game_name.strip(), safe="")
         return f"https://static-cdn.jtvnw.net/ttv-boxart/{slug}-144x192.jpg"
 
@@ -1932,7 +1946,10 @@ class MainWindow(QMainWindow):
             )
         )
         self.farming_now_progress.setValue(int(campaign.completion * 1000))
-        box_art_url = campaign.game_box_art_url or self._guess_box_art_url(campaign.game_name)
+        box_art_url = campaign.game_box_art_url or self._guess_box_art_url(
+            campaign.game_name,
+            campaign.game_slug,
+        )
         self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(box_art_url))
         self._refresh_last_update_label()
 
@@ -2059,24 +2076,34 @@ class MainWindow(QMainWindow):
     def _refresh_dashboard(self) -> None:
         """Atualiza o dashboard com os jogos da whitelist em grelha."""
         # Limpa a grelha
-        while self.dashboard_grid.count() > 0:
-            item = self.dashboard_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        while self.dashboard_games_grid.count() > 0:
+            item = self.dashboard_games_grid.takeAt(0)
+            widget = item.widget()
+            if widget is None:
+                continue
+            if widget is self.dashboard_no_games:
+                widget.setParent(None)
+            else:
+                widget.deleteLater()
 
-        # Obtém os jogos da whitelist
-        whitelist_keys = set(self.games_whitelist_list.selected_keys())
-        if not whitelist_keys:
+        # Obtém os jogos da whitelist (compatível com config antiga por label)
+        selected_values = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
+        selected_tokens = {value.casefold() for value in selected_values if isinstance(value, str) and value.strip()}
+        if not selected_tokens:
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
-            self.dashboard_grid.addWidget(self.dashboard_no_games, 0, 0)
+            self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
             return
 
-        # Filtra apenas os jogos na whitelist
-        filtered_games = [entry for entry in self.available_game_entries if entry.key in whitelist_keys]
+        # Filtra apenas os jogos na whitelist (suporta key e label)
+        filtered_games = [
+            entry
+            for entry in self.available_game_entries
+            if entry.key.casefold() in selected_tokens or entry.label.casefold() in selected_tokens
+        ]
 
         if not filtered_games:
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
-            self.dashboard_grid.addWidget(self.dashboard_no_games, 0, 0)
+            self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
             return
 
         # Determina o jogo atualmente em farm e os que têm stream farmável
@@ -2113,7 +2140,10 @@ class MainWindow(QMainWindow):
                         best_decision = decision
                         break
             if best_decision:
-                box_art_url = best_decision.campaign.game_box_art_url or self._guess_box_art_url(entry.label)
+                box_art_url = best_decision.campaign.game_box_art_url or self._guess_box_art_url(
+                    entry.label,
+                    best_decision.campaign.game_slug,
+                )
             else:
                 box_art_url = self._guess_box_art_url(entry.label)
             pixmap = self._load_box_art_pixmap(box_art_url)
@@ -2127,7 +2157,7 @@ class MainWindow(QMainWindow):
                 on_click=self._force_farm_game,
             )
 
-            self.dashboard_grid.addWidget(card, row, col)
+            self.dashboard_games_grid.addWidget(card, row, col)
 
     def _force_farm_game(self, game_key: str, game_label: str) -> None:
         """Força o farm de um jogo específico clicado no dashboard."""
@@ -2389,7 +2419,7 @@ class MainWindow(QMainWindow):
         self._refresh_campaigns_label()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
-        self._refresh_dashboard()
+        self._refresh_dashboard_games()
 
     def handle_link_account(self) -> None:
         decision = self._selected_decision()
@@ -2405,15 +2435,54 @@ class MainWindow(QMainWindow):
     def handle_redeem_drops(self) -> None:
         self._with_errors(self._do_redeem_drops)
 
-    def _do_redeem_drops(self, *, auto_mode: bool = False) -> None:
+    def _do_redeem_drops(self, *, auto_mode: bool = False) -> int:
         claimed = self.client.claim_available_drops()
         for message in self.client.consume_diagnostics():
             self._log(message)
         if claimed > 0:
             self._log(self._t("redeem_auto_done", count=claimed) if auto_mode else self._t("redeem_done", count=claimed))
-            return
+            return claimed
         if not auto_mode:
             self._log(self._t("redeem_none"))
+        return claimed
+
+    def _auto_advance_after_claim(self) -> None:
+        if not self.timer.isActive() or self.latest_snapshot is None:
+            return
+
+        candidates = [
+            decision
+            for decision in self.latest_snapshot.decisions
+            if self._decision_is_farmable_now(decision)
+        ]
+        if len(candidates) <= 1:
+            return
+
+        current = self._current_farm_decision()
+        current_index = -1
+        if current is not None:
+            for index, decision in enumerate(candidates):
+                if decision.campaign.id == current.campaign.id:
+                    current_index = index
+                    break
+
+        next_decision = candidates[(current_index + 1) % len(candidates)]
+        if next_decision.stream is None:
+            return
+
+        self._forced_farm_game = ""
+        self._forced_farm_campaign_id = next_decision.campaign.id
+        self._forced_farm_channel = next_decision.stream.login
+        self._refresh_dashboard_games()
+        self._refresh_farming_now()
+        self._streamless_heartbeat_tick()
+        self._log(
+            self._t(
+                "farming_next_game_selected",
+                game=next_decision.campaign.game_name,
+                channel=next_decision.stream.display_name or next_decision.stream.login,
+            )
+        )
 
     def refresh_snapshot(self) -> None:
         self._with_errors(self._do_refresh)
@@ -2432,13 +2501,14 @@ class MainWindow(QMainWindow):
         self._refresh_farming_now()
         self._refresh_campaign_list()
         self._refresh_campaign_details()
-        self._refresh_dashboard()
         self._update_auth_status()
         if self.config.auto_claim_drops:
             now = datetime.now()
             if self._last_auto_claim_at is None or (now - self._last_auto_claim_at).total_seconds() >= 120:
                 self._last_auto_claim_at = now
-                self._do_redeem_drops(auto_mode=True)
+                claimed = self._do_redeem_drops(auto_mode=True)
+                if claimed > 0:
+                    self._auto_advance_after_claim()
         for message in snapshot.messages:
             self._log(message)
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))
