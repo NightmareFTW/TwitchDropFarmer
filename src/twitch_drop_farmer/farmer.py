@@ -92,6 +92,22 @@ class FarmEngine:
                 )
                 continue
 
+            # Some campaigns report as ACTIVE after claim/redeem but expose no remaining drop target.
+            if (
+                campaign.required_minutes <= 0
+                and campaign.next_drop_required_minutes <= 0
+                and campaign.next_drop_remaining_minutes <= 0
+                and not campaign.next_drop_name.strip()
+            ):
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="campaign_completed",
+                    )
+                )
+                continue
+
             if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
                 decisions.append(
                     FarmDecision(

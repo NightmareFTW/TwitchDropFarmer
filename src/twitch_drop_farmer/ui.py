@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
 import requests
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QUrl, QPoint
+from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QSize, Qt, QTimer, QUrl, QPoint, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap, QPolygon
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
@@ -572,6 +574,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_settings": "Definições",
         "dashboard_group": "Jogos da whitelist",
         "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
+        "dashboard_refresh": "Atualizar dashboard",
         "dashboard_empty": "Adiciona jogos na whitelist para aparecerem aqui.",
         "dashboard_selected": "Alvo manual por jogo: {game}.",
         "dashboard_unset": "Sem alvo manual por jogo.",
@@ -747,6 +750,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_settings": "Settings",
         "dashboard_group": "Whitelisted games",
         "dashboard_hint": "Click a game to make it your manual farming target.",
+        "dashboard_refresh": "Refresh dashboard",
         "dashboard_empty": "Add games to your whitelist to show them here.",
         "dashboard_selected": "Manual game target: {game}.",
         "dashboard_unset": "No manual game target.",
@@ -1006,6 +1010,16 @@ class DashboardGameCard(QFrame):
         layout.addWidget(self.cover, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.title)
 
+    def set_cover_pixmap(self, pixmap: QPixmap) -> None:
+        self.cover.setPixmap(
+            pixmap.scaled(
+                108,
+                144,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
             self._on_click(self._game_name)
@@ -1076,6 +1090,11 @@ class DashboardGameCard(QFrame):
         painter.end()
 
 
+class ImageFetchBridge(QObject):
+    loaded = Signal(str, bytes)
+    failed = Signal(str)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1101,6 +1120,13 @@ class MainWindow(QMainWindow):
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
+        self._thumb_executor = ThreadPoolExecutor(max_workers=4)
+        self._thumb_fetch_bridge = ImageFetchBridge(self)
+        self._thumb_fetch_bridge.loaded.connect(self._on_box_art_loaded)
+        self._thumb_fetch_bridge.failed.connect(self._on_box_art_failed)
+        self._thumb_waiters: dict[str, list[tuple[QLabel, int, int, str]]] = {}
+        self._thumb_inflight: set[str] = set()
+        self._generated_thumb_cache: dict[str, QPixmap] = {}
 
         self.resize(1280, 800)
         root = QWidget()
@@ -1115,7 +1141,7 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_snapshot)
         self.live_refresh_timer = QTimer(self)
-        self.live_refresh_timer.setInterval(60_000)
+        self.live_refresh_timer.setInterval(90_000)
         self.live_refresh_timer.timeout.connect(self.refresh_snapshot)
         self.streamless_timer = QTimer(self)
         self.streamless_timer.setInterval(25_000)
@@ -1271,6 +1297,11 @@ class MainWindow(QMainWindow):
         dashboard_group_layout = QVBoxLayout(self.dashboard_group)
         self.dashboard_hint_label = QLabel()
         self.dashboard_hint_label.setWordWrap(True)
+        self.btn_dashboard_refresh = QPushButton()
+        self.btn_dashboard_refresh.clicked.connect(self.handle_dashboard_refresh)
+        dashboard_actions_layout = QHBoxLayout()
+        dashboard_actions_layout.addStretch(1)
+        dashboard_actions_layout.addWidget(self.btn_dashboard_refresh)
         self.dashboard_games_scroll = QScrollArea()
         self.dashboard_games_scroll.setWidgetResizable(True)
         self.dashboard_games_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -1285,6 +1316,7 @@ class MainWindow(QMainWindow):
         self.dashboard_no_games.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dashboard_no_games.setWordWrap(True)
         dashboard_group_layout.addWidget(self.dashboard_hint_label)
+        dashboard_group_layout.addLayout(dashboard_actions_layout)
         dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
         self.dashboard_target_label = QLabel()
         self.dashboard_target_label.setWordWrap(True)
@@ -1647,6 +1679,11 @@ class MainWindow(QMainWindow):
             key = game.casefold()
             campaign = by_game.get(key)
             related_campaigns = campaigns_by_game.get(key, [])
+            related_decisions = [
+                decision
+                for decision in (self.latest_snapshot.decisions if self.latest_snapshot is not None else [])
+                if decision.campaign.game_name.casefold() == key
+            ]
             art_url = ""
             if campaign is not None:
                 art_url = campaign.game_box_art_url or self._guess_box_art_url(
@@ -1665,6 +1702,8 @@ class MainWindow(QMainWindow):
 
             trackable_campaigns = [item for item in related_campaigns if item.required_minutes > 0]
             is_game_completed = bool(trackable_campaigns) and all(item.remaining_minutes <= 0 for item in trackable_campaigns)
+            if not is_game_completed:
+                is_game_completed = any(decision.reason_code == "campaign_completed" for decision in related_decisions)
 
             status_kind = "offline"
             badge_text = self._t("dashboard_badge_no_data")
@@ -1688,7 +1727,7 @@ class MainWindow(QMainWindow):
             card = DashboardGameCard(
                 game_name=game,
                 title_text=self._dashboard_card_title(game),
-                pixmap=self._load_box_art_pixmap(art_url),
+                pixmap=self._placeholder_box_art_pixmap(),
                 badge_text=badge_text,
                 ribbon_text=self._t("dashboard_ribbon"),
                 completion_ribbon_text=completion_ribbon_text,
@@ -1702,6 +1741,14 @@ class MainWindow(QMainWindow):
             col = index % columns
             self.dashboard_games_grid.addWidget(card, row, col)
             self._dashboard_game_cards.append(card)
+            self._queue_box_art_load(
+                art_url,
+                card.cover,
+                width=108,
+                height=144,
+                game_name=game,
+                game_slug=campaign.game_slug if campaign is not None else "",
+            )
 
         for col in range(columns):
             self.dashboard_games_grid.setColumnStretch(col, 1)
@@ -1739,6 +1786,7 @@ class MainWindow(QMainWindow):
 
         self.dashboard_group.setTitle(self._t("dashboard_group"))
         self.dashboard_hint_label.setText(self._t("dashboard_hint"))
+        self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
         
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
@@ -1860,6 +1908,13 @@ class MainWindow(QMainWindow):
         campaign = decision.campaign
         if not (campaign.active and campaign.eligible and decision.stream is not None):
             return False
+        if (
+            campaign.required_minutes <= 0
+            and campaign.next_drop_required_minutes <= 0
+            and campaign.next_drop_remaining_minutes <= 0
+            and not campaign.next_drop_name.strip()
+        ):
+            return False
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
         return True
@@ -1893,34 +1948,221 @@ class MainWindow(QMainWindow):
         cached = self._thumb_cache.get(target_url)
         if cached is not None:
             return cached
+        return self._placeholder_box_art_pixmap()
+
+    def _placeholder_box_art_pixmap(self) -> QPixmap:
         pixmap = QPixmap(144, 192)
-        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.fill(QColor("#1f1f24"))
+        return pixmap
+
+    def _game_initials(self, game_name: str) -> str:
+        parts = [item for item in game_name.replace("-", " ").split() if item]
+        if not parts:
+            return "?"
+        if len(parts) == 1:
+            return parts[0][:2].upper()
+        return (parts[0][0] + parts[1][0]).upper()
+
+    def _generated_game_placeholder(self, game_name: str) -> QPixmap:
+        key = (game_name or "Unknown").strip() or "Unknown"
+        cache_key = key.casefold()
+        cached = self._generated_thumb_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()
+        hue = int(digest[:2], 16) % 360
+        bg_color = QColor.fromHsv(hue, 120, 92)
+        accent_color = QColor.fromHsv((hue + 26) % 360, 160, 180)
+
+        pixmap = QPixmap(144, 192)
+        pixmap.fill(bg_color)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(accent_color)
+        painter.drawRoundedRect(10, 10, 124, 124, 14, 14)
+
+        initials = self._game_initials(key)
+        initials_font = QFont(self.font())
+        initials_font.setBold(True)
+        initials_font.setPixelSize(38)
+        painter.setFont(initials_font)
+        painter.setPen(QColor("#f8f8ff"))
+        painter.drawText(10, 20, 124, 104, Qt.AlignmentFlag.AlignCenter, initials)
+
+        painter.fillRect(0, 142, 144, 50, QColor(0, 0, 0, 130))
+        name_font = QFont(self.font())
+        name_font.setBold(True)
+        name_font.setPixelSize(12)
+        painter.setFont(name_font)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            10,
+            148,
+            124,
+            38,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap,
+            key,
+        )
+        painter.end()
+
+        self._generated_thumb_cache[cache_key] = pixmap
+        return pixmap
+
+    def _download_url_bytes(self, url: str) -> bytes:
+        """Download image bytes from a single URL. Returns b'' on any failure."""
+        if not url or url == BOX_ART_FALLBACK_URL:
+            return b""
+        headers = {"User-Agent": self.client.session.headers.get("User-Agent", "Mozilla/5.0")}
         try:
-            response = self.client.session.get(target_url, timeout=10)
+            response = requests.get(url, timeout=6, headers=headers)
             response.raise_for_status()
-            loaded = QPixmap()
-            if loaded.loadFromData(response.content):
-                pixmap = loaded
+            return response.content or b""
         except requests.RequestException:
-            if target_url != BOX_ART_FALLBACK_URL:
-                try:
-                    response = self.client.session.get(BOX_ART_FALLBACK_URL, timeout=10)
-                    response.raise_for_status()
-                    loaded = QPixmap()
-                    if loaded.loadFromData(response.content):
-                        pixmap = loaded
-                except requests.RequestException:
-                    pass
-        scaled = pixmap.scaled(144, 192, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        self._thumb_cache[target_url] = scaled
-        return scaled
+            return b""
+
+    def _resolve_and_download_box_art_bytes(self, target_url: str, game_name: str, game_slug: str) -> bytes:
+        """
+        Download game box art via a prioritised chain:
+          1. Twitch GQL  ->  2. Steam  ->  3. Google Images
+             (all handled internally by resolve_game_box_art_url)
+          4. Initial URL from campaign data as last resort
+        """
+        tried: set[str] = set()
+
+        def _try(url: str) -> bytes:
+            u = (url or "").strip()
+            if not u or u in tried or u == BOX_ART_FALLBACK_URL:
+                return b""
+            tried.add(u)
+            return self._download_url_bytes(u)
+
+        # Steps 1-3: full API chain (Twitch GQL -> Steam -> Google)
+        if game_name.strip():
+            resolved = self.client.resolve_game_box_art_url(game_name, game_slug=game_slug)
+            result = _try(resolved)
+            if result:
+                return result
+
+        # Step 4: try the original URL supplied by the campaign
+        result = _try(target_url)
+        if result:
+            return result
+
+        return b""
+
+    def _queue_box_art_load(
+        self,
+        url: str,
+        label: QLabel,
+        *,
+        width: int,
+        height: int,
+        game_name: str = "",
+        game_slug: str = "",
+    ) -> None:
+        target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
+        generated_key = (game_name or "").strip().casefold()
+        generated_cached = self._generated_thumb_cache.get(generated_key) if generated_key else None
+        if generated_cached is not None:
+            label.setPixmap(
+                generated_cached.scaled(
+                    width,
+                    height,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            return
+
+        cached = self._thumb_cache.get(target_url)
+        if cached is not None:
+            label.setPixmap(
+                cached.scaled(
+                    width,
+                    height,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            return
+
+        label.setPixmap(
+            self._placeholder_box_art_pixmap().scaled(
+                width,
+                height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self._thumb_waiters.setdefault(target_url, []).append((label, width, height, game_name))
+        if target_url in self._thumb_inflight:
+            return
+        self._thumb_inflight.add(target_url)
+
+        def worker(image_url: str, requested_game: str, requested_slug: str) -> None:
+            image_bytes = self._resolve_and_download_box_art_bytes(image_url, requested_game, requested_slug)
+            if image_bytes:
+                self._thumb_fetch_bridge.loaded.emit(image_url, image_bytes)
+            else:
+                self._thumb_fetch_bridge.failed.emit(image_url)
+
+        self._thumb_executor.submit(worker, target_url, game_name, game_slug)
+
+    def _on_box_art_loaded(self, target_url: str, image_bytes: bytes) -> None:
+        loaded = QPixmap()
+        pixmap = self._placeholder_box_art_pixmap()
+        if loaded.loadFromData(image_bytes):
+            pixmap = loaded
+        scaled_base = pixmap.scaled(
+            144,
+            192,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._thumb_cache[target_url] = scaled_base
+        waiters = self._thumb_waiters.pop(target_url, [])
+        self._thumb_inflight.discard(target_url)
+        for label, width, height in waiters:
+            try:
+                label.setPixmap(
+                    scaled_base.scaled(
+                        width,
+                        height,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except RuntimeError:
+                continue
+
+    def _on_box_art_failed(self, target_url: str) -> None:
+        fallback = self._placeholder_box_art_pixmap()
+        waiters = self._thumb_waiters.pop(target_url, [])
+        self._thumb_inflight.discard(target_url)
+        for label, width, height, game_name in waiters:
+            candidate = self._generated_game_placeholder(game_name) if game_name.strip() else fallback
+            try:
+                label.setPixmap(
+                    candidate.scaled(
+                        width,
+                        height,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except RuntimeError:
+                continue
 
     def _guess_box_art_url(self, game_name: str, game_slug: str = "") -> str:
-        resolved = self.client.resolve_game_box_art_url(game_name, game_slug=game_slug)
-        if resolved:
-            return resolved
-        slug = quote(game_name.strip(), safe="")
-        return f"https://static-cdn.jtvnw.net/ttv-boxart/{slug}-144x192.jpg"
+        normalized = (game_slug or game_name).strip()
+        if normalized:
+            slug = quote(normalized, safe="")
+            return f"https://static-cdn.jtvnw.net/ttv-boxart/{slug}-144x192.jpg"
+        return BOX_ART_FALLBACK_URL
 
     def _filtered_decisions(self) -> list[FarmDecision]:
         if self.latest_snapshot is None:
@@ -2029,7 +2271,14 @@ class MainWindow(QMainWindow):
             campaign.game_name,
             campaign.game_slug,
         )
-        self.farming_now_game_image.setPixmap(self._load_box_art_pixmap(box_art_url))
+        self._queue_box_art_load(
+            box_art_url,
+            self.farming_now_game_image,
+            width=144,
+            height=192,
+            game_name=campaign.game_name,
+            game_slug=campaign.game_slug,
+        )
         self._refresh_last_update_label()
 
     def _reason_text(self, decision: FarmDecision) -> str:
@@ -2514,6 +2763,17 @@ class MainWindow(QMainWindow):
     def handle_redeem_drops(self) -> None:
         self._with_errors(self._do_redeem_drops)
 
+    def handle_dashboard_refresh(self) -> None:
+        self._with_errors(self._do_dashboard_refresh)
+
+    def _do_dashboard_refresh(self) -> None:
+        self._thumb_cache.clear()
+        self._thumb_waiters.clear()
+        self._thumb_inflight.clear()
+        self._generated_thumb_cache.clear()
+        self.client.clear_box_art_caches()
+        self.refresh_snapshot()
+
     def _do_redeem_drops(self, *, auto_mode: bool = False) -> int:
         claimed = self.client.claim_available_drops()
         for message in self.client.consume_diagnostics():
@@ -2591,6 +2851,10 @@ class MainWindow(QMainWindow):
         for message in snapshot.messages:
             self._log(message)
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._thumb_executor.shutdown(wait=False)
+        super().closeEvent(event)
 
 
 def run() -> None:

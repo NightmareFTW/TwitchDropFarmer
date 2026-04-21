@@ -10,6 +10,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import quote, urljoin
 
@@ -193,6 +194,13 @@ class TwitchClient:
         messages = self._diagnostics[:]
         self._diagnostics.clear()
         return messages
+
+    def clear_box_art_caches(self) -> None:
+        self._game_box_art_cache.clear()
+        self._external_box_art_cache.clear()
+
+    def resolve_external_box_art_url(self, game_name: str) -> str:
+        return self._resolve_external_game_box_art_url(game_name)
 
     def _load_cookies(self) -> None:
         if not COOKIE_FILE.exists():
@@ -617,16 +625,35 @@ class TwitchClient:
         else:
             profiles_to_try.append("web")
 
+        total_timeout_seconds = 35.0
+        started_at = time.monotonic()
         last_data: dict[str, Any] | list[dict[str, Any]] = {}
+        last_exception: requests.RequestException | None = None
         for profile in profiles_to_try:
-            response = self.session.post(
-                GQL_URL,
-                json=payload,
-                headers=self._gql_headers(profile),
-                timeout=20,
-            )
-            response.raise_for_status()
-            data = response.json()
+            elapsed = time.monotonic() - started_at
+            remaining = total_timeout_seconds - elapsed
+            if remaining <= 0:
+                self._note("GraphQL request aborted after exceeding total retry timeout.")
+                break
+
+            request_timeout = max(5.0, min(20.0, remaining))
+            try:
+                response = self.session.post(
+                    GQL_URL,
+                    json=payload,
+                    headers=self._gql_headers(profile),
+                    timeout=request_timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+            except requests.RequestException as exc:
+                last_exception = exc
+                self._note(f"GraphQL request failed with {profile} profile: {exc}")
+                continue
+            except ValueError as exc:
+                self._note(f"GraphQL response was not valid JSON ({profile} profile): {exc}")
+                return last_data
+
             last_data = data
             self._note_graphql_errors(payload, data)
 
@@ -637,6 +664,9 @@ class TwitchClient:
                 self._note(f"Retrying GraphQL request using {profile} headers after error: {messages[0]}")
                 continue
             return data
+
+        if last_exception is not None:
+            raise last_exception
         return last_data
 
     def _graphql_error_messages(
@@ -703,7 +733,11 @@ class TwitchClient:
     def _parse_timestamp(self, raw: str | None) -> datetime:
         if not raw:
             return datetime.now(timezone.utc)
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            self._note(f"Invalid timestamp received from Twitch: {raw!r}")
+            return datetime.now(timezone.utc)
 
     def _drop_totals(self, drops: list[dict[str, Any]]) -> tuple[int, int]:
         by_id = {
@@ -1006,64 +1040,72 @@ class TwitchClient:
         loop = QEventLoop()
         payload: dict[str, Any] = {"raw": ""}
         timed_out = {"value": False}
+        empty_rounds = {"value": 0}
         poll_timer = QTimer()
         poll_timer.setInterval(2_000)
         poll_timer.setSingleShot(False)
 
-        def finish() -> None:
-            if loop.isRunning():
-                loop.quit()
+        try:
+            def finish() -> None:
+                if loop.isRunning():
+                    loop.quit()
 
-        def collect_cards() -> None:
-            script = """
-                JSON.stringify(
-                    Array.from(document.querySelectorAll("button"))
-                        .map((button) => (button.innerText || "").trim())
-                        .filter(
-                            (text) =>
-                                /GMT[+-]\\d+/.test(text) &&
-                                text.split(/\\n+/).filter(Boolean).length >= 3
-                        )
-                        .slice(0, 250)
-                );
-            """
+            def collect_cards() -> None:
+                script = """
+                    JSON.stringify(
+                        Array.from(document.querySelectorAll("button"))
+                            .map((button) => (button.innerText || "").trim())
+                            .filter(
+                                (text) =>
+                                    /GMT[+-]\\d+/.test(text) &&
+                                    text.split(/\\n+/).filter(Boolean).length >= 3
+                            )
+                            .slice(0, 250)
+                    );
+                """
 
-            def on_result(raw: Any) -> None:
-                text = raw if isinstance(raw, str) else ""
-                if text and text != "[]":
-                    payload["raw"] = text
+                def on_result(raw: Any) -> None:
+                    text = raw if isinstance(raw, str) else ""
+                    if text and text != "[]":
+                        payload["raw"] = text
+                        finish()
+                        return
+                    empty_rounds["value"] += 1
+                    if empty_rounds["value"] >= 4:
+                        self._note("Browser fallback stopped early after repeated empty card polls.")
+                        finish()
+
+                page.runJavaScript(script, on_result)
+
+            def on_loaded(ok: bool) -> None:
+                if not ok:
+                    self._note("Browser fallback failed to load the rendered Drops page.")
                     finish()
+                    return
+                collect_cards()
+                poll_timer.start()
 
-            page.runJavaScript(script, on_result)
+            timeout = QTimer()
+            timeout.setSingleShot(True)
 
-        def on_loaded(ok: bool) -> None:
-            if not ok:
-                self._note("Browser fallback failed to load the rendered Drops page.")
+            def on_timeout() -> None:
+                timed_out["value"] = True
                 finish()
-                return
-            collect_cards()
-            poll_timer.start()
 
-        timeout = QTimer()
-        timeout.setSingleShot(True)
+            timeout.timeout.connect(on_timeout)
+            poll_timer.timeout.connect(collect_cards)
+            page.loadFinished.connect(on_loaded)
+            timeout.start(60_000)
+            page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
+            loop.exec()
 
-        def on_timeout() -> None:
-            timed_out["value"] = True
-            finish()
-
-        timeout.timeout.connect(on_timeout)
-        poll_timer.timeout.connect(collect_cards)
-        page.loadFinished.connect(on_loaded)
-        timeout.start(60_000)
-        page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
-        loop.exec()
-
-        poll_timer.stop()
-        timeout.stop()
-        shiboken_delete(page)
-        shiboken_delete(profile)
-        if owned_app:
-            app.quit()
+            poll_timer.stop()
+            timeout.stop()
+        finally:
+            shiboken_delete(page)
+            shiboken_delete(profile)
+            if owned_app:
+                app.quit()
 
         if timed_out["value"]:
             self._note("Browser fallback timed out while loading the rendered Drops page.")
@@ -1627,7 +1669,7 @@ class TwitchClient:
             self._game_box_art_cache[cache_key] = external_url
             return external_url
 
-        self._game_box_art_cache[cache_key] = ""
+        # Do NOT cache failures — allow retry on the next call
         return ""
 
     def _resolve_external_game_box_art_url(self, game_name: str) -> str:
@@ -1648,8 +1690,10 @@ class TwitchClient:
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             self._note(f"Steam store search failed while resolving box art for {game_name}: {exc}")
-            self._external_box_art_cache[cache_key] = ""
-            return ""
+            fallback = self._resolve_google_game_box_art_url(game_name)
+            if fallback:
+                self._external_box_art_cache[cache_key] = fallback
+            return fallback
 
         items = payload.get("items", []) or []
         normalized = game_name.casefold().strip()
@@ -1663,18 +1707,120 @@ class TwitchClient:
         if best_item is None and items:
             best_item = items[0]
         if best_item is None:
-            self._external_box_art_cache[cache_key] = ""
-            return ""
+            fallback = self._resolve_google_game_box_art_url(game_name)
+            if fallback:
+                self._external_box_art_cache[cache_key] = fallback
+            return fallback
 
         app_id = str(best_item.get("id", "") or "").strip()
         if app_id:
             library_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_600x900_2x.jpg"
-            self._external_box_art_cache[cache_key] = library_url
-            return library_url
+            # Verify the library image actually exists before storing the URL
+            try:
+                head = self.session.head(
+                    library_url,
+                    headers={"User-Agent": WEB_USER_AGENT},
+                    timeout=6,
+                    allow_redirects=True,
+                )
+                if head.status_code == 200:
+                    self._external_box_art_cache[cache_key] = library_url
+                    return library_url
+            except requests.RequestException:
+                pass
 
         tiny_image = str(best_item.get("tiny_image", "") or "").strip()
-        self._external_box_art_cache[cache_key] = tiny_image
-        return tiny_image
+        if tiny_image:
+            self._external_box_art_cache[cache_key] = tiny_image
+            return tiny_image
+
+        fallback = self._resolve_google_game_box_art_url(game_name)
+        if fallback:
+            self._external_box_art_cache[cache_key] = fallback
+        return fallback
+
+    def _resolve_duckduckgo_game_box_art_url(self, game_name: str) -> str:
+        query = f"{game_name} game cover art"
+        headers = {
+            "User-Agent": WEB_USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            page_response = self.session.get(
+                "https://duckduckgo.com/",
+                params={"q": query, "iax": "images", "ia": "images"},
+                headers=headers,
+                timeout=12,
+            )
+            page_response.raise_for_status()
+            html = page_response.text
+            match = re.search(r"vqd='([^']+)'", html)
+            if match is None:
+                match = re.search(r'vqd="([^"]+)"', html)
+            if match is None:
+                return ""
+            vqd = match.group(1)
+
+            api_response = self.session.get(
+                "https://duckduckgo.com/i.js",
+                params={
+                    "l": "us-en",
+                    "o": "json",
+                    "q": query,
+                    "vqd": vqd,
+                    "f": ",,,",
+                    "p": "1",
+                },
+                headers=headers,
+                timeout=12,
+            )
+            api_response.raise_for_status()
+            payload = api_response.json()
+        except (requests.RequestException, ValueError):
+            return ""
+
+        for item in payload.get("results", []) or []:
+            image_url = str(item.get("image", "") or "").strip()
+            if not image_url:
+                continue
+            if not image_url.startswith("http"):
+                continue
+            return image_url
+        return ""
+
+    def _resolve_google_game_box_art_url(self, game_name: str) -> str:
+        query = f"{game_name} game cover art"
+        try:
+            response = self.session.get(
+                "https://www.google.com/search",
+                params={"tbm": "isch", "hl": "en", "q": query},
+                headers={
+                    "User-Agent": WEB_USER_AGENT,
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+                timeout=12,
+            )
+            response.raise_for_status()
+            html = response.text
+        except requests.RequestException as exc:
+            self._note(f"Google image search failed while resolving box art for {game_name}: {exc}")
+            return ""
+
+        patterns = [
+            r'"ou":"(https://[^"\\]+(?:jpg|jpeg|png|webp))"',
+            r'"(https://[^"\\]+(?:jpg|jpeg|png|webp))"',
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, html, flags=re.IGNORECASE):
+                candidate = match.group(1)
+                candidate = candidate.replace("\\/", "/").replace("\\u003d", "=").strip()
+                if not candidate:
+                    continue
+                if "gstatic.com/images/branding" in candidate:
+                    continue
+                return candidate
+        self._note(f"Google image search did not return a usable box art URL for {game_name}.")
+        return ""
 
     def fetch_streams(self, campaign: DropCampaign) -> list[StreamCandidate]:
         slug = campaign.game_slug or self.resolve_game_slug(campaign.game_name)
