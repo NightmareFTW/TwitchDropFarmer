@@ -65,8 +65,20 @@ Use your Twitch auth-token cookie value inside the app (Account tab).
 
 ## Screenshots
 
+### Dashboard
+
+![Dashboard](docs/images/ui-dashboard.png)
+
+### Farming View
+
 ![Farming View](docs/images/ui-farming.png)
+
+### Campaigns View
+
 ![Campaigns View](docs/images/ui-campaigns.png)
+
+### Settings View
+
 ![Settings View](docs/images/ui-settings.png)
 
 ## Notes

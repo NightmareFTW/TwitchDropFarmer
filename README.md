@@ -103,6 +103,10 @@ Notas:
 
 ## Capturas de ecrã
 
+### Dashboard
+
+![Dashboard](docs/images/ui-dashboard.png)
+
 ### Vista de Farming
 
 ![Vista de Farming](docs/images/ui-farming.png)
