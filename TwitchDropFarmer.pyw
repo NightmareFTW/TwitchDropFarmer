@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import ctypes
 from pathlib import Path
 import sys
-from tkinter import Tk, messagebox
 
 
 def _show_error(title: str, message: str) -> None:
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    messagebox.showerror(title, message)
-    root.destroy()
+    if sys.platform == "win32":
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10 | 0x1000)
+        return
+    sys.stderr.write(f"{title}: {message}\n")
 
 
 def main() -> int:

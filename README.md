@@ -2,7 +2,7 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-Aplicação desktop em Python + Tkinter para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
+Aplicação desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
 ## Funcionalidades
 
@@ -70,7 +70,18 @@ PYTHONPATH=src python -m twitch_drop_farmer
 
 Depois, abre:
 
-- `dist\TwitchDropFarmer.exe`
+- `dist\TwitchDropFarmer\TwitchDropFarmer.exe`
+- `dist\TwitchDropFarmer-win64.zip`
+
+Notas:
+
+- O build usa `onedir` para evitar um executável monolítico demasiado grande com Qt WebEngine.
+- O ZIP gerado é o artefacto mais indicado para distribuição em releases.
+
+## Releases GitHub
+
+- Tags `v*` passam a poder gerar automaticamente um build Windows via GitHub Actions.
+- A release publica o pacote `TwitchDropFarmer-win64.zip` como asset.
 
 ## Como autenticar
 
