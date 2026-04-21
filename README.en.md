@@ -2,7 +2,7 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-A Python + Tkinter desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
+A Python + PySide6 desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
 
 ## Highlights
 
@@ -42,7 +42,18 @@ PYTHONPATH=src python -m twitch_drop_farmer
 
 Generated binary:
 
-- dist\TwitchDropFarmer.exe
+- dist\TwitchDropFarmer\TwitchDropFarmer.exe
+- dist\TwitchDropFarmer-win64.zip
+
+Notes:
+
+- The build now uses `onedir` to avoid an oversized single-file executable with Qt WebEngine.
+- The generated ZIP is the recommended release artifact for distribution.
+
+## GitHub Releases
+
+- `v*` tags can now trigger an automated Windows release build through GitHub Actions.
+- The release publishes `TwitchDropFarmer-win64.zip` as an asset.
 
 ## Authentication
 

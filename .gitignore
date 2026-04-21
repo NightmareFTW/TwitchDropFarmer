@@ -44,5 +44,6 @@ cookies.json
 # Temporary files
 *.bak
 *.orig
+*.spec
 GRAPHQL_STRUCTURE.md
 TwitchDropFarmer/.vscode/
