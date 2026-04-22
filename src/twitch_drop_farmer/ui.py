@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -278,8 +278,8 @@ THEMES: dict[str, str] = {
             color: #96f2ad;
         }
         QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
-            background: #3a3120;
-            color: #ffd892;
+            background: #2d2f36;
+            color: #c6c9d3;
         }
         QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
             background: #2d2f36;
@@ -288,6 +288,18 @@ THEMES: dict[str, str] = {
         QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
             background: #0f3f2c;
             color: #9cf2cb;
+        }
+        QFrame#DashboardGameCard[status="subscription_required"] QLabel#DashboardBadge {
+            background: #4a2d12;
+            color: #ffd19a;
+        }
+        QFrame#DashboardGameCard[status="lost_full"] QLabel#DashboardBadge {
+            background: #4a1a1d;
+            color: #ffb3b8;
+        }
+        QFrame#DashboardGameCard[status="lost_partial"] QLabel#DashboardBadge {
+            background: #4a3b14;
+            color: #ffe39f;
         }
         QLabel#DashboardRibbon {
             background: #a970ff;
@@ -375,8 +387,8 @@ THEMES: dict[str, str] = {
             color: #98ecac;
         }
         QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
-            background: #3b2f1d;
-            color: #ffd48a;
+            background: #2f2729;
+            color: #c5b6b8;
         }
         QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
             background: #2f2729;
@@ -385,6 +397,18 @@ THEMES: dict[str, str] = {
         QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
             background: #103425;
             color: #8de6ba;
+        }
+        QFrame#DashboardGameCard[status="subscription_required"] QLabel#DashboardBadge {
+            background: #4a2f16;
+            color: #ffd7a8;
+        }
+        QFrame#DashboardGameCard[status="lost_full"] QLabel#DashboardBadge {
+            background: #4a1b22;
+            color: #ffb8c1;
+        }
+        QFrame#DashboardGameCard[status="lost_partial"] QLabel#DashboardBadge {
+            background: #4a3b14;
+            color: #ffe39f;
         }
         QLabel#DashboardRibbon {
             background: #ff5d6d;
@@ -472,8 +496,8 @@ THEMES: dict[str, str] = {
             color: #1f6b36;
         }
         QFrame#DashboardGameCard[status="upcoming"] QLabel#DashboardBadge {
-            background: #f8ecd3;
-            color: #7f5b15;
+            background: #ebe9ef;
+            color: #675f77;
         }
         QFrame#DashboardGameCard[status="offline"] QLabel#DashboardBadge {
             background: #ebe9ef;
@@ -482,6 +506,18 @@ THEMES: dict[str, str] = {
         QFrame#DashboardGameCard[status="completed"] QLabel#DashboardBadge {
             background: #d7f1e4;
             color: #19603d;
+        }
+        QFrame#DashboardGameCard[status="subscription_required"] QLabel#DashboardBadge {
+            background: #ffe8c7;
+            color: #8a5417;
+        }
+        QFrame#DashboardGameCard[status="lost_full"] QLabel#DashboardBadge {
+            background: #f8d6da;
+            color: #8a1f2c;
+        }
+        QFrame#DashboardGameCard[status="lost_partial"] QLabel#DashboardBadge {
+            background: #f8edcc;
+            color: #7d5d1c;
         }
         QLabel#DashboardRibbon {
             background: #7b57bf;
@@ -545,6 +581,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sort_longest_campaign": "Maior duração total",
         "refresh_active": "Actualizar campanhas e streams",
         "active_lists_note": "As listas abaixo são geradas a partir das campanhas e canais activos devolvidos pela Twitch.",
+        "filters_hint": "Organiza os filtros por sub-aba e usa pesquisa para encontrar jogos/canais rapidamente.",
+        "filters_search_games": "Pesquisar jogo...",
+        "filters_search_channels": "Pesquisar canal...",
+        "filters_select_all": "Selecionar todos",
+        "filters_clear_all": "Limpar todos",
+        "filters_select_visible": "Selecionar visíveis",
+        "filters_clear_visible": "Limpar visíveis",
+        "filter_tab_games_whitelist": "Jogos whitelist",
+        "filter_tab_games_blacklist": "Jogos blacklist",
+        "filter_tab_channels_whitelist": "Canais whitelist",
+        "filter_tab_channels_blacklist": "Canais blacklist",
+        "filter_tab_games_whitelist_count": "Jogos whitelist ({selected}/{total})",
+        "filter_tab_games_blacklist_count": "Jogos blacklist ({selected}/{total})",
+        "filter_tab_channels_whitelist_count": "Canais whitelist ({selected}/{total})",
+        "filter_tab_channels_blacklist_count": "Canais blacklist ({selected}/{total})",
         "games_whitelist_group": "Whitelist de jogos",
         "games_blacklist_group": "Blacklist de jogos",
         "channels_whitelist_group": "Whitelist de canais",
@@ -582,11 +633,23 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_ribbon_completed": "CONCLUIDO",
         "dashboard_game_unavailable": "O jogo selecionado ({game}) não está farmável agora.",
         "dashboard_badge_active": "Ativo",
-        "dashboard_badge_upcoming": "Brevemente",
+        "dashboard_badge_upcoming": "Nao iniciada",
         "dashboard_badge_offline": "Sem stream",
         "dashboard_badge_no_data": "Sem dados",
         "dashboard_badge_completed": "Completo",
+        "dashboard_badge_subscription_required": "Subscricao Requerida",
+        "dashboard_badge_lost_full": "Perdida",
+        "dashboard_badge_lost_partial": "Parcial perdida",
         "dashboard_completed_tooltip": "Todos os drops deste jogo ja foram concluidos nesta conta.",
+        "dashboard_completed_tooltip_detail": "Concluidas {completed}/{total} campanhas rastreaveis deste jogo.",
+        "dashboard_subscription_required_tooltip": "Este drop exige subscricao ativa para ser resgatado.",
+        "dashboard_lost_full_tooltip": "Campanha expirada sem progresso: {lost}/{total} campanhas perderam todos os drops.",
+        "dashboard_lost_partial_tooltip": "Campanha expirada com progresso parcial: {lost}/{total} campanhas ficaram incompletas.",
+        "dashboard_upcoming_tooltip": "A campanha ainda nao comecou.",
+        "dashboard_offline_tooltip": "Sem stream valida no momento para esta campanha.",
+        "dashboard_ribbon_lost_full": "PERDIDA",
+        "dashboard_ribbon_lost_partial": "PARCIAL",
+        "dashboard_ribbon_subscription_required": "SUBSCRICAO",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -658,6 +721,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_stream_selected": "Melhor stream por drops ativos e viewers.",
         "reason_channel_priority": "Whitelist de canais aplicada.",
         "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
+        "reason_subscription_required": "Campanha requer subscricao ativa para resgatar.",
         "reason_campaign_upcoming": "Campanha ainda não começou.",
         "reason_campaign_not_active": "Campanha não está activa neste momento.",
         "reason_campaign_completed": "Campanha concluída (todos os drops já completos).",
@@ -721,6 +785,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sort_longest_campaign": "Longest total duration",
         "refresh_active": "Refresh campaigns and streams",
         "active_lists_note": "The lists below are built from the active campaigns and channels returned by Twitch.",
+        "filters_hint": "Use sub-tabs and search to browse all games/channels with less scrolling.",
+        "filters_search_games": "Search game...",
+        "filters_search_channels": "Search channel...",
+        "filters_select_all": "Select all",
+        "filters_clear_all": "Clear all",
+        "filters_select_visible": "Select visible",
+        "filters_clear_visible": "Clear visible",
+        "filter_tab_games_whitelist": "Game whitelist",
+        "filter_tab_games_blacklist": "Game blacklist",
+        "filter_tab_channels_whitelist": "Channel whitelist",
+        "filter_tab_channels_blacklist": "Channel blacklist",
+        "filter_tab_games_whitelist_count": "Game whitelist ({selected}/{total})",
+        "filter_tab_games_blacklist_count": "Game blacklist ({selected}/{total})",
+        "filter_tab_channels_whitelist_count": "Channel whitelist ({selected}/{total})",
+        "filter_tab_channels_blacklist_count": "Channel blacklist ({selected}/{total})",
         "games_whitelist_group": "Game whitelist",
         "games_blacklist_group": "Game blacklist",
         "channels_whitelist_group": "Channel whitelist",
@@ -758,11 +837,23 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_ribbon_completed": "COMPLETED",
         "dashboard_game_unavailable": "Selected game ({game}) is not farmable right now.",
         "dashboard_badge_active": "Active",
-        "dashboard_badge_upcoming": "Upcoming",
+        "dashboard_badge_upcoming": "Not started",
         "dashboard_badge_offline": "No stream",
         "dashboard_badge_no_data": "No data",
         "dashboard_badge_completed": "Completed",
+        "dashboard_badge_subscription_required": "Subscription Required",
+        "dashboard_badge_lost_full": "Lost",
+        "dashboard_badge_lost_partial": "Partially lost",
         "dashboard_completed_tooltip": "All drops for this game are already completed on this account.",
+        "dashboard_completed_tooltip_detail": "Completed {completed}/{total} trackable campaigns for this game.",
+        "dashboard_subscription_required_tooltip": "This drop requires an active subscription to redeem.",
+        "dashboard_lost_full_tooltip": "Expired with no progress: {lost}/{total} campaigns lost all drops.",
+        "dashboard_lost_partial_tooltip": "Expired with partial progress: {lost}/{total} campaigns ended incomplete.",
+        "dashboard_upcoming_tooltip": "The campaign has not started yet.",
+        "dashboard_offline_tooltip": "No valid stream is available right now for this campaign.",
+        "dashboard_ribbon_lost_full": "LOST",
+        "dashboard_ribbon_lost_partial": "PARTIAL",
+        "dashboard_ribbon_subscription_required": "SUB REQUIRED",
         "farming_now_group": "Current farming status",
         "farming_state_running": "Status: Running",
         "farming_state_stopped": "Status: Stopped",
@@ -834,6 +925,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_stream_selected": "Best stream by drops enabled and viewers.",
         "reason_channel_priority": "Channel whitelist priority applied.",
         "reason_account_not_linked": "Game account is not linked for this campaign yet.",
+        "reason_subscription_required": "Campaign requires an active subscription to redeem.",
         "reason_campaign_upcoming": "Campaign has not started yet.",
         "reason_campaign_not_active": "Campaign is not active right now.",
         "reason_campaign_completed": "Campaign completed (all drops already finished).",
@@ -875,27 +967,88 @@ class MarkerListWidget(QListWidget):
         super().__init__()
         self._marker = marker.replace("âœ“", CHECK_MARK)
         self._selected_keys: set[str] = set()
+        self._all_entries: list[FilterEntry] = []
+        self._filtered_entries: list[FilterEntry] = []
+        self._empty_text = ""
+        self._filter_text = ""
         self._has_state = False
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         scrollbar = self.verticalScrollBar()
-        scrollbar.setSingleStep(5)
-        scrollbar.setPageStep(5)
+        scrollbar.setSingleStep(18)
+        scrollbar.setPageStep(120)
         self.itemClicked.connect(self._toggle_item)
 
     def set_entries(self, entries: list[FilterEntry], selected_keys: list[str], empty_text: str) -> None:
         self._selected_keys = set(selected_keys)
         self._has_state = True
+        self._all_entries = list(entries)
+        self._empty_text = empty_text
+        self._rebuild_items()
+
+    def set_filter_text(self, text: str) -> None:
+        normalized = (text or "").strip().casefold()
+        if normalized == self._filter_text:
+            return
+        self._filter_text = normalized
+        self._rebuild_items()
+
+    def select_visible(self) -> None:
+        if not self._all_entries:
+            return
+        changed = False
+        for entry in self._filtered_entries:
+            if entry.key in self._selected_keys:
+                continue
+            self._selected_keys.add(entry.key)
+            changed = True
+        if changed:
+            self._rebuild_items()
+
+    def select_all(self) -> None:
+        if not self._all_entries:
+            return
+        all_keys = {entry.key for entry in self._all_entries}
+        if all_keys == self._selected_keys:
+            return
+        self._selected_keys = all_keys
+        self._rebuild_items()
+
+    def clear_all(self) -> None:
+        if not self._selected_keys:
+            return
+        self._selected_keys.clear()
+        self._rebuild_items()
+
+    def clear_visible(self) -> None:
+        if not self._all_entries:
+            return
+        visible_keys = {entry.key for entry in self._filtered_entries}
+        new_selected = {key for key in self._selected_keys if key not in visible_keys}
+        if new_selected == self._selected_keys:
+            return
+        self._selected_keys = new_selected
+        self._rebuild_items()
+
+    def _rebuild_items(self) -> None:
+        if self._filter_text:
+            self._filtered_entries = [
+                entry
+                for entry in self._all_entries
+                if self._filter_text in entry.label.casefold()
+            ]
+        else:
+            self._filtered_entries = list(self._all_entries)
         self.blockSignals(True)
         self.clear()
-        if not entries:
-            placeholder = QListWidgetItem(empty_text)
+        if not self._filtered_entries:
+            placeholder = QListWidgetItem(self._empty_text)
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self.addItem(placeholder)
             self.blockSignals(False)
             return
 
-        for entry in sorted(entries, key=lambda item: item.label.casefold()):
+        for entry in sorted(self._filtered_entries, key=lambda item: item.label.casefold()):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, entry.key)
             item.setData(LABEL_ROLE, entry.label)
@@ -905,6 +1058,15 @@ class MarkerListWidget(QListWidget):
 
     def selected_keys(self) -> list[str]:
         return sorted(self._selected_keys)
+
+    def selected_available_count(self) -> int:
+        if not self._all_entries:
+            return 0
+        available = {entry.key for entry in self._all_entries}
+        return len(self._selected_keys & available)
+
+    def available_count(self) -> int:
+        return len(self._all_entries)
 
     def has_state(self) -> bool:
         return self._has_state
@@ -940,6 +1102,7 @@ class DashboardGameCard(QFrame):
         badge_text: str,
         ribbon_text: str,
         completion_ribbon_text: str,
+        completion_ribbon_color: str,
         tooltip_text: str,
         farmable: bool,
         status_kind: str,
@@ -950,6 +1113,7 @@ class DashboardGameCard(QFrame):
         self._game_name = game_name
         self._on_click = on_click
         self._completion_ribbon_text = completion_ribbon_text
+        self._completion_ribbon_color = completion_ribbon_color or "#08a060"
         self.setObjectName("DashboardGameCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("farmable", farmable)
@@ -1067,7 +1231,9 @@ class DashboardGameCard(QFrame):
             ]
         )
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(8, 160, 96, 228))
+        band_color = QColor(self._completion_ribbon_color)
+        band_color.setAlpha(228)
+        painter.setBrush(band_color)
         painter.drawPolygon(band)
 
         painter.save()
@@ -1248,6 +1414,8 @@ class MainWindow(QMainWindow):
         self.active_lists_note.setWordWrap(True)
         self.btn_refresh = QPushButton()
         self.btn_refresh.clicked.connect(self.refresh_snapshot)
+        self.filters_hint = QLabel()
+        self.filters_hint.setWordWrap(True)
 
         self.games_whitelist_group = QGroupBox()
         games_whitelist_layout = QVBoxLayout(self.games_whitelist_group)
@@ -1255,7 +1423,33 @@ class MainWindow(QMainWindow):
         self.games_whitelist_hint.setWordWrap(True)
         self.games_whitelist_list = MarkerListWidget("✓")
         self.games_whitelist_list.itemClicked.connect(lambda _item: self._refresh_dashboard_games())
+        self.games_whitelist_list.itemClicked.connect(lambda _item: self._refresh_filter_tab_counts())
+        self.games_whitelist_search = QLineEdit()
+        self.games_whitelist_search.textChanged.connect(self.games_whitelist_list.set_filter_text)
+        self.games_whitelist_select_all_btn = QPushButton()
+        self.games_whitelist_select_all_btn.clicked.connect(self.games_whitelist_list.select_all)
+        self.games_whitelist_select_all_btn.clicked.connect(lambda: self._refresh_dashboard_games())
+        self.games_whitelist_select_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_clear_all_btn = QPushButton()
+        self.games_whitelist_clear_all_btn.clicked.connect(self.games_whitelist_list.clear_all)
+        self.games_whitelist_clear_all_btn.clicked.connect(lambda: self._refresh_dashboard_games())
+        self.games_whitelist_clear_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_select_visible_btn = QPushButton()
+        self.games_whitelist_select_visible_btn.clicked.connect(self.games_whitelist_list.select_visible)
+        self.games_whitelist_select_visible_btn.clicked.connect(lambda: self._refresh_dashboard_games())
+        self.games_whitelist_select_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_clear_visible_btn = QPushButton()
+        self.games_whitelist_clear_visible_btn.clicked.connect(self.games_whitelist_list.clear_visible)
+        self.games_whitelist_clear_visible_btn.clicked.connect(lambda: self._refresh_dashboard_games())
+        self.games_whitelist_clear_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        games_whitelist_actions = QHBoxLayout()
+        games_whitelist_actions.addWidget(self.games_whitelist_select_all_btn)
+        games_whitelist_actions.addWidget(self.games_whitelist_clear_all_btn)
+        games_whitelist_actions.addWidget(self.games_whitelist_select_visible_btn)
+        games_whitelist_actions.addWidget(self.games_whitelist_clear_visible_btn)
         games_whitelist_layout.addWidget(self.games_whitelist_hint)
+        games_whitelist_layout.addWidget(self.games_whitelist_search)
+        games_whitelist_layout.addLayout(games_whitelist_actions)
         games_whitelist_layout.addWidget(self.games_whitelist_list)
 
         self.games_blacklist_group = QGroupBox()
@@ -1263,7 +1457,29 @@ class MainWindow(QMainWindow):
         self.games_blacklist_hint = QLabel()
         self.games_blacklist_hint.setWordWrap(True)
         self.games_blacklist_list = MarkerListWidget("X")
+        self.games_blacklist_list.itemClicked.connect(lambda _item: self._refresh_filter_tab_counts())
+        self.games_blacklist_search = QLineEdit()
+        self.games_blacklist_search.textChanged.connect(self.games_blacklist_list.set_filter_text)
+        self.games_blacklist_select_all_btn = QPushButton()
+        self.games_blacklist_select_all_btn.clicked.connect(self.games_blacklist_list.select_all)
+        self.games_blacklist_select_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_blacklist_clear_all_btn = QPushButton()
+        self.games_blacklist_clear_all_btn.clicked.connect(self.games_blacklist_list.clear_all)
+        self.games_blacklist_clear_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_blacklist_select_visible_btn = QPushButton()
+        self.games_blacklist_select_visible_btn.clicked.connect(self.games_blacklist_list.select_visible)
+        self.games_blacklist_select_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_blacklist_clear_visible_btn = QPushButton()
+        self.games_blacklist_clear_visible_btn.clicked.connect(self.games_blacklist_list.clear_visible)
+        self.games_blacklist_clear_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        games_blacklist_actions = QHBoxLayout()
+        games_blacklist_actions.addWidget(self.games_blacklist_select_all_btn)
+        games_blacklist_actions.addWidget(self.games_blacklist_clear_all_btn)
+        games_blacklist_actions.addWidget(self.games_blacklist_select_visible_btn)
+        games_blacklist_actions.addWidget(self.games_blacklist_clear_visible_btn)
         games_blacklist_layout.addWidget(self.games_blacklist_hint)
+        games_blacklist_layout.addWidget(self.games_blacklist_search)
+        games_blacklist_layout.addLayout(games_blacklist_actions)
         games_blacklist_layout.addWidget(self.games_blacklist_list)
 
         self.channels_whitelist_group = QGroupBox()
@@ -1271,7 +1487,29 @@ class MainWindow(QMainWindow):
         self.channels_whitelist_hint = QLabel()
         self.channels_whitelist_hint.setWordWrap(True)
         self.channels_whitelist_list = MarkerListWidget("✓")
+        self.channels_whitelist_list.itemClicked.connect(lambda _item: self._refresh_filter_tab_counts())
+        self.channels_whitelist_search = QLineEdit()
+        self.channels_whitelist_search.textChanged.connect(self.channels_whitelist_list.set_filter_text)
+        self.channels_whitelist_select_all_btn = QPushButton()
+        self.channels_whitelist_select_all_btn.clicked.connect(self.channels_whitelist_list.select_all)
+        self.channels_whitelist_select_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_whitelist_clear_all_btn = QPushButton()
+        self.channels_whitelist_clear_all_btn.clicked.connect(self.channels_whitelist_list.clear_all)
+        self.channels_whitelist_clear_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_whitelist_select_visible_btn = QPushButton()
+        self.channels_whitelist_select_visible_btn.clicked.connect(self.channels_whitelist_list.select_visible)
+        self.channels_whitelist_select_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_whitelist_clear_visible_btn = QPushButton()
+        self.channels_whitelist_clear_visible_btn.clicked.connect(self.channels_whitelist_list.clear_visible)
+        self.channels_whitelist_clear_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        channels_whitelist_actions = QHBoxLayout()
+        channels_whitelist_actions.addWidget(self.channels_whitelist_select_all_btn)
+        channels_whitelist_actions.addWidget(self.channels_whitelist_clear_all_btn)
+        channels_whitelist_actions.addWidget(self.channels_whitelist_select_visible_btn)
+        channels_whitelist_actions.addWidget(self.channels_whitelist_clear_visible_btn)
         channels_whitelist_layout.addWidget(self.channels_whitelist_hint)
+        channels_whitelist_layout.addWidget(self.channels_whitelist_search)
+        channels_whitelist_layout.addLayout(channels_whitelist_actions)
         channels_whitelist_layout.addWidget(self.channels_whitelist_list)
 
         self.channels_blacklist_group = QGroupBox()
@@ -1279,7 +1517,29 @@ class MainWindow(QMainWindow):
         self.channels_blacklist_hint = QLabel()
         self.channels_blacklist_hint.setWordWrap(True)
         self.channels_blacklist_list = MarkerListWidget("X")
+        self.channels_blacklist_list.itemClicked.connect(lambda _item: self._refresh_filter_tab_counts())
+        self.channels_blacklist_search = QLineEdit()
+        self.channels_blacklist_search.textChanged.connect(self.channels_blacklist_list.set_filter_text)
+        self.channels_blacklist_select_all_btn = QPushButton()
+        self.channels_blacklist_select_all_btn.clicked.connect(self.channels_blacklist_list.select_all)
+        self.channels_blacklist_select_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_blacklist_clear_all_btn = QPushButton()
+        self.channels_blacklist_clear_all_btn.clicked.connect(self.channels_blacklist_list.clear_all)
+        self.channels_blacklist_clear_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_blacklist_select_visible_btn = QPushButton()
+        self.channels_blacklist_select_visible_btn.clicked.connect(self.channels_blacklist_list.select_visible)
+        self.channels_blacklist_select_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.channels_blacklist_clear_visible_btn = QPushButton()
+        self.channels_blacklist_clear_visible_btn.clicked.connect(self.channels_blacklist_list.clear_visible)
+        self.channels_blacklist_clear_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        channels_blacklist_actions = QHBoxLayout()
+        channels_blacklist_actions.addWidget(self.channels_blacklist_select_all_btn)
+        channels_blacklist_actions.addWidget(self.channels_blacklist_clear_all_btn)
+        channels_blacklist_actions.addWidget(self.channels_blacklist_select_visible_btn)
+        channels_blacklist_actions.addWidget(self.channels_blacklist_clear_visible_btn)
         channels_blacklist_layout.addWidget(self.channels_blacklist_hint)
+        channels_blacklist_layout.addWidget(self.channels_blacklist_search)
+        channels_blacklist_layout.addLayout(channels_blacklist_actions)
         channels_blacklist_layout.addWidget(self.channels_blacklist_list)
 
         self.btn_save = QPushButton()
@@ -1342,17 +1602,31 @@ class MainWindow(QMainWindow):
         self.auth_tabs.addTab(quick_auth_tab, "")
         
         account_layout.addWidget(self.auth_tabs)
-        account_layout.addWidget(self.active_lists_note)
-        account_layout.addWidget(self.btn_refresh)
         account_layout.addStretch(1)
 
         filters_tab = QWidget()
         filters_layout = QVBoxLayout(filters_tab)
-        filters_layout.addWidget(self.games_whitelist_group)
-        filters_layout.addWidget(self.games_blacklist_group)
-        filters_layout.addWidget(self.channels_whitelist_group)
-        filters_layout.addWidget(self.channels_blacklist_group)
-        filters_layout.addStretch(1)
+        self.filters_tabs = QTabWidget()
+        games_whitelist_tab = QWidget()
+        games_whitelist_tab_layout = QVBoxLayout(games_whitelist_tab)
+        games_whitelist_tab_layout.addWidget(self.games_whitelist_group)
+        games_blacklist_tab = QWidget()
+        games_blacklist_tab_layout = QVBoxLayout(games_blacklist_tab)
+        games_blacklist_tab_layout.addWidget(self.games_blacklist_group)
+        channels_whitelist_tab = QWidget()
+        channels_whitelist_tab_layout = QVBoxLayout(channels_whitelist_tab)
+        channels_whitelist_tab_layout.addWidget(self.channels_whitelist_group)
+        channels_blacklist_tab = QWidget()
+        channels_blacklist_tab_layout = QVBoxLayout(channels_blacklist_tab)
+        channels_blacklist_tab_layout.addWidget(self.channels_blacklist_group)
+        self.filters_tabs.addTab(games_whitelist_tab, "")
+        self.filters_tabs.addTab(games_blacklist_tab, "")
+        self.filters_tabs.addTab(channels_whitelist_tab, "")
+        self.filters_tabs.addTab(channels_blacklist_tab, "")
+        filters_layout.addWidget(self.active_lists_note)
+        filters_layout.addWidget(self.filters_hint)
+        filters_layout.addWidget(self.btn_refresh)
+        filters_layout.addWidget(self.filters_tabs, 1)
 
         control_tab = QWidget()
         control_layout = QVBoxLayout(control_tab)
@@ -1652,6 +1926,41 @@ class MainWindow(QMainWindow):
         self.games_blacklist_list.set_entries(self.available_game_entries, games_blacklist, self._t("no_active_games"))
         self.channels_whitelist_list.set_entries(self.available_channel_entries, channels_whitelist, self._t("no_active_channels"))
         self.channels_blacklist_list.set_entries(self.available_channel_entries, channels_blacklist, self._t("no_active_channels"))
+        self._refresh_filter_tab_counts()
+
+    def _refresh_filter_tab_counts(self) -> None:
+        self.filters_tabs.setTabText(
+            0,
+            self._t(
+                "filter_tab_games_whitelist_count",
+                selected=self.games_whitelist_list.selected_available_count(),
+                total=self.games_whitelist_list.available_count(),
+            ),
+        )
+        self.filters_tabs.setTabText(
+            1,
+            self._t(
+                "filter_tab_games_blacklist_count",
+                selected=self.games_blacklist_list.selected_available_count(),
+                total=self.games_blacklist_list.available_count(),
+            ),
+        )
+        self.filters_tabs.setTabText(
+            2,
+            self._t(
+                "filter_tab_channels_whitelist_count",
+                selected=self.channels_whitelist_list.selected_available_count(),
+                total=self.channels_whitelist_list.available_count(),
+            ),
+        )
+        self.filters_tabs.setTabText(
+            3,
+            self._t(
+                "filter_tab_channels_blacklist_count",
+                selected=self.channels_blacklist_list.selected_available_count(),
+                total=self.channels_blacklist_list.available_count(),
+            ),
+        )
 
     def _refresh_dashboard_games(self) -> None:
         selected_game = self._forced_farm_game.casefold() if self._forced_farm_game else ""
@@ -1675,6 +1984,7 @@ class MainWindow(QMainWindow):
         self._dashboard_game_cards.clear()
 
         columns = 3
+        now = datetime.now(timezone.utc)
         for index, game in enumerate(whitelist_games):
             key = game.casefold()
             campaign = by_game.get(key)
@@ -1701,29 +2011,92 @@ class MainWindow(QMainWindow):
                 )
 
             trackable_campaigns = [item for item in related_campaigns if item.required_minutes > 0]
-            is_game_completed = bool(trackable_campaigns) and all(item.remaining_minutes <= 0 for item in trackable_campaigns)
-            if not is_game_completed:
-                is_game_completed = any(decision.reason_code == "campaign_completed" for decision in related_decisions)
+            has_incomplete_trackable = any(item.remaining_minutes > 0 for item in trackable_campaigns)
+            completed_trackable_count = sum(1 for item in trackable_campaigns if item.remaining_minutes <= 0)
+            subscription_required_campaigns = [
+                item
+                for item in related_campaigns
+                if item.requires_subscription and not item.all_drops_claimed
+            ]
+            expired_incomplete_trackable = [
+                item
+                for item in trackable_campaigns
+                if item.remaining_minutes > 0 and (item.ends_at <= now or item.status == "EXPIRED")
+            ]
+            full_lost_count = sum(1 for item in expired_incomplete_trackable if item.progress_minutes <= 0)
+            partial_lost_count = len(expired_incomplete_trackable) - full_lost_count
+            has_upcoming_game = any(item.upcoming for item in related_campaigns)
+            if trackable_campaigns:
+                is_game_completed = not has_incomplete_trackable
+            else:
+                # Fallback path for campaigns without reliable minute totals (0/0).
+                is_game_completed = bool(related_decisions) and all(
+                    decision.reason_code == "campaign_completed" for decision in related_decisions
+                )
+
+            # Never display completed if there is currently a farmable target for this game.
+            if is_farmable_game:
+                is_game_completed = False
 
             status_kind = "offline"
             badge_text = self._t("dashboard_badge_no_data")
             completion_ribbon_text = ""
+            completion_ribbon_color = ""
             tooltip_text = game
-            if is_game_completed:
+
+            if subscription_required_campaigns:
+                status_kind = "subscription_required"
+                badge_text = self._t("dashboard_badge_subscription_required")
+                completion_ribbon_text = self._t("dashboard_ribbon_subscription_required")
+                completion_ribbon_color = "#d47a14"
+                tooltip_text = self._t("dashboard_subscription_required_tooltip")
+            elif expired_incomplete_trackable:
+                if partial_lost_count > 0:
+                    status_kind = "lost_partial"
+                    badge_text = self._t("dashboard_badge_lost_partial")
+                    completion_ribbon_text = self._t("dashboard_ribbon_lost_partial")
+                    completion_ribbon_color = "#a8841f"
+                    tooltip_text = self._t(
+                        "dashboard_lost_partial_tooltip",
+                        lost=len(expired_incomplete_trackable),
+                        total=max(1, len(trackable_campaigns)),
+                    )
+                else:
+                    status_kind = "lost_full"
+                    badge_text = self._t("dashboard_badge_lost_full")
+                    completion_ribbon_text = self._t("dashboard_ribbon_lost_full")
+                    completion_ribbon_color = "#b32837"
+                    tooltip_text = self._t(
+                        "dashboard_lost_full_tooltip",
+                        lost=len(expired_incomplete_trackable),
+                        total=max(1, len(trackable_campaigns)),
+                    )
+            elif is_game_completed:
                 status_kind = "completed"
                 badge_text = self._t("dashboard_badge_completed")
                 completion_ribbon_text = self._t("dashboard_ribbon_completed")
-                tooltip_text = self._t("dashboard_completed_tooltip")
+                completion_ribbon_color = "#08a060"
+                if trackable_campaigns:
+                    tooltip_text = self._t(
+                        "dashboard_completed_tooltip_detail",
+                        completed=completed_trackable_count,
+                        total=len(trackable_campaigns),
+                    )
+                else:
+                    tooltip_text = self._t("dashboard_completed_tooltip")
             elif campaign is not None:
                 if campaign.active and is_farmable_game:
                     status_kind = "active"
                     badge_text = self._t("dashboard_badge_active")
-                elif campaign.upcoming:
+                    tooltip_text = campaign.title or game
+                elif has_upcoming_game:
                     status_kind = "upcoming"
                     badge_text = self._t("dashboard_badge_upcoming")
+                    tooltip_text = self._t("dashboard_upcoming_tooltip")
                 else:
                     status_kind = "offline"
                     badge_text = self._t("dashboard_badge_offline")
+                    tooltip_text = self._t("dashboard_offline_tooltip")
             card = DashboardGameCard(
                 game_name=game,
                 title_text=self._dashboard_card_title(game),
@@ -1731,6 +2104,7 @@ class MainWindow(QMainWindow):
                 badge_text=badge_text,
                 ribbon_text=self._t("dashboard_ribbon"),
                 completion_ribbon_text=completion_ribbon_text,
+                completion_ribbon_color=completion_ribbon_color,
                 tooltip_text=tooltip_text,
                 farmable=is_farmable_game,
                 status_kind=status_kind,
@@ -1812,15 +2186,36 @@ class MainWindow(QMainWindow):
         self._repopulate_sort_picker()
 
         self.active_lists_note.setText(self._t("active_lists_note"))
+        self.filters_hint.setText(self._t("filters_hint"))
         self.btn_refresh.setText(self._t("refresh_active"))
         self.games_whitelist_group.setTitle(self._t("games_whitelist_group"))
         self.games_whitelist_hint.setText(self._normalize_marker_text(self._t("games_whitelist_hint", mark=CHECK_MARK)))
+        self.games_whitelist_search.setPlaceholderText(self._t("filters_search_games"))
+        self.games_whitelist_select_all_btn.setText(self._t("filters_select_all"))
+        self.games_whitelist_clear_all_btn.setText(self._t("filters_clear_all"))
+        self.games_whitelist_select_visible_btn.setText(self._t("filters_select_visible"))
+        self.games_whitelist_clear_visible_btn.setText(self._t("filters_clear_visible"))
         self.games_blacklist_group.setTitle(self._t("games_blacklist_group"))
         self.games_blacklist_hint.setText(self._t("games_blacklist_hint"))
+        self.games_blacklist_search.setPlaceholderText(self._t("filters_search_games"))
+        self.games_blacklist_select_all_btn.setText(self._t("filters_select_all"))
+        self.games_blacklist_clear_all_btn.setText(self._t("filters_clear_all"))
+        self.games_blacklist_select_visible_btn.setText(self._t("filters_select_visible"))
+        self.games_blacklist_clear_visible_btn.setText(self._t("filters_clear_visible"))
         self.channels_whitelist_group.setTitle(self._t("channels_whitelist_group"))
         self.channels_whitelist_hint.setText(self._normalize_marker_text(self._t("channels_whitelist_hint", mark=CHECK_MARK)))
+        self.channels_whitelist_search.setPlaceholderText(self._t("filters_search_channels"))
+        self.channels_whitelist_select_all_btn.setText(self._t("filters_select_all"))
+        self.channels_whitelist_clear_all_btn.setText(self._t("filters_clear_all"))
+        self.channels_whitelist_select_visible_btn.setText(self._t("filters_select_visible"))
+        self.channels_whitelist_clear_visible_btn.setText(self._t("filters_clear_visible"))
         self.channels_blacklist_group.setTitle(self._t("channels_blacklist_group"))
         self.channels_blacklist_hint.setText(self._t("channels_blacklist_hint"))
+        self.channels_blacklist_search.setPlaceholderText(self._t("filters_search_channels"))
+        self.channels_blacklist_select_all_btn.setText(self._t("filters_select_all"))
+        self.channels_blacklist_clear_all_btn.setText(self._t("filters_clear_all"))
+        self.channels_blacklist_select_visible_btn.setText(self._t("filters_select_visible"))
+        self.channels_blacklist_clear_visible_btn.setText(self._t("filters_clear_visible"))
         self.btn_save.setText(self._t("save_settings"))
         self.btn_start.setText(self._t("start_farm"))
         self.btn_stop.setText(self._t("stop_farm"))
@@ -1869,6 +2264,7 @@ class MainWindow(QMainWindow):
         self.btn_open_drops_page.setText(self._t("open_drops_page"))
         self.log_label.setText(self._t("log_label"))
         self._refresh_filter_lists()
+        self._refresh_filter_tab_counts()
         self._refresh_dashboard_games()
         self._refresh_priority_label()
         self._refresh_farming_now()
@@ -1906,18 +2302,54 @@ class MainWindow(QMainWindow):
 
     def _decision_is_farmable_now(self, decision: FarmDecision) -> bool:
         campaign = decision.campaign
-        if not (campaign.active and campaign.eligible and decision.stream is not None):
+        if campaign.requires_subscription and not campaign.all_drops_claimed:
             return False
-        if (
-            campaign.required_minutes <= 0
-            and campaign.next_drop_required_minutes <= 0
-            and campaign.next_drop_remaining_minutes <= 0
-            and not campaign.next_drop_name.strip()
-        ):
+        if not (campaign.active and campaign.eligible and decision.stream is not None):
             return False
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
         return True
+
+    def _decision_is_displayable_active(self, decision: FarmDecision) -> bool:
+        campaign = decision.campaign
+        if campaign.requires_subscription and not campaign.all_drops_claimed:
+            return False
+        if not (campaign.active and campaign.eligible):
+            return False
+        if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
+            return False
+        return True
+
+    def _current_display_decision(self) -> FarmDecision | None:
+        active = self._current_farm_decision()
+        if active is not None:
+            return active
+        if self.latest_snapshot is None:
+            return None
+
+        candidates = [
+            decision
+            for decision in self.latest_snapshot.decisions
+            if self._decision_is_displayable_active(decision)
+        ]
+        if not candidates:
+            return None
+        if self._forced_farm_game:
+            forced_game_candidates = [
+                decision
+                for decision in candidates
+                if decision.campaign.game_name.casefold() == self._forced_farm_game.casefold()
+            ]
+            if forced_game_candidates:
+                candidates = forced_game_candidates
+        if self._forced_farm_campaign_id:
+            forced_by_campaign = next(
+                (decision for decision in candidates if decision.campaign.id == self._forced_farm_campaign_id),
+                None,
+            )
+            if forced_by_campaign is not None:
+                return forced_by_campaign
+        return candidates[0]
 
     def _select_dashboard_game(self, game_name: str) -> None:
         self._forced_farm_game = game_name
@@ -2213,16 +2645,7 @@ class MainWindow(QMainWindow):
             self._refresh_last_update_label()
             return
 
-        active = self._current_farm_decision()
-        if active is None:
-            active = next(
-                (
-                    decision
-                    for decision in self.latest_snapshot.decisions
-                    if self._decision_is_farmable_now(decision)
-                ),
-                None,
-            )
+        active = self._current_display_decision()
         if (
             active is None
             and self.timer.isActive()
@@ -2249,7 +2672,7 @@ class MainWindow(QMainWindow):
         channel_name = (
             active.stream.display_name or active.stream.login
             if active.stream is not None
-            else self._t("channel_unknown")
+            else self._t("reason_no_valid_stream")
         )
         next_drop_name = campaign.next_drop_name or self._t("drop_unknown")
         next_drop_eta = self._format_duration(campaign.next_drop_eta_seconds)
@@ -2294,6 +2717,8 @@ class MainWindow(QMainWindow):
             return self._t("reason_no_valid_stream")
         if decision.reason_code == "account_not_linked":
             return self._t("reason_account_not_linked")
+        if decision.reason_code == "subscription_required":
+            return self._t("reason_subscription_required")
         if decision.used_channel_whitelist:
             return f"{self._t('reason_channel_priority')} {self._t('reason_stream_selected')}"
         return self._t("reason_stream_selected")
@@ -2302,16 +2727,7 @@ class MainWindow(QMainWindow):
         if not self.latest_snapshot or not self.latest_snapshot.decisions:
             self.best_target_label.setText(self._t("best_target_none"))
             return
-        top = next((decision for decision in self.latest_snapshot.decisions if self._decision_is_farmable_now(decision)), None)
-        if top is None:
-            top = next(
-                (
-                    decision
-                    for decision in self.latest_snapshot.decisions
-                    if self._decision_is_farmable_now(decision)
-                ),
-                None,
-            )
+        top = self._current_display_decision()
         if top is None:
             self.best_target_label.setText(self._t("best_target_none"))
             return
@@ -2518,26 +2934,41 @@ class MainWindow(QMainWindow):
     def _current_farm_decision(self) -> FarmDecision | None:
         if self.latest_snapshot is None:
             return None
+        all_decisions = self.latest_snapshot.decisions
         candidates = [
             decision
-            for decision in self.latest_snapshot.decisions
+            for decision in all_decisions
             if self._decision_is_farmable_now(decision)
         ]
+        if self._forced_farm_game:
+            forced_key = self._forced_farm_game.casefold()
+            forced_decisions = [
+                decision
+                for decision in all_decisions
+                if decision.campaign.game_name.casefold() == forced_key
+            ]
+            forced_candidates = [
+                decision
+                for decision in forced_decisions
+                if self._decision_is_farmable_now(decision)
+            ]
+            if forced_candidates:
+                candidates = forced_candidates
+            else:
+                # Keep manual dashboard target sticky while campaign is still active/eligible,
+                # even if there is temporarily no valid stream.
+                forced_still_relevant = any(
+                    self._decision_is_displayable_active(decision)
+                    for decision in forced_decisions
+                )
+                if forced_still_relevant:
+                    return None
+                self._forced_farm_game = ""
+
         if not candidates:
             self._forced_farm_channel = ""
             self._forced_farm_campaign_id = ""
-            self._forced_farm_game = ""
             return None
-        if self._forced_farm_game:
-            game_candidates = [
-                decision
-                for decision in candidates
-                if decision.campaign.game_name.casefold() == self._forced_farm_game.casefold()
-            ]
-            if game_candidates:
-                candidates = game_candidates
-            else:
-                self._forced_farm_game = ""
         if self._forced_farm_campaign_id:
             forced_by_campaign = next(
                 (decision for decision in candidates if decision.campaign.id == self._forced_farm_campaign_id),
@@ -2787,6 +3218,10 @@ class MainWindow(QMainWindow):
 
     def _auto_advance_after_claim(self) -> None:
         if not self.timer.isActive() or self.latest_snapshot is None:
+            return
+
+        # Do not override manual dashboard selection.
+        if self._forced_farm_game:
             return
 
         candidates = [

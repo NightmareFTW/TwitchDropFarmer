@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Dashboard status coverage for subscription-required and lost campaigns (full and partial), including dedicated badges, ribbons, and tooltips.
+- Campaign model flags for `all_drops_claimed` and `requires_subscription` to improve decision quality and UI signaling.
+- Search fields and bulk selection actions in filter lists, with tab-level selected/total counters.
+- New translated UI labels and reason messages for the expanded dashboard and filtering flows.
+
+### Changed
+
+- Campaign stream selection now tolerates inconsistent ACL channel labels by falling back to drops-enabled streams when needed.
+- Active target presentation prefers displayable active decisions, improving dashboard and farming panel continuity.
+- Dashboard completion logic now better distinguishes completed, upcoming, offline, subscription-required, and expired-lost states.
+- Filter section layout moved to sub-tabs for cleaner left-side navigation and reduced scrolling.
+
+### Fixed
+
+- Prevented subscription-only campaigns from being treated as farmable watch-time targets.
+- Corrected account-link fallback parsing for campaigns missing explicit `self` connection payloads.
+- Improved channel login extraction from nested ACL payloads using stricter token validation.
+
 ## [1.1.0] - 2026-04-21
 
 ### Added

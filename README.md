@@ -4,6 +4,16 @@
 
 Aplicação desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
+## Sobre o projecto
+
+Twitch Drop Farmer evoluiu para um cliente de farming mais robusto e previsivel:
+
+- Dashboard com estados mais reais de campanha (Activa, Nao iniciada, Sem stream, Completa, Perdida e Subscricao requerida).
+- Selecao de alvo mais segura, com fallback para campanhas cujo ACL devolve labels inconsistentes.
+- Filtros reorganizados em sub-abas com pesquisa e accoes rapidas (selecionar/limpar todos e visiveis).
+- Melhor continuidade de contexto no painel de farming, mesmo quando uma stream valida fica temporariamente indisponivel.
+- Modo de automacao focado em estabilidade local, sem dependencia de servicos externos.
+
 ## Funcionalidades
 
 - Descoberta automática de campanhas activas e futuras.

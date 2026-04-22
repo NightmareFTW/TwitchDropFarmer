@@ -20,6 +20,8 @@ class DropCampaign:
     status: str = ""
     allowed_channels: list[str] = field(default_factory=list)
     has_badge_or_emote: bool = False
+    all_drops_claimed: bool = False
+    requires_subscription: bool = False
     next_drop_name: str = ""
     next_drop_remaining_minutes: int = 0
     next_drop_required_minutes: int = 0

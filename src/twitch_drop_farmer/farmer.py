@@ -39,12 +39,22 @@ class FarmEngine:
     def choose_stream(self, campaign: DropCampaign, streams: list[StreamCandidate]) -> StreamCandidate | None:
         blacklist = {item.casefold() for item in self.config.blacklist_channels}
         allowed = {item.casefold() for item in campaign.allowed_channels}
-        valid = [
+        base_valid = [
             stream
             for stream in streams
             if stream.login.casefold() not in blacklist
-            and (not allowed or stream.login.casefold() in allowed)
         ]
+        if allowed:
+            filtered = [
+                stream
+                for stream in base_valid
+                if stream.login.casefold() in allowed
+            ]
+            # Twitch ACL payload can contain labels that are not channel logins.
+            # If no live stream matches ACL entries, fall back to drops-enabled streams.
+            valid = filtered if filtered else base_valid
+        else:
+            valid = base_valid
         valid.sort(key=self._channel_priority, reverse=True)
         return valid[0] if valid else None
 
@@ -92,13 +102,18 @@ class FarmEngine:
                 )
                 continue
 
-            # Some campaigns report as ACTIVE after claim/redeem but expose no remaining drop target.
-            if (
-                campaign.required_minutes <= 0
-                and campaign.next_drop_required_minutes <= 0
-                and campaign.next_drop_remaining_minutes <= 0
-                and not campaign.next_drop_name.strip()
-            ):
+            # Subscription-only campaigns cannot be farmed by watch-time automation.
+            if campaign.requires_subscription and not campaign.all_drops_claimed:
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="subscription_required",
+                    )
+                )
+                continue
+
+            if campaign.all_drops_claimed:
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,
