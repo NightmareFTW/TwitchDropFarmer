@@ -780,6 +780,86 @@ class TwitchClient:
                     return True
         return False
 
+    def _all_drops_claimed(self, drops: list[dict[str, Any]]) -> bool:
+        if not drops:
+            return False
+        for drop in drops:
+            if not bool((drop.get("self") or {}).get("isClaimed", False)):
+                return False
+        return True
+
+    def _campaign_requires_subscription(self, payload: dict[str, Any], drops: list[dict[str, Any]]) -> bool:
+        keyword_patterns = (
+            "subscribe to redeem",
+            "subscribers only",
+            "subscriber only",
+            "subscricao para resgatar",
+            "subscrição para resgatar",
+        )
+
+        subscription_flag_keys = {
+            "issubscriberonly",
+            "requiresubscription",
+            "subscriptionrequired",
+            "requires_subscription",
+            "is_subscriber_only",
+        }
+
+        subscription_value_keys = {
+            "requiredaction",
+            "actiontype",
+            "unlockmethod",
+            "accesstype",
+            "requirementtype",
+        }
+
+        def walk_struct(node: Any) -> bool:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    key_norm = str(key).strip().replace("_", "").casefold()
+                    if key_norm in subscription_flag_keys and bool(value):
+                        return True
+                    if key_norm in subscription_value_keys and isinstance(value, str):
+                        value_norm = value.strip().casefold()
+                        if "sub" in value_norm and "watch" not in value_norm:
+                            return True
+                    if walk_struct(value):
+                        return True
+                return False
+            if isinstance(node, list):
+                for item in node:
+                    if walk_struct(item):
+                        return True
+                return False
+            return False
+
+        def walk_strings(node: Any) -> bool:
+            if isinstance(node, str):
+                text = node.strip().casefold()
+                return any(pattern in text for pattern in keyword_patterns)
+            if isinstance(node, dict):
+                for value in node.values():
+                    if walk_strings(value):
+                        return True
+                return False
+            if isinstance(node, list):
+                for item in node:
+                    if walk_strings(item):
+                        return True
+                return False
+            return False
+
+        if walk_struct(payload):
+            return True
+        if walk_strings(payload):
+            return True
+        for drop in drops:
+            if walk_struct(drop):
+                return True
+            if walk_strings(drop):
+                return True
+        return False
+
     def _extract_drop_like_entries(self, payload: Any) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -883,13 +963,23 @@ class TwitchClient:
         return name, remaining, required
 
     def _channel_login_from_acl(self, channel: dict[str, Any]) -> str:
-        return (
-            channel.get("login")
-            or channel.get("name")
-            or channel.get("slug")
-            or channel.get("channelLogin")
-            or ""
-        )
+        candidates: list[str] = []
+        for key in ("login", "name", "slug", "channelLogin"):
+            value = channel.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+        nested_channel = channel.get("channel")
+        if isinstance(nested_channel, dict):
+            for key in ("login", "name", "slug"):
+                value = nested_channel.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidates.append(value.strip())
+
+        for token in candidates:
+            normalized = token.lstrip("@").strip().casefold()
+            if re.fullmatch(r"[a-z0-9_]{2,25}", normalized):
+                return normalized
+        return ""
 
     def _campaigns_from_drops_page(self) -> dict[str, dict[str, Any]]:
         try:
@@ -945,6 +1035,13 @@ class TwitchClient:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) < 3:
             return None
+        lowered = "\n".join(lines).casefold()
+        requires_subscription = (
+            "subscribe to redeem" in lowered
+            or "subscription required" in lowered
+            or "subscriber only" in lowered
+            or "subscribers only" in lowered
+        )
         schedule = lines[-1]
         match = re.search(r"(.+?)\s+-\s+(.+?)\s+GMT([+-]\d+)", schedule)
         if match is None:
@@ -979,6 +1076,7 @@ class TwitchClient:
             linked=True,
             link_url=f"{TWITCH_URL}/drops/campaigns",
             status=status,
+            requires_subscription=requires_subscription,
         )
 
     def _campaigns_from_browser_page(self) -> list[DropCampaign]:
@@ -1324,6 +1422,8 @@ class TwitchClient:
             drops = self._extract_drop_like_entries(data)
         total_required, total_remaining = self._drop_totals(drops)
         next_drop_name, next_drop_remaining, next_drop_required = self._next_drop_info(drops)
+        all_drops_claimed = self._all_drops_claimed(drops)
+        requires_subscription = self._campaign_requires_subscription(data, drops)
         
         # If no drops found in standard locations, try alternative extraction
         if total_required <= 0:
@@ -1351,11 +1451,13 @@ class TwitchClient:
             ends_at=ends_at,
             progress_minutes=max(0, total_required - total_remaining),
             required_minutes=total_required,
-            linked=bool(data.get("self", {}).get("isAccountConnected", False)),
+            linked=bool((data.get("self") or {}).get("isAccountConnected", True)),
             link_url=data.get("accountLinkURL", "") or "",
             status=status,
             allowed_channels=allowed_channels,
             has_badge_or_emote=self._campaign_has_badge_or_emote(drops),
+            all_drops_claimed=all_drops_claimed,
+            requires_subscription=requires_subscription,
             next_drop_name=next_drop_name,
             next_drop_remaining_minutes=next_drop_remaining,
             next_drop_required_minutes=next_drop_required,
@@ -1540,6 +1642,10 @@ class TwitchClient:
                         browser_campaign.next_drop_name = existing.next_drop_name
                         browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
                         browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
+                        browser_campaign.all_drops_claimed = existing.all_drops_claimed
+                        browser_campaign.requires_subscription = (
+                            browser_campaign.requires_subscription or existing.requires_subscription
+                        )
                         merged_by_id[browser_campaign.id] = browser_campaign
                     # Try game name match (case-insensitive)
                     elif browser_campaign.game_name.lower() in merged_by_game:
@@ -1550,6 +1656,10 @@ class TwitchClient:
                         browser_campaign.next_drop_name = existing.next_drop_name
                         browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
                         browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
+                        browser_campaign.all_drops_claimed = existing.all_drops_claimed
+                        browser_campaign.requires_subscription = (
+                            browser_campaign.requires_subscription or existing.requires_subscription
+                        )
                         # Remove old campaign and add merged one
                         del merged_by_id[existing.id]
                         merged_by_id[browser_campaign.id] = browser_campaign
