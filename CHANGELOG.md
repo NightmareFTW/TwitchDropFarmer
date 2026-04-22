@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-22
+
 ### Added
 
 - Dashboard status coverage for subscription-required and lost campaigns (full and partial), including dedicated badges, ribbons, and tooltips.
@@ -25,6 +27,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Prevented subscription-only campaigns from being treated as farmable watch-time targets.
 - Corrected account-link fallback parsing for campaigns missing explicit `self` connection payloads.
 - Improved channel login extraction from nested ACL payloads using stricter token validation.
+
+### Release Notes
+
+- PT: [docs/releases/v1.2.0.pt-PT.md](docs/releases/v1.2.0.pt-PT.md)
+- EN: [docs/releases/v1.2.0.en.md](docs/releases/v1.2.0.en.md)
 
 ## [1.1.0] - 2026-04-21
 
