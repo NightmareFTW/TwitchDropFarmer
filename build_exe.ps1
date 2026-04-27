@@ -5,6 +5,7 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $distDir = Join-Path $projectRoot "dist"
 $bundleDir = Join-Path $distDir "TwitchDropFarmer"
+$bundleAssetsDir = Join-Path $bundleDir "_internal\twitch_drop_farmer\assets"
 $archivePath = Join-Path $distDir "TwitchDropFarmer-win64.zip"
 $iconPath = Join-Path $projectRoot "src\twitch_drop_farmer\assets\icon.ico"
 $assetsSource = Join-Path $projectRoot "src\twitch_drop_farmer\assets"
@@ -56,6 +57,11 @@ if ($LASTEXITCODE -ne 0) {
 if (-not (Test-Path $bundleDir)) {
     throw "Expected build output folder was not created: $bundleDir"
 }
+
+# Defensive copy: ensure icons are always present in the bundled assets path.
+New-Item -ItemType Directory -Path $bundleAssetsDir -Force | Out-Null
+Copy-Item (Join-Path $assetsSource "icon.ico") (Join-Path $bundleAssetsDir "icon.ico") -Force
+Copy-Item (Join-Path $assetsSource "icon.png") (Join-Path $bundleAssetsDir "icon.png") -Force
 
 & tar.exe -a -c -f $archivePath -C $distDir "TwitchDropFarmer"
 
