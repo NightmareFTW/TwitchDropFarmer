@@ -1,19 +1,35 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from concurrent.futures import Future, ThreadPoolExecutor
+import asyncio
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 import hashlib
+import logging
 from pathlib import Path
+import sys
+import traceback
+import weakref
 from typing import Callable
 from urllib.parse import quote
 
 import requests
 
-from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QSize, Qt, QTimer, QUrl, QPoint, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap, QPolygon
+from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, QPoint, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygon
 
-_ASSETS_DIR = Path(__file__).parent / "assets"
+
+def _resolve_assets_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", ""))
+        if meipass:
+            frozen_assets = meipass / "twitch_drop_farmer" / "assets"
+            if frozen_assets.exists():
+                return frozen_assets
+    return Path(__file__).resolve().parent / "assets"
+
+
+_ASSETS_DIR = _resolve_assets_dir()
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -26,14 +42,17 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -44,6 +63,11 @@ from .config import load_config, save_config
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
 from .twitch_client import TwitchClient
+from .energy_profiles import AVAILABLE_PROFILES, get_profile_by_name
+from .alerts import AlertManager, AlertSeverity, AlertType, get_alert_manager
+from . import __version__, updater
+
+logger = logging.getLogger(__name__)
 
 LABEL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 CHECK_MARK = "\u2713"
@@ -110,6 +134,10 @@ class GameCard(QWidget):
         if self._on_click:
             self._on_click(self.game_key, self.game_label)
         super().mousePressEvent(event)
+
+    def set_pixmap(self, pixmap: QPixmap) -> None:
+        self._pixmap = pixmap
+        self.update()
 
     # ── painting ──────────────────────────────────────────────────────────
 
@@ -234,6 +262,32 @@ THEMES: dict[str, str] = {
         }
         QPushButton:hover { background: #a970ff; }
         QPushButton:disabled { background: #444451; color: #a8a8af; }
+        QRadioButton { spacing: 8px; }
+        QRadioButton::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border: 2px solid #555563;
+            background: #18181b;
+        }
+        QRadioButton::indicator:hover { border-color: #9147ff; }
+        QRadioButton::indicator:checked {
+            border: 5px solid #9147ff;
+            background: #efeff1;
+        }
+        QCheckBox { spacing: 8px; }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 2px solid #555563;
+            background: #18181b;
+        }
+        QCheckBox::indicator:hover { border-color: #9147ff; }
+        QCheckBox::indicator:checked {
+            border: 2px solid #9147ff;
+            background: #9147ff;
+        }
         QLabel#HelpIcon {
             background: #9147ff;
             color: white;
@@ -343,6 +397,32 @@ THEMES: dict[str, str] = {
         }
         QPushButton:hover { background: #d00027; }
         QPushButton:disabled { background: #4a2428; color: #b8a6a8; }
+        QRadioButton { spacing: 8px; }
+        QRadioButton::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border: 2px solid #5a3535;
+            background: #111111;
+        }
+        QRadioButton::indicator:hover { border-color: #ff5d6d; }
+        QRadioButton::indicator:checked {
+            border: 5px solid #ff5d6d;
+            background: #f2f2f2;
+        }
+        QCheckBox { spacing: 8px; }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 2px solid #5a3535;
+            background: #111111;
+        }
+        QCheckBox::indicator:hover { border-color: #ff5d6d; }
+        QCheckBox::indicator:checked {
+            border: 2px solid #ff5d6d;
+            background: #b00020;
+        }
         QLabel#HelpIcon {
             background: #b00020;
             color: white;
@@ -452,6 +532,32 @@ THEMES: dict[str, str] = {
         }
         QPushButton:hover { background: #7b57bf; }
         QPushButton:disabled { background: #ccc6dc; color: #6f6784; }
+        QRadioButton { spacing: 8px; }
+        QRadioButton::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border: 2px solid #b8b0cc;
+            background: #ffffff;
+        }
+        QRadioButton::indicator:hover { border-color: #6441a4; }
+        QRadioButton::indicator:checked {
+            border: 5px solid #6441a4;
+            background: #ffffff;
+        }
+        QCheckBox { spacing: 8px; }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 2px solid #b8b0cc;
+            background: #ffffff;
+        }
+        QCheckBox::indicator:hover { border-color: #6441a4; }
+        QCheckBox::indicator:checked {
+            border: 2px solid #6441a4;
+            background: #6441a4;
+        }
         QLabel#HelpIcon {
             background: #6441a4;
             color: white;
@@ -626,6 +732,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_group": "Jogos da whitelist",
         "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
         "dashboard_refresh": "Atualizar dashboard",
+        "dashboard_hide_sub_only": "Ocultar jogos com drops de subscrição",
+        "dashboard_hide_sub_only_help": "Esconde jogos cujas campanhas disponíveis exigem subscrição para resgatar drops.",
         "dashboard_empty": "Adiciona jogos na whitelist para aparecerem aqui.",
         "dashboard_selected": "Alvo manual por jogo: {game}.",
         "dashboard_unset": "Sem alvo manual por jogo.",
@@ -650,6 +758,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_ribbon_lost_full": "PERDIDA",
         "dashboard_ribbon_lost_partial": "PARCIAL",
         "dashboard_ribbon_subscription_required": "SUBSCRICAO",
+        "active_drops_group": "Drops ativos",
+        "active_drops_group_game": "Drops ativos de {game}",
+        "active_drops_empty": "Sem drops ativos para mostrar.",
+        "active_drops_claimed": "Resgatado",
+        "active_drops_progress": "{current}/{required} min",
+        "active_drops_subscription_hint": "Esta campanha exige subscricao ativa para resgatar.",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -744,6 +858,45 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_export_success": "Sessão exportada. Copia o JSON abaixo e guarda-o num local seguro.",
         "session_export_copied": "JSON da sessão copiado para a área de transferência.",
         "auto_claim_checkbox": "Redimir drops automaticamente",
+        "settings_tab_basic": "Básico",
+        "settings_tab_advanced": "Avançado",
+        "settings_tab_alerts": "Alertas",
+        "energy_profile_label": "Perfil de energia",
+        "watchdog_enabled": "Ativar monitor de progresso",
+        "watchdog_timeout": "Tempo limite sem progresso",
+        "autoupdate_enabled": "Atualizar automaticamente",
+        "autoupdate_delay": "Espera antes de reiniciar",
+        "btn_diagnostic": "Executar diagnóstico do sistema",
+        "btn_check_updates": "Procurar atualizações",
+        "status_diag_running": "A executar diagnóstico do sistema...",
+        "status_diag_done": "Diagnóstico concluído.",
+        "status_diag_timeout": "O diagnóstico excedeu o tempo de espera. Verifica ligação/token e tenta novamente.",
+        "status_updates_checking": "A procurar atualizações...",
+        "status_updates_failed": "Não foi possível verificar atualizações.",
+        "status_updates_uptodate": "Esta versão já está atualizada.",
+        "status_updates_available": "Há uma atualização disponível: {version}\nTransferência: {url}",
+        "status_updates_timeout": "A procura de atualizações excedeu o tempo de espera. Tenta novamente.",
+        "status_operation_error": "Erro: {error}",
+        "version_corner": "v{version}",
+        "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reativo (mais pedidos).",
+        "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando deteta bloqueio.",
+        "help_watchdog_timeout": "Minutos sem progresso antes do monitor considerar que a farm ficou bloqueada.",
+        "help_autoupdate": "Quando ativo, a aplicação pode transferir e aplicar automaticamente uma nova versão quando disponível.",
+        "help_autoupdate_delay": "Tempo de espera antes de reiniciar a aplicação para concluir uma atualização automática.",
+        "alert_type_campaign_expiring_soon": "Campanha a expirar brevemente",
+        "alert_type_token_invalid": "Token inválido",
+        "alert_type_no_progress": "Sem progresso",
+        "alert_type_farm_complete": "Farm concluída",
+        "alert_type_stream_offline": "Canal offline",
+        "alert_type_api_error": "Erro da API",
+        "alert_type_watchdog_recovered": "Recuperação do monitor",
+        "alert_help_campaign_expiring_soon": "Avisa quando uma campanha está perto do fim para não perderes drops.",
+        "alert_help_token_invalid": "Avisa quando o token deixa de ser válido e exige nova autenticação.",
+        "alert_help_no_progress": "Avisa quando não há progresso de drops durante um período anormal.",
+        "alert_help_farm_complete": "Avisa quando a farm da campanha ativa foi concluída.",
+        "alert_help_stream_offline": "Avisa quando o canal alvo fica offline.",
+        "alert_help_api_error": "Avisa quando há falhas de comunicação com a API da Twitch.",
+        "alert_help_watchdog_recovered": "Avisa quando o monitor deteta problema e consegue recuperar automaticamente.",
         "redeem_drops": "Redimir drops",
         "redeem_done": "Drops redimidos: {count}.",
         "redeem_none": "Nenhum drop pronto para redimir.",
@@ -830,6 +983,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_group": "Whitelisted games",
         "dashboard_hint": "Click a game to make it your manual farming target.",
         "dashboard_refresh": "Refresh dashboard",
+        "dashboard_hide_sub_only": "Hide games with subscription-only drops",
+        "dashboard_hide_sub_only_help": "Hide games whose available campaigns require an active subscription to redeem drops.",
         "dashboard_empty": "Add games to your whitelist to show them here.",
         "dashboard_selected": "Manual game target: {game}.",
         "dashboard_unset": "No manual game target.",
@@ -854,6 +1009,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_ribbon_lost_full": "LOST",
         "dashboard_ribbon_lost_partial": "PARTIAL",
         "dashboard_ribbon_subscription_required": "SUB REQUIRED",
+        "active_drops_group": "Active drops",
+        "active_drops_group_game": "Active drops for {game}",
+        "active_drops_empty": "No active drops to display.",
+        "active_drops_claimed": "Claimed",
+        "active_drops_progress": "{current}/{required} min",
+        "active_drops_subscription_hint": "This campaign requires an active subscription to redeem drops.",
         "farming_now_group": "Current farming status",
         "farming_state_running": "Status: Running",
         "farming_state_stopped": "Status: Stopped",
@@ -948,6 +1109,45 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_export_success": "Session exported. Copy the JSON below and save it securely.",
         "session_export_copied": "Session JSON copied to clipboard.",
         "auto_claim_checkbox": "Redeem drops automatically",
+        "settings_tab_basic": "Basic",
+        "settings_tab_advanced": "Advanced",
+        "settings_tab_alerts": "Alerts",
+        "energy_profile_label": "Energy profile",
+        "watchdog_enabled": "Enable watchdog",
+        "watchdog_timeout": "Stall timeout",
+        "autoupdate_enabled": "Automatic updates",
+        "autoupdate_delay": "Delay before restart",
+        "btn_diagnostic": "Run diagnostics",
+        "btn_check_updates": "Check updates",
+        "status_diag_running": "Running system diagnostics...",
+        "status_diag_done": "Diagnostics completed.",
+        "status_diag_timeout": "Diagnostics exceeded the time limit. Check network/token and try again.",
+        "status_updates_checking": "Checking for updates...",
+        "status_updates_failed": "Unable to check for updates.",
+        "status_updates_uptodate": "This version is already up to date.",
+        "status_updates_available": "Update available: {version}\nDownload: {url}",
+        "status_updates_timeout": "Update check exceeded the time limit. Please try again.",
+        "status_operation_error": "Error: {error}",
+        "version_corner": "v{version}",
+        "help_energy_profile": "Defines app behavior: more economical (fewer requests) or more responsive (more requests).",
+        "help_watchdog": "Monitors lack of progress and tries automatic recovery when farming gets stuck.",
+        "help_watchdog_timeout": "Minutes without progress before watchdog considers farming stalled.",
+        "help_autoupdate": "When enabled, the app can automatically download and apply a new version when available.",
+        "help_autoupdate_delay": "Wait time before restarting the app to finish an automatic update.",
+        "alert_type_campaign_expiring_soon": "Campaign expiring soon",
+        "alert_type_token_invalid": "Invalid token",
+        "alert_type_no_progress": "No progress",
+        "alert_type_farm_complete": "Farm complete",
+        "alert_type_stream_offline": "Stream offline",
+        "alert_type_api_error": "API error",
+        "alert_type_watchdog_recovered": "Watchdog recovered",
+        "alert_help_campaign_expiring_soon": "Warn when a campaign is close to ending so drops are not missed.",
+        "alert_help_token_invalid": "Warn when the token is no longer valid and re-authentication is needed.",
+        "alert_help_no_progress": "Warn when drop progress stops for an unusual period.",
+        "alert_help_farm_complete": "Warn when farming for the active campaign is completed.",
+        "alert_help_stream_offline": "Warn when the target channel goes offline.",
+        "alert_help_api_error": "Warn when communication with Twitch API fails.",
+        "alert_help_watchdog_recovered": "Warn when watchdog detects an issue and recovers automatically.",
         "redeem_drops": "Redeem drops",
         "redeem_done": "Redeemed drops: {count}.",
         "redeem_none": "No drops are ready to redeem.",
@@ -980,9 +1180,19 @@ class MarkerListWidget(QListWidget):
         self.itemClicked.connect(self._toggle_item)
 
     def set_entries(self, entries: list[FilterEntry], selected_keys: list[str], empty_text: str) -> None:
-        self._selected_keys = set(selected_keys)
+        self._selected_keys = {
+            key.strip()
+            for key in selected_keys
+            if isinstance(key, str) and key.strip()
+        }
         self._has_state = True
-        self._all_entries = list(entries)
+        self._all_entries = [
+            entry
+            for entry in entries
+            if isinstance(entry.key, str)
+            and isinstance(entry.label, str)
+            and entry.key.strip()
+        ]
         self._empty_text = empty_text
         self._rebuild_items()
 
@@ -1008,7 +1218,7 @@ class MarkerListWidget(QListWidget):
     def select_all(self) -> None:
         if not self._all_entries:
             return
-        all_keys = {entry.key for entry in self._all_entries}
+        all_keys = {entry.key for entry in self._all_entries if entry.key}
         if all_keys == self._selected_keys:
             return
         self._selected_keys = all_keys
@@ -1057,7 +1267,7 @@ class MarkerListWidget(QListWidget):
         self.blockSignals(False)
 
     def selected_keys(self) -> list[str]:
-        return sorted(self._selected_keys)
+        return sorted(self._selected_keys, key=str.casefold)
 
     def selected_available_count(self) -> int:
         if not self._all_entries:
@@ -1073,7 +1283,7 @@ class MarkerListWidget(QListWidget):
 
     def _toggle_item(self, item: QListWidgetItem) -> None:
         key = item.data(Qt.ItemDataRole.UserRole)
-        if not key:
+        if not isinstance(key, str) or not key:
             return
         if key in self._selected_keys:
             self._selected_keys.remove(key)
@@ -1264,6 +1474,16 @@ class ImageFetchBridge(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        icon_path = _ASSETS_DIR / "icon.ico"
+        icon = QIcon()
+        for candidate in (icon_path, _ASSETS_DIR / "icon.png"):
+            if candidate.exists():
+                probe = QIcon(str(candidate))
+                if not probe.isNull():
+                    icon = probe
+                    break
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.config = load_config()
         if self.config.language not in TRANSLATIONS:
             self.config.language = "pt_PT"
@@ -1283,14 +1503,26 @@ class MainWindow(QMainWindow):
         self._forced_farm_campaign_id: str = ""
         self._forced_farm_game: str = ""
         self._dashboard_game_cards: list[DashboardGameCard] = []
+        self._dashboard_completed_seen_at: dict[str, datetime] = {}
+        self._diag_future: Future | None = None
+        self._diag_started_at: datetime | None = None
+        self._diag_poll_timer = QTimer(self)
+        self._diag_poll_timer.setInterval(250)
+        self._diag_poll_timer.timeout.connect(self._poll_diagnostic_future)
+        self._update_future: Future | None = None
+        self._update_started_at: datetime | None = None
+        self._update_poll_timer = QTimer(self)
+        self._update_poll_timer.setInterval(250)
+        self._update_poll_timer.timeout.connect(self._poll_update_future)
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self._thumb_executor = ThreadPoolExecutor(max_workers=4)
         self._thumb_fetch_bridge = ImageFetchBridge(self)
         self._thumb_fetch_bridge.loaded.connect(self._on_box_art_loaded)
         self._thumb_fetch_bridge.failed.connect(self._on_box_art_failed)
-        self._thumb_waiters: dict[str, list[tuple[QLabel, int, int, str]]] = {}
+        self._thumb_waiters: dict[str, list[tuple[object, int, int, str]]] = {}
         self._thumb_inflight: set[str] = set()
         self._generated_thumb_cache: dict[str, QPixmap] = {}
 
@@ -1357,30 +1589,212 @@ class MainWindow(QMainWindow):
 
         self.preferences_group = QGroupBox()
         preferences_layout = QVBoxLayout(self.preferences_group)
+        
+        # Create tabbed interface for settings
+        self.settings_tabs = QTabWidget()
+        
+        # ========== TAB 1: BÁSICO ==========
+        basic_tab = QWidget()
+        basic_layout = QVBoxLayout(basic_tab)
+        
         language_row = QHBoxLayout()
         self.language_label = QLabel()
         self.language_picker = QComboBox()
         self.language_picker.currentIndexChanged.connect(self.handle_language_change)
         language_row.addWidget(self.language_label)
         language_row.addWidget(self.language_picker, 1)
+        
         theme_row = QHBoxLayout()
         self.theme_label = QLabel()
         self.theme_picker = QComboBox()
         self.theme_picker.currentIndexChanged.connect(self.handle_theme_change)
         theme_row.addWidget(self.theme_label)
         theme_row.addWidget(self.theme_picker, 1)
+        
         sort_row = QHBoxLayout()
         self.sort_label = QLabel()
         self.sort_picker = QComboBox()
         self.sort_picker.currentIndexChanged.connect(self.handle_sort_change)
         sort_row.addWidget(self.sort_label)
         sort_row.addWidget(self.sort_picker, 1)
-        preferences_layout.addLayout(language_row)
-        preferences_layout.addLayout(theme_row)
-        preferences_layout.addLayout(sort_row)
+        
+        basic_layout.addLayout(language_row)
+        basic_layout.addLayout(theme_row)
+        basic_layout.addLayout(sort_row)
+        
         self.auto_claim_checkbox = QCheckBox()
         self.auto_claim_checkbox.setChecked(bool(self.config.auto_claim_drops))
-        preferences_layout.addWidget(self.auto_claim_checkbox)
+        basic_layout.addWidget(self.auto_claim_checkbox)
+        basic_layout.addStretch()
+        
+        # ========== TAB 2: AVANÇADO ==========
+        advanced_tab = QWidget()
+        advanced_layout = QVBoxLayout(advanced_tab)
+        
+        # Energy Profiles
+        self.energy_profile_label = QLabel()
+        self.energy_profile_help_icon = QLabel("?")
+        self.energy_profile_help_icon.setObjectName("HelpIcon")
+        self.energy_profile_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.energy_profile_help_icon.setFixedSize(18, 18)
+        energy_profile_layout = QVBoxLayout()
+        energy_profile_title = QHBoxLayout()
+        energy_profile_title.addWidget(self.energy_profile_label)
+        energy_profile_title.addWidget(self.energy_profile_help_icon)
+        energy_profile_title.addStretch()
+        
+        self.energy_profile_buttons = []
+        self.energy_profile_group = None
+        profiles_widget = QWidget()
+        profiles_buttons_layout = QHBoxLayout(profiles_widget)
+        for profile in AVAILABLE_PROFILES:
+            profile_name = profile.name
+            btn = QRadioButton(profile_name)
+            btn.setToolTip(f"Perfil: {profile_name}")
+            btn.toggled.connect(lambda checked, pname=profile_name: self.handle_energy_profile_change(pname) if checked else None)
+            self.energy_profile_buttons.append((profile_name, btn))
+            profiles_buttons_layout.addWidget(btn)
+        profiles_buttons_layout.addStretch()
+        if self.energy_profile_buttons:
+            active_profile = self.config.energy_profile
+            for profile_name, btn in self.energy_profile_buttons:
+                if profile_name == active_profile:
+                    btn.setChecked(True)
+                    break
+        
+        energy_profile_layout.addLayout(energy_profile_title)
+        energy_profile_layout.addWidget(profiles_widget)
+        advanced_layout.addLayout(energy_profile_layout)
+        
+        # Watchdog settings
+        watchdog_frame = QGroupBox()
+        watchdog_layout = QVBoxLayout(watchdog_frame)
+        
+        watchdog_enable_layout = QHBoxLayout()
+        self.watchdog_label = QLabel()
+        self.watchdog_help_icon = QLabel("?")
+        self.watchdog_help_icon.setObjectName("HelpIcon")
+        self.watchdog_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.watchdog_help_icon.setFixedSize(18, 18)
+        self.watchdog_checkbox = QCheckBox()
+        self.watchdog_checkbox.setChecked(self.config.watchdog_enabled)
+        self.watchdog_checkbox.toggled.connect(self.handle_watchdog_toggle)
+        watchdog_enable_layout.addWidget(self.watchdog_label)
+        watchdog_enable_layout.addWidget(self.watchdog_help_icon)
+        watchdog_enable_layout.addWidget(self.watchdog_checkbox)
+        watchdog_enable_layout.addStretch()
+        
+        watchdog_timeout_layout = QHBoxLayout()
+        self.watchdog_timeout_label = QLabel()
+        self.watchdog_timeout_help_icon = QLabel("?")
+        self.watchdog_timeout_help_icon.setObjectName("HelpIcon")
+        self.watchdog_timeout_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.watchdog_timeout_help_icon.setFixedSize(18, 18)
+        self.watchdog_timeout_spinbox = QSpinBox()
+        self.watchdog_timeout_spinbox.setMinimum(5)
+        self.watchdog_timeout_spinbox.setMaximum(120)
+        self.watchdog_timeout_spinbox.setValue(self.config.watchdog_stall_timeout_min)
+        self.watchdog_timeout_spinbox.setSuffix(" min")
+        watchdog_timeout_layout.addWidget(self.watchdog_timeout_label)
+        watchdog_timeout_layout.addWidget(self.watchdog_timeout_help_icon)
+        watchdog_timeout_layout.addWidget(self.watchdog_timeout_spinbox)
+        watchdog_timeout_layout.addStretch()
+        
+        watchdog_layout.addLayout(watchdog_enable_layout)
+        watchdog_layout.addLayout(watchdog_timeout_layout)
+        advanced_layout.addWidget(watchdog_frame)
+        
+        # Auto-update settings
+        autoupdate_frame = QGroupBox()
+        autoupdate_layout = QVBoxLayout(autoupdate_frame)
+        
+        autoupdate_enable_layout = QHBoxLayout()
+        self.autoupdate_label = QLabel()
+        self.autoupdate_help_icon = QLabel("?")
+        self.autoupdate_help_icon.setObjectName("HelpIcon")
+        self.autoupdate_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.autoupdate_help_icon.setFixedSize(18, 18)
+        self.autoupdate_checkbox = QCheckBox()
+        self.autoupdate_checkbox.setChecked(self.config.auto_update_enabled)
+        self.autoupdate_checkbox.toggled.connect(self.handle_autoupdate_toggle)
+        autoupdate_enable_layout.addWidget(self.autoupdate_label)
+        autoupdate_enable_layout.addWidget(self.autoupdate_help_icon)
+        autoupdate_enable_layout.addWidget(self.autoupdate_checkbox)
+        autoupdate_enable_layout.addStretch()
+        
+        autoupdate_delay_layout = QHBoxLayout()
+        self.autoupdate_delay_label = QLabel()
+        self.autoupdate_delay_help_icon = QLabel("?")
+        self.autoupdate_delay_help_icon.setObjectName("HelpIcon")
+        self.autoupdate_delay_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.autoupdate_delay_help_icon.setFixedSize(18, 18)
+        self.autoupdate_delay_spinbox = QSpinBox()
+        self.autoupdate_delay_spinbox.setMinimum(5)
+        self.autoupdate_delay_spinbox.setMaximum(300)
+        self.autoupdate_delay_spinbox.setValue(self.config.auto_update_restart_delay_sec)
+        self.autoupdate_delay_spinbox.setSuffix(" seg")
+        autoupdate_delay_layout.addWidget(self.autoupdate_delay_label)
+        autoupdate_delay_layout.addWidget(self.autoupdate_delay_help_icon)
+        autoupdate_delay_layout.addWidget(self.autoupdate_delay_spinbox)
+        autoupdate_delay_layout.addStretch()
+        
+        autoupdate_layout.addLayout(autoupdate_enable_layout)
+        autoupdate_layout.addLayout(autoupdate_delay_layout)
+        advanced_layout.addWidget(autoupdate_frame)
+        advanced_layout.addStretch()
+        
+        # ========== TAB 3: ALERTAS ==========
+        alerts_tab = QWidget()
+        alerts_layout = QVBoxLayout(alerts_tab)
+        
+        alerts_grid = QGridLayout()
+        self.alert_checkboxes = {}
+        self.alert_help_icons = {}
+        for i, alert_type in enumerate(AlertType):
+            checkbox = QCheckBox(alert_type.value.replace("_", " ").title())
+            is_enabled = getattr(self.config, f"alert_{alert_type.value}", True)
+            checkbox.setChecked(is_enabled)
+            checkbox.toggled.connect(lambda checked, at=alert_type: self.handle_alert_toggle(at, checked))
+            self.alert_checkboxes[alert_type] = checkbox
+            help_icon = QLabel("?")
+            help_icon.setObjectName("HelpIcon")
+            help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            help_icon.setFixedSize(18, 18)
+            self.alert_help_icons[alert_type] = help_icon
+
+            option_widget = QWidget()
+            option_layout = QHBoxLayout(option_widget)
+            option_layout.setContentsMargins(0, 0, 0, 0)
+            option_layout.setSpacing(6)
+            option_layout.addWidget(checkbox)
+            option_layout.addWidget(help_icon)
+            option_layout.addStretch()
+            alerts_grid.addWidget(option_widget, i // 2, i % 2)
+        
+        alerts_layout.addLayout(alerts_grid)
+        alerts_layout.addStretch()
+        
+        # Add tabs
+        self.settings_tabs.addTab(basic_tab, "")  # "Básico" will be set in retranslate
+        self.settings_tabs.addTab(advanced_tab, "")  # "Avançado"
+        self.settings_tabs.addTab(alerts_tab, "")  # "Alertas"
+        
+        preferences_layout.addWidget(self.settings_tabs)
+        
+        # Action buttons (outside tabs)
+        buttons_layout = QHBoxLayout()
+        self.btn_diagnostic = QPushButton()
+        self.btn_diagnostic.clicked.connect(self.handle_run_diagnostic)
+        self.btn_check_updates = QPushButton()
+        self.btn_check_updates.clicked.connect(self.handle_check_updates)
+        buttons_layout.addWidget(self.btn_diagnostic)
+        buttons_layout.addWidget(self.btn_check_updates)
+        buttons_layout.addStretch()
+        preferences_layout.addLayout(buttons_layout)
+        
+        self.update_status_label = QLabel()
+        self.update_status_label.setWordWrap(True)
+        preferences_layout.addWidget(self.update_status_label)
 
         # Session-based authentication group
         self.session_group = QGroupBox()
@@ -1422,26 +1836,21 @@ class MainWindow(QMainWindow):
         self.games_whitelist_hint = QLabel()
         self.games_whitelist_hint.setWordWrap(True)
         self.games_whitelist_list = MarkerListWidget("✓")
-        self.games_whitelist_list.itemClicked.connect(lambda _item: self._refresh_dashboard_games())
-        self.games_whitelist_list.itemClicked.connect(lambda _item: self._refresh_filter_tab_counts())
+        self.games_whitelist_list.itemClicked.connect(lambda _item: self._with_errors(self._handle_games_whitelist_selection_changed))
         self.games_whitelist_search = QLineEdit()
         self.games_whitelist_search.textChanged.connect(self.games_whitelist_list.set_filter_text)
         self.games_whitelist_select_all_btn = QPushButton()
         self.games_whitelist_select_all_btn.clicked.connect(self.games_whitelist_list.select_all)
-        self.games_whitelist_select_all_btn.clicked.connect(lambda: self._refresh_dashboard_games())
-        self.games_whitelist_select_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_select_all_btn.clicked.connect(lambda: self._with_errors(self._handle_games_whitelist_selection_changed))
         self.games_whitelist_clear_all_btn = QPushButton()
         self.games_whitelist_clear_all_btn.clicked.connect(self.games_whitelist_list.clear_all)
-        self.games_whitelist_clear_all_btn.clicked.connect(lambda: self._refresh_dashboard_games())
-        self.games_whitelist_clear_all_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_clear_all_btn.clicked.connect(lambda: self._with_errors(self._handle_games_whitelist_selection_changed))
         self.games_whitelist_select_visible_btn = QPushButton()
         self.games_whitelist_select_visible_btn.clicked.connect(self.games_whitelist_list.select_visible)
-        self.games_whitelist_select_visible_btn.clicked.connect(lambda: self._refresh_dashboard_games())
-        self.games_whitelist_select_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_select_visible_btn.clicked.connect(lambda: self._with_errors(self._handle_games_whitelist_selection_changed))
         self.games_whitelist_clear_visible_btn = QPushButton()
         self.games_whitelist_clear_visible_btn.clicked.connect(self.games_whitelist_list.clear_visible)
-        self.games_whitelist_clear_visible_btn.clicked.connect(lambda: self._refresh_dashboard_games())
-        self.games_whitelist_clear_visible_btn.clicked.connect(self._refresh_filter_tab_counts)
+        self.games_whitelist_clear_visible_btn.clicked.connect(lambda: self._with_errors(self._handle_games_whitelist_selection_changed))
         games_whitelist_actions = QHBoxLayout()
         games_whitelist_actions.addWidget(self.games_whitelist_select_all_btn)
         games_whitelist_actions.addWidget(self.games_whitelist_clear_all_btn)
@@ -1557,9 +1966,15 @@ class MainWindow(QMainWindow):
         dashboard_group_layout = QVBoxLayout(self.dashboard_group)
         self.dashboard_hint_label = QLabel()
         self.dashboard_hint_label.setWordWrap(True)
+        self.dashboard_hide_sub_only_checkbox = QCheckBox()
+        self.dashboard_hide_sub_only_checkbox.setChecked(
+            bool(getattr(self.config, "dashboard_hide_subscription_required", False))
+        )
+        self.dashboard_hide_sub_only_checkbox.toggled.connect(self.handle_dashboard_hide_sub_only_toggle)
         self.btn_dashboard_refresh = QPushButton()
         self.btn_dashboard_refresh.clicked.connect(self.handle_dashboard_refresh)
         dashboard_actions_layout = QHBoxLayout()
+        dashboard_actions_layout.addWidget(self.dashboard_hide_sub_only_checkbox)
         dashboard_actions_layout.addStretch(1)
         dashboard_actions_layout.addWidget(self.btn_dashboard_refresh)
         self.dashboard_games_scroll = QScrollArea()
@@ -1655,9 +2070,13 @@ class MainWindow(QMainWindow):
         farming_layout = QVBoxLayout(farming_tab)
         self.farming_now_group = QGroupBox()
         farming_group_layout = QVBoxLayout(self.farming_now_group)
+        farming_header_layout = QHBoxLayout()
         self.farming_now_game_image = QLabel()
         self.farming_now_game_image.setFixedSize(144, 192)
         self.farming_now_game_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        farming_header_layout.addWidget(self.farming_now_game_image, alignment=Qt.AlignmentFlag.AlignTop)
+
+        farming_info_layout = QVBoxLayout()
         self.farming_now_game = QLabel()
         self.farming_now_campaign = QLabel()
         self.farming_now_channel = QLabel()
@@ -1681,18 +2100,38 @@ class MainWindow(QMainWindow):
         farming_action_row.addWidget(self.btn_farming_pause)
         farming_action_row.addWidget(self.btn_farming_next)
         farming_action_row.addWidget(self.btn_redeem_drops)
-        farming_group_layout.addWidget(self.farming_now_game_image, alignment=Qt.AlignmentFlag.AlignHCenter)
-        farming_group_layout.addWidget(self.farming_now_game)
-        farming_group_layout.addWidget(self.farming_now_campaign)
-        farming_group_layout.addWidget(self.farming_now_channel)
-        farming_group_layout.addWidget(self.farming_now_next_drop)
-        farming_group_layout.addWidget(self.farming_now_eta)
-        farming_group_layout.addWidget(self.farming_now_state)
-        farming_group_layout.addWidget(self.farming_now_progress_text)
+        farming_info_layout.addWidget(self.farming_now_game)
+        farming_info_layout.addWidget(self.farming_now_campaign)
+        farming_info_layout.addWidget(self.farming_now_channel)
+        farming_info_layout.addWidget(self.farming_now_next_drop)
+        farming_info_layout.addWidget(self.farming_now_eta)
+        farming_info_layout.addWidget(self.farming_now_state)
+        farming_info_layout.addWidget(self.farming_now_progress_text)
+        farming_info_layout.addStretch(1)
+        farming_header_layout.addLayout(farming_info_layout, 1)
+        farming_group_layout.addLayout(farming_header_layout)
         farming_group_layout.addWidget(self.farming_now_progress)
         farming_group_layout.addWidget(self.farming_now_last_refresh)
         farming_group_layout.addLayout(farming_action_row)
         farming_layout.addWidget(self.farming_now_group)
+
+        self.active_drops_group = QGroupBox()
+        self.active_drops_group.setMinimumHeight(210)
+        active_drops_layout = QVBoxLayout(self.active_drops_group)
+        self.active_drops_list = QListWidget()
+        self.active_drops_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.active_drops_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.active_drops_list.setWordWrap(True)
+        self.active_drops_list.setSpacing(6)
+        self.active_drops_list.setFlow(QListView.Flow.LeftToRight)
+        self.active_drops_list.setWrapping(False)
+        self.active_drops_list.setMovement(QListView.Movement.Static)
+        self.active_drops_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.active_drops_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.active_drops_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.active_drops_list.setMinimumHeight(140)
+        active_drops_layout.addWidget(self.active_drops_list)
+        farming_layout.addWidget(self.active_drops_group)
         farming_layout.addStretch(1)
 
         campaigns_tab = QWidget()
@@ -1744,6 +2183,15 @@ class MainWindow(QMainWindow):
         vbox.addWidget(self.tabs_right, 3)
         vbox.addWidget(self.log_label)
         vbox.addWidget(self.log_output, 1)
+        version_row = QHBoxLayout()
+        version_row.addStretch(1)
+        self.version_corner_label = QLabel()
+        version_font = QFont(self.version_corner_label.font())
+        version_font.setPointSize(8)
+        self.version_corner_label.setFont(version_font)
+        self.version_corner_label.setStyleSheet("color: #8f95a3;")
+        version_row.addWidget(self.version_corner_label)
+        vbox.addLayout(version_row)
         return panel
 
     def _t(self, key: str, **kwargs: object) -> str:
@@ -1962,171 +2410,16 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    def _handle_games_whitelist_selection_changed(self) -> None:
+        self._refresh_dashboard_games()
+        self._refresh_filter_tab_counts()
+
     def _refresh_dashboard_games(self) -> None:
-        selected_game = self._forced_farm_game.casefold() if self._forced_farm_game else ""
+        # Render dashboard using the original GameCard visual format.
+        self._refresh_dashboard()
+        self._refresh_dashboard_hide_sub_only_label()
+
         whitelist_games = self._dashboard_whitelist_games()
-        by_game: dict[str, DropCampaign] = {}
-        campaigns_by_game: dict[str, list[DropCampaign]] = {}
-        if self.latest_snapshot is not None:
-            for campaign in self.latest_snapshot.campaigns:
-                key = campaign.game_name.casefold()
-                campaigns_by_game.setdefault(key, []).append(campaign)
-                if key not in by_game:
-                    by_game[key] = campaign
-                elif campaign.active and not by_game[key].active:
-                    by_game[key] = campaign
-
-        while self.dashboard_games_grid.count():
-            child = self.dashboard_games_grid.takeAt(0)
-            widget = child.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._dashboard_game_cards.clear()
-
-        columns = 3
-        now = datetime.now(timezone.utc)
-        for index, game in enumerate(whitelist_games):
-            key = game.casefold()
-            campaign = by_game.get(key)
-            related_campaigns = campaigns_by_game.get(key, [])
-            related_decisions = [
-                decision
-                for decision in (self.latest_snapshot.decisions if self.latest_snapshot is not None else [])
-                if decision.campaign.game_name.casefold() == key
-            ]
-            art_url = ""
-            if campaign is not None:
-                art_url = campaign.game_box_art_url or self._guess_box_art_url(
-                    campaign.game_name,
-                    campaign.game_slug,
-                )
-            else:
-                art_url = self._guess_box_art_url(game)
-            is_farmable_game = False
-            if self.latest_snapshot is not None:
-                is_farmable_game = any(
-                    self._decision_is_farmable_now(decision)
-                    and decision.campaign.game_name.casefold() == key
-                    for decision in self.latest_snapshot.decisions
-                )
-
-            trackable_campaigns = [item for item in related_campaigns if item.required_minutes > 0]
-            has_incomplete_trackable = any(item.remaining_minutes > 0 for item in trackable_campaigns)
-            completed_trackable_count = sum(1 for item in trackable_campaigns if item.remaining_minutes <= 0)
-            subscription_required_campaigns = [
-                item
-                for item in related_campaigns
-                if item.requires_subscription and not item.all_drops_claimed
-            ]
-            expired_incomplete_trackable = [
-                item
-                for item in trackable_campaigns
-                if item.remaining_minutes > 0 and (item.ends_at <= now or item.status == "EXPIRED")
-            ]
-            full_lost_count = sum(1 for item in expired_incomplete_trackable if item.progress_minutes <= 0)
-            partial_lost_count = len(expired_incomplete_trackable) - full_lost_count
-            has_upcoming_game = any(item.upcoming for item in related_campaigns)
-            if trackable_campaigns:
-                is_game_completed = not has_incomplete_trackable
-            else:
-                # Fallback path for campaigns without reliable minute totals (0/0).
-                is_game_completed = bool(related_decisions) and all(
-                    decision.reason_code == "campaign_completed" for decision in related_decisions
-                )
-
-            # Never display completed if there is currently a farmable target for this game.
-            if is_farmable_game:
-                is_game_completed = False
-
-            status_kind = "offline"
-            badge_text = self._t("dashboard_badge_no_data")
-            completion_ribbon_text = ""
-            completion_ribbon_color = ""
-            tooltip_text = game
-
-            if subscription_required_campaigns:
-                status_kind = "subscription_required"
-                badge_text = self._t("dashboard_badge_subscription_required")
-                completion_ribbon_text = self._t("dashboard_ribbon_subscription_required")
-                completion_ribbon_color = "#d47a14"
-                tooltip_text = self._t("dashboard_subscription_required_tooltip")
-            elif expired_incomplete_trackable:
-                if partial_lost_count > 0:
-                    status_kind = "lost_partial"
-                    badge_text = self._t("dashboard_badge_lost_partial")
-                    completion_ribbon_text = self._t("dashboard_ribbon_lost_partial")
-                    completion_ribbon_color = "#a8841f"
-                    tooltip_text = self._t(
-                        "dashboard_lost_partial_tooltip",
-                        lost=len(expired_incomplete_trackable),
-                        total=max(1, len(trackable_campaigns)),
-                    )
-                else:
-                    status_kind = "lost_full"
-                    badge_text = self._t("dashboard_badge_lost_full")
-                    completion_ribbon_text = self._t("dashboard_ribbon_lost_full")
-                    completion_ribbon_color = "#b32837"
-                    tooltip_text = self._t(
-                        "dashboard_lost_full_tooltip",
-                        lost=len(expired_incomplete_trackable),
-                        total=max(1, len(trackable_campaigns)),
-                    )
-            elif is_game_completed:
-                status_kind = "completed"
-                badge_text = self._t("dashboard_badge_completed")
-                completion_ribbon_text = self._t("dashboard_ribbon_completed")
-                completion_ribbon_color = "#08a060"
-                if trackable_campaigns:
-                    tooltip_text = self._t(
-                        "dashboard_completed_tooltip_detail",
-                        completed=completed_trackable_count,
-                        total=len(trackable_campaigns),
-                    )
-                else:
-                    tooltip_text = self._t("dashboard_completed_tooltip")
-            elif campaign is not None:
-                if campaign.active and is_farmable_game:
-                    status_kind = "active"
-                    badge_text = self._t("dashboard_badge_active")
-                    tooltip_text = campaign.title or game
-                elif has_upcoming_game:
-                    status_kind = "upcoming"
-                    badge_text = self._t("dashboard_badge_upcoming")
-                    tooltip_text = self._t("dashboard_upcoming_tooltip")
-                else:
-                    status_kind = "offline"
-                    badge_text = self._t("dashboard_badge_offline")
-                    tooltip_text = self._t("dashboard_offline_tooltip")
-            card = DashboardGameCard(
-                game_name=game,
-                title_text=self._dashboard_card_title(game),
-                pixmap=self._placeholder_box_art_pixmap(),
-                badge_text=badge_text,
-                ribbon_text=self._t("dashboard_ribbon"),
-                completion_ribbon_text=completion_ribbon_text,
-                completion_ribbon_color=completion_ribbon_color,
-                tooltip_text=tooltip_text,
-                farmable=is_farmable_game,
-                status_kind=status_kind,
-                selected=(key == selected_game),
-                on_click=self.handle_dashboard_game_clicked,
-            )
-            row = index // columns
-            col = index % columns
-            self.dashboard_games_grid.addWidget(card, row, col)
-            self._dashboard_game_cards.append(card)
-            self._queue_box_art_load(
-                art_url,
-                card.cover,
-                width=108,
-                height=144,
-                game_name=game,
-                game_slug=campaign.game_slug if campaign is not None else "",
-            )
-
-        for col in range(columns):
-            self.dashboard_games_grid.setColumnStretch(col, 1)
-
         if not whitelist_games:
             self.dashboard_target_label.setText(self._t("dashboard_empty"))
             return
@@ -2134,6 +2427,17 @@ class MainWindow(QMainWindow):
             self.dashboard_target_label.setText(self._t("dashboard_selected", game=self._forced_farm_game))
             return
         self.dashboard_target_label.setText(self._t("dashboard_unset"))
+
+    def _refresh_dashboard_hide_sub_only_label(self) -> None:
+        base = self._t("dashboard_hide_sub_only")
+        count = 0
+        if self.latest_snapshot is not None:
+            count = sum(
+                1
+                for campaign in self.latest_snapshot.campaigns
+                if self._campaign_matches_hide_sub_only(campaign) and not campaign.all_drops_claimed
+            )
+        self.dashboard_hide_sub_only_checkbox.setText(f"{base} ({count})")
 
     def _refresh_campaigns_label(self) -> None:
         count = len(self._filtered_decisions()) if self.latest_snapshot else 0
@@ -2157,9 +2461,12 @@ class MainWindow(QMainWindow):
         
         self.auth_tabs.setTabText(0, self._t("auth_session_export"))
         self.auth_tabs.setTabText(1, self._t("auth_quick_token"))
+        self.version_corner_label.setText(self._t("version_corner", version=__version__))
 
         self.dashboard_group.setTitle(self._t("dashboard_group"))
         self.dashboard_hint_label.setText(self._t("dashboard_hint"))
+        self._refresh_dashboard_hide_sub_only_label()
+        self.dashboard_hide_sub_only_checkbox.setToolTip(self._t("dashboard_hide_sub_only_help"))
         self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
         
         self.oauth_group.setTitle(self._t("oauth_group"))
@@ -2184,6 +2491,28 @@ class MainWindow(QMainWindow):
         self._repopulate_language_picker()
         self._repopulate_theme_picker()
         self._repopulate_sort_picker()
+
+        # v2 translations - Settings Tabs
+        self.settings_tabs.setTabText(0, self._t("settings_tab_basic"))
+        self.settings_tabs.setTabText(1, self._t("settings_tab_advanced"))
+        self.settings_tabs.setTabText(2, self._t("settings_tab_alerts"))
+        
+        self.energy_profile_label.setText(self._t("energy_profile_label"))
+        self.energy_profile_help_icon.setToolTip(self._t("help_energy_profile"))
+        self.watchdog_label.setText(self._t("watchdog_enabled"))
+        self.watchdog_help_icon.setToolTip(self._t("help_watchdog"))
+        self.watchdog_timeout_label.setText(self._t("watchdog_timeout"))
+        self.watchdog_timeout_help_icon.setToolTip(self._t("help_watchdog_timeout"))
+        self.autoupdate_label.setText(self._t("autoupdate_enabled"))
+        self.autoupdate_help_icon.setToolTip(self._t("help_autoupdate"))
+        self.autoupdate_delay_label.setText(self._t("autoupdate_delay"))
+        self.autoupdate_delay_help_icon.setToolTip(self._t("help_autoupdate_delay"))
+        self.btn_diagnostic.setText(self._t("btn_diagnostic"))
+        self.btn_check_updates.setText(self._t("btn_check_updates"))
+        for alert_type, checkbox in self.alert_checkboxes.items():
+            checkbox.setText(self._t(f"alert_type_{alert_type.value}"))
+        for alert_type, help_icon in self.alert_help_icons.items():
+            help_icon.setToolTip(self._t(f"alert_help_{alert_type.value}"))
 
         self.active_lists_note.setText(self._t("active_lists_note"))
         self.filters_hint.setText(self._t("filters_hint"))
@@ -2223,6 +2552,9 @@ class MainWindow(QMainWindow):
         self.btn_farming_pause.setText(self._t("farming_pause_main"))
         self.btn_farming_next.setText(self._t("farming_next_game"))
         self.btn_redeem_drops.setText(self._t("redeem_drops"))
+        self.active_drops_group.setTitle(self._t("active_drops_group"))
+        if self.active_drops_list.count() == 0:
+            self.active_drops_list.addItem(self._t("active_drops_empty"))
         self._refresh_last_update_label()
         self.filter_status_label.setText(self._t("campaign_filter_status"))
         self.filter_link_label.setText(self._t("campaign_filter_link"))
@@ -2300,9 +2632,53 @@ class MainWindow(QMainWindow):
         parts.append(f"{minutes}m")
         return " ".join(parts)
 
+    def _format_diagnostic_report(self, results: dict[str, object]) -> str:
+        status = str(results.get("overall_status", "unknown")).upper()
+        summary = str(results.get("summary", "")).strip()
+        tests_raw = results.get("tests")
+
+        lines: list[str] = [f"{self._t('status_diag_done')} Status: {status}"]
+        if summary:
+            lines.append(summary)
+
+        if not isinstance(tests_raw, dict) or not tests_raw:
+            return "\n".join(lines)
+
+        rows: list[tuple[str, str, str, str]] = []
+        for test_name, test_result in tests_raw.items():
+            name = str(test_name)
+            result_map = test_result if isinstance(test_result, dict) else {}
+            test_status = str(result_map.get("status", "n/a")).upper()
+            duration_raw = result_map.get("duration_ms", 0)
+            try:
+                duration_text = f"{float(duration_raw):.1f}ms"
+            except (TypeError, ValueError):
+                duration_text = "N/A"
+            message = str(result_map.get("message", "")).strip().replace("\n", " ")
+            rows.append((name, test_status, duration_text, message))
+
+        name_w = max(4, min(28, max(len(row[0]) for row in rows)))
+        status_w = max(6, min(10, max(len(row[1]) for row in rows)))
+        time_w = max(6, min(10, max(len(row[2]) for row in rows)))
+        header = (
+            f"{'Test'.ljust(name_w)} | {'Status'.ljust(status_w)} | "
+            f"{'Time'.ljust(time_w)} | Message"
+        )
+        lines.append(header)
+        lines.append("-" * len(header))
+        for name, test_status, duration_text, message in rows:
+            name_cell = name[:name_w]
+            status_cell = test_status[:status_w]
+            time_cell = duration_text[:time_w]
+            lines.append(
+                f"{name_cell.ljust(name_w)} | {status_cell.ljust(status_w)} | "
+                f"{time_cell.ljust(time_w)} | {message}"
+            )
+        return "\n".join(lines)
+
     def _decision_is_farmable_now(self, decision: FarmDecision) -> bool:
         campaign = decision.campaign
-        if campaign.requires_subscription and not campaign.all_drops_claimed:
+        if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
             return False
         if not (campaign.active and campaign.eligible and decision.stream is not None):
             return False
@@ -2312,13 +2688,62 @@ class MainWindow(QMainWindow):
 
     def _decision_is_displayable_active(self, decision: FarmDecision) -> bool:
         campaign = decision.campaign
-        if campaign.requires_subscription and not campaign.all_drops_claimed:
+        if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
             return False
         if not (campaign.active and campaign.eligible):
             return False
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
         return True
+
+    def _campaign_is_known_subscription_locked(self, campaign: DropCampaign) -> bool:
+        if campaign.requires_subscription:
+            return True
+
+        text_chunks: list[str] = [campaign.title, campaign.next_drop_name, campaign.link_url]
+        for drop in campaign.drops or []:
+            if not isinstance(drop, dict):
+                continue
+            text_chunks.append(str(drop.get("name") or ""))
+
+        combined = "\n".join(chunk for chunk in text_chunks if chunk).casefold()
+        if not combined:
+            return False
+
+        patterns = (
+            "subscribe to redeem",
+            "subscription required",
+            "subscription-only",
+            "subscription only",
+            "subscriber only",
+            "subscribers only",
+            "sub only",
+            "subs only",
+            "subscrição",
+            "subscricao",
+            "apenas subs",
+            "apenas para subs",
+            "so para subs",
+        )
+        return any(pattern in combined for pattern in patterns)
+
+    def _campaign_has_actionable_drop_data(self, campaign: DropCampaign) -> bool:
+        if campaign.required_minutes > 0:
+            return True
+        if campaign.next_drop_required_minutes > 0:
+            return True
+        if campaign.next_drop_name.strip():
+            return True
+        if campaign.drops:
+            return True
+        return False
+
+    def _campaign_matches_hide_sub_only(self, campaign: DropCampaign) -> bool:
+        if self._campaign_is_known_subscription_locked(campaign):
+            return True
+        # Browser fallback campaigns can be active but lack actionable drop metadata.
+        # In practice these entries behave like non-farmable subscription-only campaigns.
+        return not self._campaign_has_actionable_drop_data(campaign)
 
     def _current_display_decision(self) -> FarmDecision | None:
         active = self._current_farm_decision()
@@ -2456,7 +2881,14 @@ class MainWindow(QMainWindow):
         except requests.RequestException:
             return b""
 
-    def _resolve_and_download_box_art_bytes(self, target_url: str, game_name: str, game_slug: str) -> bytes:
+    def _resolve_and_download_box_art_bytes(
+        self,
+        target_url: str,
+        game_name: str,
+        game_slug: str,
+        *,
+        prefer_direct_url: bool = False,
+    ) -> bytes:
         """
         Download game box art via a prioritised chain:
           1. Twitch GQL  ->  2. Steam  ->  3. Google Images
@@ -2472,10 +2904,22 @@ class MainWindow(QMainWindow):
             tried.add(u)
             return self._download_url_bytes(u)
 
+        if prefer_direct_url:
+            result = _try(target_url)
+            if result:
+                return result
+
         # Steps 1-3: full API chain (Twitch GQL -> Steam -> Google)
         if game_name.strip():
             resolved = self.client.resolve_game_box_art_url(game_name, game_slug=game_slug)
             result = _try(resolved)
+            if result:
+                return result
+
+            # If game-slug resolver failed due API throttling/integrity checks,
+            # try external providers directly before giving up.
+            external = self.client.resolve_external_box_art_url(game_name)
+            result = _try(external)
             if result:
                 return result
 
@@ -2495,6 +2939,7 @@ class MainWindow(QMainWindow):
         height: int,
         game_name: str = "",
         game_slug: str = "",
+        prefer_direct_url: bool = False,
     ) -> None:
         target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
         generated_key = (game_name or "").strip().casefold()
@@ -2535,6 +2980,41 @@ class MainWindow(QMainWindow):
             return
         self._thumb_inflight.add(target_url)
 
+        def worker(image_url: str, requested_game: str, requested_slug: str, direct_first: bool) -> None:
+            image_bytes = self._resolve_and_download_box_art_bytes(
+                image_url,
+                requested_game,
+                requested_slug,
+                prefer_direct_url=direct_first,
+            )
+            if image_bytes:
+                self._thumb_fetch_bridge.loaded.emit(image_url, image_bytes)
+            else:
+                self._thumb_fetch_bridge.failed.emit(image_url)
+
+        self._thumb_executor.submit(worker, target_url, game_name, game_slug, prefer_direct_url)
+
+    def _queue_game_card_art_load(
+        self,
+        url: str,
+        card: GameCard,
+        *,
+        game_name: str = "",
+        game_slug: str = "",
+    ) -> None:
+        target_url = (url or "").strip() or BOX_ART_FALLBACK_URL
+        cached = self._thumb_cache.get(target_url)
+        if cached is not None:
+            card.set_pixmap(cached)
+            return
+
+        # Keep a weak reference so async callbacks do not hold stale cards alive.
+        card_ref: object = weakref.ref(card)
+        self._thumb_waiters.setdefault(target_url, []).append((card_ref, 144, 192, game_name))
+        if target_url in self._thumb_inflight:
+            return
+        self._thumb_inflight.add(target_url)
+
         def worker(image_url: str, requested_game: str, requested_slug: str) -> None:
             image_bytes = self._resolve_and_download_box_art_bytes(image_url, requested_game, requested_slug)
             if image_bytes:
@@ -2558,16 +3038,24 @@ class MainWindow(QMainWindow):
         self._thumb_cache[target_url] = scaled_base
         waiters = self._thumb_waiters.pop(target_url, [])
         self._thumb_inflight.discard(target_url)
-        for label, width, height in waiters:
+        for target, width, height, _game_name in waiters:
             try:
-                label.setPixmap(
-                    scaled_base.scaled(
-                        width,
-                        height,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
+                resolved_target = target() if isinstance(target, weakref.ReferenceType) else target
+                if resolved_target is None:
+                    continue
+                if isinstance(resolved_target, GameCard):
+                    resolved_target.set_pixmap(scaled_base)
+                elif isinstance(resolved_target, QLabel):
+                    resolved_target.setPixmap(
+                        scaled_base.scaled(
+                            width,
+                            height,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
                     )
-                )
+                else:
+                    continue
             except RuntimeError:
                 continue
 
@@ -2575,17 +3063,25 @@ class MainWindow(QMainWindow):
         fallback = self._placeholder_box_art_pixmap()
         waiters = self._thumb_waiters.pop(target_url, [])
         self._thumb_inflight.discard(target_url)
-        for label, width, height, game_name in waiters:
+        for target, width, height, game_name in waiters:
             candidate = self._generated_game_placeholder(game_name) if game_name.strip() else fallback
             try:
-                label.setPixmap(
-                    candidate.scaled(
-                        width,
-                        height,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
+                resolved_target = target() if isinstance(target, weakref.ReferenceType) else target
+                if resolved_target is None:
+                    continue
+                if isinstance(resolved_target, GameCard):
+                    resolved_target.set_pixmap(candidate)
+                elif isinstance(resolved_target, QLabel):
+                    resolved_target.setPixmap(
+                        candidate.scaled(
+                            width,
+                            height,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
                     )
-                )
+                else:
+                    continue
             except RuntimeError:
                 continue
 
@@ -2642,6 +3138,7 @@ class MainWindow(QMainWindow):
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
             self.farming_now_state.setText(self._t("farming_state_running") if self.timer.isActive() else self._t("farming_state_stopped"))
+            self._refresh_active_drops_panel(None)
             self._refresh_last_update_label()
             return
 
@@ -2664,6 +3161,7 @@ class MainWindow(QMainWindow):
             self.farming_now_progress.setValue(0)
             self.farming_now_game_image.clear()
             self.farming_now_state.setText(self._t("farming_state_running") if self.timer.isActive() else self._t("farming_state_stopped"))
+            self._refresh_active_drops_panel(None)
             self._refresh_last_update_label()
             return
 
@@ -2702,7 +3200,102 @@ class MainWindow(QMainWindow):
             game_name=campaign.game_name,
             game_slug=campaign.game_slug,
         )
+        self._refresh_active_drops_panel(campaign)
         self._refresh_last_update_label()
+
+    def _refresh_active_drops_panel(self, active_campaign: DropCampaign | None) -> None:
+        self.active_drops_list.clear()
+        if active_campaign is None:
+            self.active_drops_group.setTitle(self._t("active_drops_group"))
+            self.active_drops_list.addItem(self._t("active_drops_empty"))
+            return
+
+        self.active_drops_group.setTitle(
+            self._t("active_drops_group_game", game=active_campaign.game_name)
+        )
+        drops = [
+            item for item in (active_campaign.drops or [])
+            if isinstance(item, dict)
+        ]
+        has_items = False
+        for drop in drops:
+            name = str(drop.get("name") or self._t("drop_unknown")).strip()
+            required = int(drop.get("required_minutes") or 0)
+            current = int(drop.get("current_minutes") or 0)
+            is_claimed = bool(drop.get("claimed"))
+            image_url = str(drop.get("image_url") or "").strip()
+
+            row = QWidget()
+            row.setMinimumWidth(152)
+            row.setStyleSheet("background: #171922; border: 1px solid #2c3140; border-radius: 8px;")
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(8, 8, 8, 8)
+            row_layout.setSpacing(6)
+
+            thumb = QLabel()
+            thumb.setFixedSize(116, 72)
+            thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb.setStyleSheet("border: 1px solid #2f3340; border-radius: 6px; background: #151823;")
+            row_layout.addWidget(thumb, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+            content = QWidget()
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.setSpacing(3)
+
+            name_label = QLabel(name)
+            name_label.setWordWrap(True)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            content_layout.addWidget(name_label)
+
+            progress_label = QLabel()
+            progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if required > 0:
+                bounded_current = min(max(current, 0), required)
+                percent = int((bounded_current / max(1, required)) * 100)
+                progress_label.setText(
+                    f"{self._t('active_drops_progress', current=bounded_current, required=required)} ({percent}%)"
+                )
+                bar = QProgressBar()
+                bar.setRange(0, 1000)
+                bar.setValue(int((bounded_current / max(1, required)) * 1000))
+                bar.setMaximumHeight(10)
+                bar.setTextVisible(False)
+                content_layout.addWidget(bar)
+            else:
+                progress_label.setText(self._t("active_drops_claimed") if is_claimed else "")
+            content_layout.addWidget(progress_label)
+
+            if is_claimed:
+                claimed_label = QLabel(self._t("active_drops_claimed"))
+                claimed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                claimed_label.setStyleSheet("color: #50d890; font-weight: 600;")
+                content_layout.addWidget(claimed_label)
+
+            row_layout.addWidget(content, 1)
+
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(160, 130))
+            self.active_drops_list.addItem(item)
+            self.active_drops_list.setItemWidget(item, row)
+
+            self._queue_box_art_load(
+                image_url or active_campaign.game_box_art_url,
+                thumb,
+                width=116,
+                height=72,
+                game_name=active_campaign.game_name,
+                game_slug=active_campaign.game_slug,
+                prefer_direct_url=bool(image_url),
+            )
+            has_items = True
+
+        if self._campaign_matches_hide_sub_only(active_campaign):
+            self.active_drops_list.addItem(self._t("active_drops_subscription_hint"))
+            has_items = True
+
+        if not has_items:
+            self.active_drops_list.addItem(self._t("active_drops_empty"))
 
     def _reason_text(self, decision: FarmDecision) -> str:
         if decision.reason_code == "game_filtered":
@@ -2830,20 +3423,19 @@ class MainWindow(QMainWindow):
             else:
                 widget.deleteLater()
 
-        # Obtém os jogos da whitelist (compatível com config antiga por label)
+        # Obtém os jogos da whitelist (compatível com config antiga por label).
+        # If nothing is selected, default to showing all currently available games.
         selected_values = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
         selected_tokens = {value.casefold() for value in selected_values if isinstance(value, str) and value.strip()}
         if not selected_tokens:
-            self.dashboard_no_games.setText(self._t("dashboard_empty"))
-            self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
-            return
-
-        # Filtra apenas os jogos na whitelist (suporta key e label)
-        filtered_games = [
-            entry
-            for entry in self.available_game_entries
-            if entry.key.casefold() in selected_tokens or entry.label.casefold() in selected_tokens
-        ]
+            filtered_games = list(self.available_game_entries)
+        else:
+            # Filtra apenas os jogos na whitelist (suporta key e label)
+            filtered_games = [
+                entry
+                for entry in self.available_game_entries
+                if entry.key.casefold() in selected_tokens or entry.label.casefold() in selected_tokens
+            ]
 
         if not filtered_games:
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
@@ -2859,11 +3451,35 @@ class MainWindow(QMainWindow):
                 if self._decision_is_farmable_now(decision):
                     farmable_game_labels.add(decision.campaign.game_name)
 
+        campaigns_by_game: dict[str, list[DropCampaign]] = {}
+        if self.latest_snapshot:
+            for campaign in self.latest_snapshot.campaigns:
+                key = campaign.game_name.casefold()
+                campaigns_by_game.setdefault(key, []).append(campaign)
+
         # Popula a grelha (3 colunas)
         columns = 3
-        for idx, entry in enumerate(sorted(filtered_games, key=lambda e: e.label.casefold())):
-            row = idx // columns
-            col = idx % columns
+        visible_index = 0
+        for entry in sorted(filtered_games, key=lambda e: e.label.casefold()):
+
+            related_campaigns = campaigns_by_game.get(entry.label.casefold(), [])
+            actionable_campaigns = [
+                item
+                for item in related_campaigns
+                if not item.all_drops_claimed
+            ]
+            non_subscription_actionable_campaigns = [
+                item
+                for item in actionable_campaigns
+                if not self._campaign_matches_hide_sub_only(item)
+            ]
+            subscription_only_game = bool(actionable_campaigns) and not non_subscription_actionable_campaigns
+            if self.dashboard_hide_sub_only_checkbox.isChecked() and subscription_only_game:
+                continue
+
+            row = visible_index // columns
+            col = visible_index % columns
+            visible_index += 1
 
             is_farming = (entry.label == active_game_label and active_decision is not None)
             has_live   = entry.label in farmable_game_labels
@@ -2902,6 +3518,16 @@ class MainWindow(QMainWindow):
             )
 
             self.dashboard_games_grid.addWidget(card, row, col)
+            self._queue_game_card_art_load(
+                box_art_url,
+                card,
+                game_name=entry.label,
+                game_slug=best_decision.campaign.game_slug if best_decision is not None else "",
+            )
+
+        if visible_index == 0:
+            self.dashboard_no_games.setText(self._t("dashboard_empty"))
+            self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
 
     def _force_farm_game(self, game_key: str, game_label: str) -> None:
         """Força o farm de um jogo específico clicado no dashboard."""
@@ -2920,8 +3546,10 @@ class MainWindow(QMainWindow):
             return
 
         # Força o farm deste jogo
+        self._forced_farm_game = game_label
         self._forced_farm_campaign_id = best_decision.campaign.id
         self._forced_farm_channel = best_decision.stream.login
+        self._refresh_dashboard_games()
         self._refresh_farming_now()
         self._streamless_heartbeat_tick()
         self._log(
@@ -3074,6 +3702,227 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_priority_label()
 
+    def handle_energy_profile_change(self, profile_name: str) -> None:
+        """Handle energy profile selection change."""
+        self.config.energy_profile = profile_name
+        profile = get_profile_by_name(profile_name)
+        if profile:
+            logger.info(f"Perfil de energia alterado para: {profile_name}")
+            self.config.watchdog_stall_timeout_min = profile.watchdog_stall_timeout_min
+            if hasattr(self, "watchdog_timeout_spinbox"):
+                self.watchdog_timeout_spinbox.setValue(profile.watchdog_stall_timeout_min)
+
+    def handle_watchdog_toggle(self, checked: bool) -> None:
+        """Handle watchdog enable/disable."""
+        self.config.watchdog_enabled = checked
+        self.watchdog_timeout_spinbox.setEnabled(checked)
+        logger.info(f"Watchdog: {'ativado' if checked else 'desativado'}")
+
+    def handle_alert_toggle(self, alert_type: AlertType, checked: bool) -> None:
+        """Handle alert enable/disable."""
+        config_key = f"alert_{alert_type.value}"
+        setattr(self.config, config_key, checked)
+        alert_manager = get_alert_manager()
+        alert_manager.set_alert_enabled(alert_type, checked)
+        logger.info(f"Alerta {alert_type.value}: {'ativado' if checked else 'desativado'}")
+
+    def handle_autoupdate_toggle(self, checked: bool) -> None:
+        """Handle auto-update enable/disable."""
+        self.config.auto_update_enabled = checked
+        self.autoupdate_delay_spinbox.setEnabled(checked)
+        logger.info(f"Auto-update: {'ativado' if checked else 'desativado'}")
+
+    def handle_dashboard_hide_sub_only_toggle(self, checked: bool) -> None:
+        """Handle hide subscription-only games toggle."""
+        self.config.dashboard_hide_subscription_required = checked
+        self._refresh_dashboard_games()
+        if checked and self.latest_snapshot is not None:
+            has_sub_only = any(
+                self._campaign_matches_hide_sub_only(campaign) and not campaign.all_drops_claimed
+                for campaign in self.latest_snapshot.campaigns
+            )
+            if not has_sub_only:
+                self._log("Não há jogos com drops de subs detetados neste ciclo.")
+
+    def handle_run_diagnostic(self) -> None:
+        """Run diagnostic tests."""
+        if self._diag_future is not None:
+            self.update_status_label.setText(self._t("status_diag_running"))
+            self._log(self._t("status_diag_running"))
+            return
+        if self._update_future is not None:
+            # Keep a single heavy background operation at a time to avoid lockups.
+            self.update_status_label.setText(self._t("status_updates_checking"))
+            self._log(self._t("status_updates_checking"))
+            return
+        self.btn_diagnostic.setEnabled(False)
+        self.btn_check_updates.setEnabled(False)
+        self.update_status_label.setText(self._t("status_diag_running"))
+        self._log(self._t("status_diag_running"))
+
+        def run_diag():
+            try:
+                from .diagnostic import DiagnosticEngine
+
+                engine = DiagnosticEngine(self.client)
+                report = asyncio.run(engine.run_all_diagnostics())
+                tests: dict[str, dict[str, object]] = {}
+                for item in report.results:
+                    tests[item.name] = {
+                        "status": item.status.value,
+                        "message": item.message,
+                        "duration_ms": round(item.duration_ms, 1),
+                    }
+                return {
+                    "overall_status": report.overall_status.value,
+                    "summary": report.summary,
+                    "tests": tests,
+                }
+            except Exception as e:
+                logger.exception("Erro ao executar diagnósticos")
+                return {"error": str(e), "overall_status": "failed"}
+
+        self._diag_future = self.executor.submit(run_diag)
+        self._diag_started_at = datetime.now()
+        self._diag_poll_timer.start()
+
+    def _poll_diagnostic_future(self) -> None:
+        future = self._diag_future
+        if future is None:
+            self._diag_poll_timer.stop()
+            return
+
+        if future.done():
+            self._diag_poll_timer.stop()
+            self._diag_future = None
+            self._diag_started_at = None
+            try:
+                results = future.result()
+                status = results.get("overall_status", "unknown")
+                report_text = self._format_diagnostic_report(results)
+                self.update_status_label.setText(report_text)
+                self._log(self._t("status_diag_done"))
+                self._log(f"Diagnostic status: {status}")
+                for line in report_text.splitlines():
+                    self._log(line)
+                logger.info(f"Diagnóstico concluído: {status}")
+            except Exception as exc:
+                self.update_status_label.setText(self._t("status_operation_error", error=exc))
+                QMessageBox.warning(
+                    self,
+                    self._t("btn_diagnostic"),
+                    self._t("status_operation_error", error=exc),
+                )
+                logger.exception("Erro ao processar resultado diagnóstico")
+            finally:
+                self.btn_diagnostic.setEnabled(True)
+                if self._update_future is None:
+                    self.btn_check_updates.setEnabled(True)
+            return
+
+        if self._diag_started_at and (datetime.now() - self._diag_started_at).total_seconds() > 90:
+            self._diag_poll_timer.stop()
+            self._diag_future = None
+            self._diag_started_at = None
+            self.update_status_label.setText(self._t("status_diag_timeout"))
+            self._log(self._t("status_diag_timeout"))
+            QMessageBox.warning(self, self._t("btn_diagnostic"), self._t("status_diag_timeout"))
+            self.btn_diagnostic.setEnabled(True)
+            if self._update_future is None:
+                self.btn_check_updates.setEnabled(True)
+            return
+
+    def handle_check_updates(self) -> None:
+        """Check for updates."""
+        if self._update_future is not None:
+            self.update_status_label.setText(self._t("status_updates_checking"))
+            self._log(self._t("status_updates_checking"))
+            return
+        if self._diag_future is not None:
+            self.update_status_label.setText(self._t("status_diag_running"))
+            self._log(self._t("status_diag_running"))
+            return
+        self.btn_check_updates.setEnabled(False)
+        self.btn_diagnostic.setEnabled(False)
+        self.update_status_label.setText(self._t("status_updates_checking"))
+        self._log(self._t("status_updates_checking"))
+
+        def check_updates():
+            try:
+                from . import __version__
+                current = __version__
+                latest_info = updater.check_for_updates(current)
+                return latest_info
+            except Exception as e:
+                logger.exception("Erro ao verificar atualizações")
+                return {"error": str(e), "update_available": False}
+
+        self._update_future = self.executor.submit(check_updates)
+        self._update_started_at = datetime.now()
+        self._update_poll_timer.start()
+
+    def _poll_update_future(self) -> None:
+        future = self._update_future
+        if future is None:
+            self._update_poll_timer.stop()
+            return
+
+        if future.done():
+            self._update_poll_timer.stop()
+            self._update_future = None
+            self._update_started_at = None
+            try:
+                info = future.result()
+                if info is None:
+                    status_message = self._t("status_updates_failed")
+                elif isinstance(info, dict):
+                    if info.get("error"):
+                        status_message = self._t("status_operation_error", error=info["error"])
+                    elif info.get("update_available"):
+                        status_message = self._t(
+                            "status_updates_available",
+                            version=info.get("latest_version", "desconhecida"),
+                            url=info.get("download_url", "N/A"),
+                        )
+                    else:
+                        status_message = self._t("status_updates_uptodate")
+                elif info.is_update_available:
+                    status_message = self._t(
+                        "status_updates_available",
+                        version=info.latest or "desconhecida",
+                        url=info.download_url or "N/A",
+                    )
+                else:
+                    status_message = self._t("status_updates_uptodate")
+                self.update_status_label.setText(status_message)
+                self._log(status_message)
+                logger.info("Verificação de atualização concluída")
+            except Exception as exc:
+                self.update_status_label.setText(self._t("status_operation_error", error=exc))
+                QMessageBox.warning(
+                    self,
+                    self._t("btn_check_updates"),
+                    self._t("status_operation_error", error=exc),
+                )
+                logger.exception("Erro ao processar resultado de atualização")
+            finally:
+                self.btn_check_updates.setEnabled(True)
+                if self._diag_future is None:
+                    self.btn_diagnostic.setEnabled(True)
+            return
+
+        if self._update_started_at and (datetime.now() - self._update_started_at).total_seconds() > 45:
+            self._update_poll_timer.stop()
+            self._update_future = None
+            self._update_started_at = None
+            self.update_status_label.setText(self._t("status_updates_timeout"))
+            self._log(self._t("status_updates_timeout"))
+            QMessageBox.warning(self, self._t("btn_check_updates"), self._t("status_updates_timeout"))
+            self.btn_check_updates.setEnabled(True)
+            if self._diag_future is None:
+                self.btn_diagnostic.setEnabled(True)
+            return
+
     def handle_login(self) -> None:
         self._with_errors(self._do_login)
 
@@ -3135,6 +3984,7 @@ class MainWindow(QMainWindow):
         self.config.theme = self._current_theme()
         self.config.sort_mode = self._current_sort_mode()
         self.config.auto_claim_drops = self.auto_claim_checkbox.isChecked()
+        self.config.dashboard_hide_subscription_required = self.dashboard_hide_sub_only_checkbox.isChecked()
         save_config(self.config)
         self.engine.config = self.config
         self._log(self._t("settings_saved"))
@@ -3210,6 +4060,7 @@ class MainWindow(QMainWindow):
         for message in self.client.consume_diagnostics():
             self._log(message)
         if claimed > 0:
+            self.refresh_snapshot()
             self._log(self._t("redeem_auto_done", count=claimed) if auto_mode else self._t("redeem_done", count=claimed))
             return claimed
         if not auto_mode:
@@ -3288,16 +4139,124 @@ class MainWindow(QMainWindow):
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.executor.shutdown(wait=False)
         self._thumb_executor.shutdown(wait=False)
         super().closeEvent(event)
 
 
 def run() -> None:
+    def _global_excepthook(exc_type, exc_value, exc_traceback) -> None:
+        try:
+            log_dir = Path.home() / ".twitch-drop-farmer"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            crash_log = log_dir / "crash.log"
+            with crash_log.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n[{datetime.now().isoformat()}] Uncaught exception\n")
+                handle.writelines(traceback.format_exception(exc_type, exc_value, exc_traceback))
+                handle.write("\n")
+        except Exception:
+            pass
+
+        try:
+            QMessageBox.critical(
+                None,
+                "Twitch Drop Farmer",
+                "Ocorreu um erro inesperado.\n"
+                "Foi guardado em ~/.twitch-drop-farmer/crash.log",
+            )
+        except Exception:
+            pass
+
+    sys.excepthook = _global_excepthook
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "NightmareFTW.TwitchDropFarmer"
+            )
+        except Exception:
+            pass
+
     app = QApplication([])
-    _icon = QIcon(str(_ASSETS_DIR / "icon.png"))
+    _ico_path = _ASSETS_DIR / "icon.ico"
+    _png_path = _ASSETS_DIR / "icon.png"
+    _icon = QIcon()
+    for _candidate in (_ico_path, _png_path):
+        if _candidate.exists():
+            _probe = QIcon(str(_candidate))
+            if not _probe.isNull():
+                _icon = _probe
+                break
     if not _icon.isNull():
         app.setWindowIcon(_icon)
+    app.setApplicationName("TwitchDropFarmer")
     win = MainWindow()
-    win.setWindowIcon(_icon)
+    if not _icon.isNull():
+        win.setWindowIcon(_icon)
     win.show()
+
+    if not _icon.isNull():
+        for widget in app.topLevelWidgets():
+            try:
+                widget.setWindowIcon(_icon)
+            except Exception:
+                continue
+
+    # Force the correct icon via Win32 API (bypasses Qt/taskbar cache edge cases)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            WM_SETICON = 0x0080
+            ICON_SMALL = 0
+            ICON_BIG = 1
+            IMAGE_ICON = 1
+            LR_LOADFROMFILE = 0x0010
+            GCLP_HICON = -14
+            GCLP_HICONSM = -34
+
+            # Must declare correct return types for 64-bit handles; ctypes defaults
+            # to c_int (32-bit) which silently truncates 64-bit HICON values.
+            _user32 = ctypes.windll.user32
+            _user32.LoadImageW.restype = ctypes.c_void_p
+            _user32.LoadImageW.argtypes = [
+                ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
+                ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+            ]
+            _user32.SendMessageW.restype = ctypes.c_ssize_t
+            _user32.SendMessageW.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+            ]
+            _user32.SetClassLongPtrW.restype = ctypes.c_size_t
+            _user32.SetClassLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+
+            _native_icon_path = _ico_path if _ico_path.exists() else _png_path
+
+            def _apply_native_icon() -> None:
+                hwnd = int(win.winId())
+                icon_str = str(_native_icon_path)
+                hicon_big = _user32.LoadImageW(
+                    None, icon_str, IMAGE_ICON, 32, 32, LR_LOADFROMFILE
+                )
+                hicon_small = _user32.LoadImageW(
+                    None, icon_str, IMAGE_ICON, 16, 16, LR_LOADFROMFILE
+                )
+                if hicon_big:
+                    _user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+                if hicon_small:
+                    _user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+
+                # Also set class icons: some Windows builds/taskbar paths read class icon first.
+                if hicon_big:
+                    _user32.SetClassLongPtrW(hwnd, GCLP_HICON, hicon_big)
+                if hicon_small:
+                    _user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, hicon_small)
+
+            _apply_native_icon()
+            QTimer.singleShot(0, _apply_native_icon)
+            QTimer.singleShot(250, _apply_native_icon)
+            QTimer.singleShot(1000, _apply_native_icon)
+        except Exception:
+            pass
+
     app.exec()

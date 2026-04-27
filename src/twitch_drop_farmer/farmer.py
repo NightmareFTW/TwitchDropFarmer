@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 
 from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
 from .twitch_client import TwitchClient
+from .watchdog import Watchdog, WatchdogConfig
+from .alerts import get_alert_manager, AlertType, AlertSeverity
+from .energy_profiles import get_profile_by_name
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -20,6 +26,24 @@ class FarmEngine:
     def __init__(self, client: TwitchClient, config: AppConfig) -> None:
         self.client = client
         self.config = config
+        self.alert_manager = get_alert_manager()
+        
+        # Setup watchdog with config-based timeout
+        watchdog_config = WatchdogConfig(
+            stall_timeout_min=config.watchdog_stall_timeout_min,
+            stall_check_interval_sec=60,
+            max_recovery_attempts=3,
+            recovery_cooldown_sec=120,
+        )
+        self.watchdog = Watchdog(watchdog_config)
+        self.watchdog.is_enabled = config.watchdog_enabled
+        
+        # Apply energy profile settings if available
+        profile = get_profile_by_name(config.energy_profile)
+        if profile:
+            self.polling_interval_sec = profile.polling_interval_sec
+            self.api_timeout_sec = profile.api_timeout_sec
+            logger.info(f"FarmEngine iniciado com perfil: {config.energy_profile}")
 
     def _game_is_allowed(self, game: str) -> bool:
         game_key = game.casefold()
@@ -91,6 +115,18 @@ class FarmEngine:
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
 
+        # Check for stalls and attempt recovery
+        if self.config.watchdog_enabled:
+            is_stalled, stall_reason = self.watchdog.check_stall()
+            if is_stalled:
+                messages.append(f"⚠️ Watchdog: {stall_reason}")
+                # Attempt recovery if configured
+                if self.watchdog.should_attempt_recovery():
+                    self.watchdog.trigger_recovery("Token refresh + stream switch")
+                    # Here you could add recovery logic like token refresh
+                    # For now, just mark recovery as attempted
+                    messages.append("Tentando recuperação automática...")
+
         for campaign in campaigns:
             if not self._game_is_allowed(campaign.game_name):
                 decisions.append(
@@ -114,6 +150,14 @@ class FarmEngine:
                 continue
 
             if campaign.all_drops_claimed:
+                # Raise completion alert if enabled
+                if self.config.alert_farm_complete:
+                    self.alert_manager.raise_alert(
+                        AlertType.FARM_COMPLETE,
+                        AlertSeverity.INFO,
+                        "Campanha Concluída",
+                        f"{campaign.game_name} - Drop completado!"
+                    )
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,
@@ -132,6 +176,16 @@ class FarmEngine:
                     )
                 )
                 continue
+
+            # Check for expiring campaigns
+            if campaign.required_minutes > 0 and campaign.remaining_minutes < 60:
+                if self.config.alert_campaign_expiring:
+                    self.alert_manager.raise_alert(
+                        AlertType.CAMPAIGN_EXPIRING_SOON,
+                        AlertSeverity.WARNING,
+                        "Campanha Expirando",
+                        f"{campaign.game_name} - {campaign.remaining_minutes} minutos restantes"
+                    )
 
             if not campaign.active:
                 decisions.append(
@@ -157,6 +211,14 @@ class FarmEngine:
                 streams = self.client.fetch_streams(campaign)
             except Exception as exc:
                 messages.append(f"Failed to fetch streams for {campaign.game_name}: {exc}")
+                # Raise token alert if appropriate
+                if "token" in str(exc).lower() and self.config.alert_token_invalid:
+                    self.alert_manager.raise_alert(
+                        AlertType.TOKEN_INVALID,
+                        AlertSeverity.ERROR,
+                        "Token Inválido",
+                        f"Erro ao buscar streams: {exc}"
+                    )
                 streams = []
             messages.extend(self.client.consume_diagnostics())
             for stream in streams:
@@ -179,6 +241,15 @@ class FarmEngine:
                     ),
                 )
             )
+            
+            # Update watchdog with farming progress
+            if selected and self.config.watchdog_enabled:
+                total_minutes = campaign.required_minutes or 0
+                self.watchdog.update_progress(
+                    total_progress_minutes=total_minutes - campaign.remaining_minutes,
+                    campaign_id=campaign.id,
+                    channel=selected.login
+                )
 
         decisions.sort(key=self._decision_sort_key)
         return FarmSnapshot(

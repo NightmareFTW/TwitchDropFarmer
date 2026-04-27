@@ -4,15 +4,18 @@
 
 A Python + PySide6 desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
 
+Current version: `2.0.24`
+
 ## About the project
 
 Twitch Drop Farmer has evolved into a more resilient and predictable farming client:
 
 - Dashboard states now reflect real campaign outcomes (Active, Not started, No stream, Completed, Lost, Subscription required).
-- Target selection is safer, with fallback handling when Twitch ACL payloads contain inconsistent channel labels.
+- Manual game targeting is now sticky and avoids unexpected automatic switches.
 - Filters are reorganized into sub-tabs with search and bulk actions (select/clear all and visible).
 - Farming context remains clearer even when a valid stream is temporarily unavailable.
 - Automation is designed for stable local operation without external service dependencies.
+- Diagnostics and update checks provide clearer status and compact test reporting.
 
 ## Highlights
 
@@ -22,6 +25,16 @@ Twitch Drop Farmer has evolved into a more resilient and predictable farming cli
 - Whitelist and blacklist filters (games and channels)
 - Manual and automatic drop redemption
 - Real-time farming status (game, campaign, channel, progress, ETA)
+- Durable session JSON import/export mode
+
+## What's new in 2.0.24
+
+- Fixed false critical OAuth diagnostic failures for durable session users.
+- Diagnostics now run in a safe mode without rendered browser fallback in worker threads.
+- Added compact diagnostic report table (`Test | Status | Time | Message`).
+- Improved subscription-only hiding logic for campaigns with missing actionable metadata.
+- Dashboard grid now compacts correctly after hidden-game filtering.
+- Fixed manual target behavior so selected games stay selected reliably.
 
 ## Quick Start
 
@@ -64,6 +77,7 @@ Notes:
 
 - `v*` tags can now trigger an automated Windows release build through GitHub Actions.
 - The release publishes `TwitchDropFarmer-win64.zip` as an asset.
+- Release notes for this version: `docs/releases/v2.0.24.en.md` and `docs/releases/v2.0.24.pt-PT.md`.
 
 ## Authentication
 
@@ -72,6 +86,11 @@ Use your Twitch auth-token cookie value inside the app (Account tab).
 - Paste only the cookie value
 - Do not include the cookie name
 - Do not include the OAuth prefix
+
+Durable session alternative:
+
+- Import session JSON in the Account tab.
+- Save and refresh.
 
 ## Screenshots
 

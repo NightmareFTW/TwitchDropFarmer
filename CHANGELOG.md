@@ -6,6 +6,31 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.0.24] - 2026-04-27
+
+### Added
+
+- Durable diagnostics report formatting with compact per-test table (`Test | Status | Time | Message`).
+- Safer diagnostics execution path that disables rendered browser fallback in background threads.
+- Unified subscription-only hide matching for dashboard and active-drops cues, including metadata-sparse campaigns.
+
+### Changed
+
+- Manual dashboard target selection now sets and keeps explicit game-level target state.
+- Dashboard hide-sub-only flow now compacts visible cards without layout gaps.
+- Diagnostics and update checks now provide immediate in-app/log feedback during active operations.
+
+### Fixed
+
+- Fixed a false critical diagnostic failure caused by an invalid OAuth check call (`is_token_valid`).
+- Prevented occasional UI shutdown during diagnostics by avoiding Qt WebEngine operations in worker thread diagnostic path.
+- Corrected filter tab title/count refresh behavior after recent UI regressions.
+
+### Release Notes
+
+- PT: [docs/releases/v2.0.24.pt-PT.md](docs/releases/v2.0.24.pt-PT.md)
+- EN: [docs/releases/v2.0.24.en.md](docs/releases/v2.0.24.en.md)
+
 ## [1.2.0] - 2026-04-22
 
 ### Added

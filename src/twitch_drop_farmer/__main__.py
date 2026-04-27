@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import sys
 
 
@@ -31,6 +32,15 @@ def _qt_import_help(exc: ImportError) -> str:
 
 
 def main() -> int:
+    # Set AppUserModelID so Windows groups taskbar windows under app identity.
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "NightmareFTW.TwitchDropFarmer"
+            )
+        except Exception:
+            pass
+
     try:
         from .ui import run
     except ModuleNotFoundError as exc:
