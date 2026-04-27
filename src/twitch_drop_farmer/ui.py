@@ -20,13 +20,32 @@ from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradien
 
 
 def _resolve_assets_dir() -> Path:
+    source_assets = Path(__file__).resolve().parent / "assets"
     if getattr(sys, "frozen", False):
+        candidates: list[Path] = []
         meipass = Path(getattr(sys, "_MEIPASS", ""))
         if meipass:
-            frozen_assets = meipass / "twitch_drop_farmer" / "assets"
-            if frozen_assets.exists():
-                return frozen_assets
-    return Path(__file__).resolve().parent / "assets"
+            candidates.extend(
+                [
+                    meipass / "twitch_drop_farmer" / "assets",
+                    meipass / "assets",
+                ]
+            )
+
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                exe_dir / "_internal" / "twitch_drop_farmer" / "assets",
+                exe_dir / "twitch_drop_farmer" / "assets",
+                exe_dir / "assets",
+            ]
+        )
+
+        for path in candidates:
+            if path.exists():
+                return path
+
+    return source_assets
 
 
 _ASSETS_DIR = _resolve_assets_dir()
@@ -4222,6 +4241,10 @@ def run() -> None:
             if not _probe.isNull():
                 _icon = _probe
                 break
+    if _icon.isNull() and getattr(sys, "frozen", False):
+        _probe = QIcon(sys.executable)
+        if not _probe.isNull():
+            _icon = _probe
     if not _icon.isNull():
         app.setWindowIcon(_icon)
     app.setApplicationName("TwitchDropFarmer")
