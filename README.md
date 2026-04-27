@@ -130,6 +130,7 @@ Notas:
 - Dados sensíveis não devem ser enviados para o GitHub.
 - O projecto inclui regras de `.gitignore` para evitar exposição de dados locais.
 - O repositorio nao inclui `cookies.json`, `campaign_cache.json` nem ficheiros de sessao do utilizador.
+- Politica de seguranca e divulgacao responsavel: `SECURITY.md`.
 
 ## Capturas de ecrã
 

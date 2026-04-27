@@ -868,6 +868,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "autoupdate_delay": "Espera antes de reiniciar",
         "btn_diagnostic": "Executar diagnóstico do sistema",
         "btn_check_updates": "Procurar atualizações",
+        "btn_about": "Sobre",
         "status_diag_running": "A executar diagnóstico do sistema...",
         "status_diag_done": "Diagnóstico concluído.",
         "status_diag_timeout": "O diagnóstico excedeu o tempo de espera. Verifica ligação/token e tenta novamente.",
@@ -877,6 +878,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "status_updates_available": "Há uma atualização disponível: {version}\nTransferência: {url}",
         "status_updates_timeout": "A procura de atualizações excedeu o tempo de espera. Tenta novamente.",
         "status_operation_error": "Erro: {error}",
+        "about_title": "Sobre",
+        "about_body": (
+            "Twitch Drop Farmer automatiza o farming de Twitch Drops com foco em estabilidade, "
+            "controlo local e previsibilidade.\\n\\n"
+            "- Descoberta robusta de campanhas e selecao de stream alvo\\n"
+            "- Alvo manual por jogo com comportamento sticky\\n"
+            "- Filtros avancados para manter o farm limpo\\n"
+            "- Diagnostico integrado e sessao duradoura por JSON\\n\\n"
+            "Versao: {version}"
+        ),
         "version_corner": "v{version}",
         "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reativo (mais pedidos).",
         "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando deteta bloqueio.",
@@ -1119,6 +1130,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "autoupdate_delay": "Delay before restart",
         "btn_diagnostic": "Run diagnostics",
         "btn_check_updates": "Check updates",
+        "btn_about": "About",
         "status_diag_running": "Running system diagnostics...",
         "status_diag_done": "Diagnostics completed.",
         "status_diag_timeout": "Diagnostics exceeded the time limit. Check network/token and try again.",
@@ -1128,6 +1140,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "status_updates_available": "Update available: {version}\nDownload: {url}",
         "status_updates_timeout": "Update check exceeded the time limit. Please try again.",
         "status_operation_error": "Error: {error}",
+        "about_title": "About",
+        "about_body": (
+            "Twitch Drop Farmer automates Twitch Drops farming with a focus on stability, "
+            "local control, and predictable behavior.\\n\\n"
+            "- Robust campaign discovery and target stream selection\\n"
+            "- Per-game manual targeting with sticky behavior\\n"
+            "- Advanced filters for cleaner farming sessions\\n"
+            "- Built-in diagnostics and durable JSON session mode\\n\\n"
+            "Version: {version}"
+        ),
         "version_corner": "v{version}",
         "help_energy_profile": "Defines app behavior: more economical (fewer requests) or more responsive (more requests).",
         "help_watchdog": "Monitors lack of progress and tries automatic recovery when farming gets stuck.",
@@ -1787,8 +1809,11 @@ class MainWindow(QMainWindow):
         self.btn_diagnostic.clicked.connect(self.handle_run_diagnostic)
         self.btn_check_updates = QPushButton()
         self.btn_check_updates.clicked.connect(self.handle_check_updates)
+        self.btn_about = QPushButton()
+        self.btn_about.clicked.connect(self.handle_about_dialog)
         buttons_layout.addWidget(self.btn_diagnostic)
         buttons_layout.addWidget(self.btn_check_updates)
+        buttons_layout.addWidget(self.btn_about)
         buttons_layout.addStretch()
         preferences_layout.addLayout(buttons_layout)
         
@@ -2509,6 +2534,7 @@ class MainWindow(QMainWindow):
         self.autoupdate_delay_help_icon.setToolTip(self._t("help_autoupdate_delay"))
         self.btn_diagnostic.setText(self._t("btn_diagnostic"))
         self.btn_check_updates.setText(self._t("btn_check_updates"))
+        self.btn_about.setText(self._t("btn_about"))
         for alert_type, checkbox in self.alert_checkboxes.items():
             checkbox.setText(self._t(f"alert_type_{alert_type.value}"))
         for alert_type, help_icon in self.alert_help_icons.items():
@@ -3922,6 +3948,14 @@ class MainWindow(QMainWindow):
             if self._diag_future is None:
                 self.btn_diagnostic.setEnabled(True)
             return
+
+    def handle_about_dialog(self) -> None:
+        """Show project about dialog."""
+        QMessageBox.about(
+            self,
+            self._t("about_title"),
+            self._t("about_body", version=__version__),
+        )
 
     def handle_login(self) -> None:
         self._with_errors(self._do_login)
