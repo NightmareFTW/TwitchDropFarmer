@@ -117,6 +117,12 @@ Durable session alternative:
 
 ![Settings View](docs/images/ui-settings.png)
 
+## Troubleshooting
+
+- App icon still looks stale on Windows:
+	- Run `tools\\refresh_icon_cache.ps1` in PowerShell to clear icon cache and restart Explorer.
+	- Non-interactive alternative: `powershell -ExecutionPolicy Bypass -File .\\tools\\refresh_icon_cache.ps1 -Force`
+
 ## Notes
 
 - Twitch APIs and GraphQL behavior may change over time.

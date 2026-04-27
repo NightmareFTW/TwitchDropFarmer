@@ -175,6 +175,9 @@ requirements.txt
   - Instala `PySide6` via `conda-forge`.
 - Se persistir:
   - Reinstala o Microsoft Visual C++ Redistributable e recria a `.venv`.
+- Ícone da app continua desatualizado no Windows:
+  - Corre `tools\refresh_icon_cache.ps1` em PowerShell para limpar cache de ícones e reiniciar o Explorer.
+  - Em alternativa não interativa: `powershell -ExecutionPolicy Bypass -File .\tools\refresh_icon_cache.ps1 -Force`
 
 ## Aviso
 
