@@ -92,6 +92,13 @@ Durable session alternative:
 - Import session JSON in the Account tab.
 - Save and refresh.
 
+## Privacy and Security
+
+- Credentials and session artifacts are stored locally.
+- Sensitive data must never be published in issues or commits.
+- The repository includes ignore rules to prevent common local data leaks.
+- Responsible disclosure policy: `SECURITY.md`.
+
 ## Screenshots
 
 ### Dashboard
