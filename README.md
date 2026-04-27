@@ -2,29 +2,41 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-Aplicação desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
+Aplicacao desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotacao automatica de canais.
 
-## Sobre o projecto
+Versao atual: `2.0.24`
+
+## Sobre o projeto
 
 Twitch Drop Farmer evoluiu para um cliente de farming mais robusto e previsivel:
 
-- Dashboard com estados mais reais de campanha (Activa, Nao iniciada, Sem stream, Completa, Perdida e Subscricao requerida).
-- Selecao de alvo mais segura, com fallback para campanhas cujo ACL devolve labels inconsistentes.
-- Filtros reorganizados em sub-abas com pesquisa e accoes rapidas (selecionar/limpar todos e visiveis).
-- Melhor continuidade de contexto no painel de farming, mesmo quando uma stream valida fica temporariamente indisponivel.
-- Modo de automacao focado em estabilidade local, sem dependencia de servicos externos.
+- Dashboard com estados reais de campanha (ativa, nao iniciada, sem stream, completa, perdida e subscricao requerida).
+- Selecao manual de alvo por jogo com comportamento sticky e menos trocas inesperadas.
+- Filtros organizados em sub-abas com pesquisa, contadores e acoes em lote.
+- Modo streamless e fallback de campanhas mais tolerantes a respostas parciais da Twitch.
+- Diagnostico e verificacao de atualizacoes mais estaveis, com relatorio resumido por teste.
 
 ## Funcionalidades
 
-- Descoberta automática de campanhas activas e futuras.
-- Selecção automática do melhor alvo de farm por regras de campanha, elegibilidade e stream disponível.
-- Troca automática de jogo/canal com intervalo configurável.
+- Descoberta automatica de campanhas ativas e futuras.
+- Selecao automatica do melhor alvo de farm por regras de campanha, elegibilidade e stream disponivel.
+- Troca automatica de jogo/canal com intervalo configuravel.
 - Filtros por lista branca e lista negra de jogos e canais.
-- Botão manual para resgatar drops.
-- Opção de redenção automática periódica.
+- Botao manual para resgatar drops.
+- Opcao de redencao automatica periodica.
 - Estado de farming em tempo real (jogo, campanha, canal, progresso e ETA).
-- Suporte a vários temas na interface.
-- Persistência local de sessão e configurações.
+- Suporte a multiplos temas na interface.
+- Persistencia local de sessao e configuracoes.
+- Modo de sessao duradoura por JSON (import/export de sessao).
+
+## Novidades da 2.0.24
+
+- Correcao de falso critico no diagnostico OAuth para utilizadores em modo de sessao duradoura.
+- Diagnostico executado em modo seguro (sem fallback renderizado em background), evitando crash da janela.
+- Relatorio de diagnostico com tabela compacta (Test | Status | Time | Message).
+- Dashboard hide sub-only melhorado para campanhas sem metadados acionaveis.
+- Grelha de jogos reorganizada apos ocultacao para eliminar espacos em branco.
+- Alvo manual por jogo corrigido para manter selecao consistente.
 
 ## Requisitos
 
@@ -92,6 +104,7 @@ Notas:
 
 - Tags `v*` passam a poder gerar automaticamente um build Windows via GitHub Actions.
 - A release publica o pacote `TwitchDropFarmer-win64.zip` como asset.
+- Notas de release desta versao: `docs/releases/v2.0.24.pt-PT.md` e `docs/releases/v2.0.24.en.md`.
 
 ## Como autenticar
 
@@ -99,6 +112,12 @@ Notas:
 2. Abre a app e vai a Conta.
 3. Cola o valor do cookie `auth-token` (apenas o valor).
 4. Guarda e valida.
+
+Alternativa (sessao duradoura):
+
+1. Exporta a sessao JSON no browser/perfil onde tens login ativo.
+2. Importa esse JSON na aba Conta.
+3. Guarda e faz refresh.
 
 Notas:
 
@@ -110,6 +129,7 @@ Notas:
 - Credenciais e sessão ficam guardadas localmente.
 - Dados sensíveis não devem ser enviados para o GitHub.
 - O projecto inclui regras de `.gitignore` para evitar exposição de dados locais.
+- O repositorio nao inclui `cookies.json`, `campaign_cache.json` nem ficheiros de sessao do utilizador.
 
 ## Capturas de ecrã
 

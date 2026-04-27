@@ -7,6 +7,8 @@ $distDir = Join-Path $projectRoot "dist"
 $bundleDir = Join-Path $distDir "TwitchDropFarmer"
 $archivePath = Join-Path $distDir "TwitchDropFarmer-win64.zip"
 $iconPath = Join-Path $projectRoot "src\twitch_drop_farmer\assets\icon.ico"
+$assetsSource = Join-Path $projectRoot "src\twitch_drop_farmer\assets"
+$assetsTarget = "twitch_drop_farmer\assets"
 $specPath = Join-Path $projectRoot "TwitchDropFarmer.spec"
 
 if (Test-Path $venvPython) {
@@ -35,6 +37,7 @@ $pyInstallerArgs = @(
     "--windowed",
     "--onedir",
     "--name", "TwitchDropFarmer",
+    "--add-data", "$assetsSource;$assetsTarget",
     "--exclude-module", "tkinter",
     "--paths", (Join-Path $projectRoot "src")
 )

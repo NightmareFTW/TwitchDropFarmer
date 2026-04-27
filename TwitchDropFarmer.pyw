@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from pathlib import Path
+import subprocess
 import sys
+
+# Set AppUserModelID so Windows taskbar uses the app identity consistently.
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "NightmareFTW.TwitchDropFarmer"
+        )
+    except Exception:
+        pass
 
 
 def _show_error(title: str, message: str) -> None:
@@ -12,8 +23,31 @@ def _show_error(title: str, message: str) -> None:
     sys.stderr.write(f"{title}: {message}\n")
 
 
+def _latest_source_mtime(src_root: Path) -> float:
+    latest = 0.0
+    if not src_root.exists():
+        return latest
+    for path in src_root.rglob("*.py"):
+        try:
+            mtime = path.stat().st_mtime
+            if mtime > latest:
+                latest = mtime
+        except OSError:
+            continue
+    return latest
+
+
 def main() -> int:
     project_root = Path(__file__).resolve().parent
+
+    # For development/testing, always run the source package by default.
+    # Opt-in to launching the packaged EXE with TDF_USE_DIST=1.
+    if sys.platform == "win32" and not getattr(sys, "frozen", False):
+        packaged_exe = project_root / "dist" / "TwitchDropFarmer" / "TwitchDropFarmer.exe"
+        if packaged_exe.exists() and os.environ.get("TDF_USE_DIST") == "1":
+            subprocess.Popen([str(packaged_exe)], cwd=str(project_root))
+            return 0
+
     src_path = project_root / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))

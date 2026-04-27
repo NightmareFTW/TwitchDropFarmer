@@ -22,6 +22,18 @@ class AppConfig:
     auto_switch_interval_sec: int = 120
     auto_claim_drops: bool = False
     auth_mode: str = "token"  # "token" ou "session"
+    # v2 features
+    energy_profile: str = "Balanceado"  # Energy profile name
+    watchdog_enabled: bool = True  # Enable automatic recovery
+    watchdog_stall_timeout_min: int = 30  # Stall timeout
+    alert_campaign_expiring: bool = True
+    alert_token_invalid: bool = True
+    alert_no_progress: bool = True
+    alert_farm_complete: bool = True
+    auto_update_enabled: bool = True  # Enable automatic update + restart
+    auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
+    check_updates_on_startup: bool = True
+    dashboard_hide_subscription_required: bool = False
 
 
 def load_config() -> AppConfig:

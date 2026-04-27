@@ -49,6 +49,7 @@ ANDROID_APP_USER_AGENT = (
     "tv.twitch.android.app/25.3.0/2503006"
 )
 TWITCH_URL = "https://www.twitch.tv"
+CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
 
 INVENTORY_QUERY = {
     "operationName": "Inventory",
@@ -183,6 +184,7 @@ class TwitchClient:
         self.device_id = ""
         self.session_id = secrets.token_hex(16)
         self._load_cookies()
+        self._load_campaign_cache()
 
     def _note(self, message: str) -> None:
         self._diagnostics.append(message)
@@ -236,6 +238,90 @@ class TwitchClient:
             ),
             encoding="utf-8",
         )
+
+    def _campaign_to_cache_payload(self, campaign: DropCampaign) -> dict[str, Any]:
+        return {
+            "id": campaign.id,
+            "game_name": campaign.game_name,
+            "title": campaign.title,
+            "ends_at": campaign.ends_at.isoformat(),
+            "progress_minutes": campaign.progress_minutes,
+            "required_minutes": campaign.required_minutes,
+            "starts_at": campaign.starts_at.isoformat(),
+            "game_slug": campaign.game_slug,
+            "game_box_art_url": campaign.game_box_art_url,
+            "linked": campaign.linked,
+            "link_url": campaign.link_url,
+            "status": campaign.status,
+            "allowed_channels": list(campaign.allowed_channels),
+            "has_badge_or_emote": campaign.has_badge_or_emote,
+            "all_drops_claimed": campaign.all_drops_claimed,
+            "requires_subscription": campaign.requires_subscription,
+            "next_drop_name": campaign.next_drop_name,
+            "next_drop_remaining_minutes": campaign.next_drop_remaining_minutes,
+            "next_drop_required_minutes": campaign.next_drop_required_minutes,
+            "drops": campaign.drops,
+        }
+
+    def _campaign_from_cache_payload(self, payload: dict[str, Any]) -> DropCampaign | None:
+        campaign_id = str(payload.get("id", "") or "").strip()
+        if not campaign_id:
+            return None
+        ends_at = self._parse_timestamp(payload.get("ends_at"))
+        starts_at = self._parse_timestamp(payload.get("starts_at"))
+        return DropCampaign(
+            id=campaign_id,
+            game_name=str(payload.get("game_name", "") or ""),
+            title=str(payload.get("title", "") or ""),
+            ends_at=ends_at,
+            progress_minutes=int(payload.get("progress_minutes", 0) or 0),
+            required_minutes=int(payload.get("required_minutes", 0) or 0),
+            starts_at=starts_at,
+            game_slug=str(payload.get("game_slug", "") or ""),
+            game_box_art_url=str(payload.get("game_box_art_url", "") or ""),
+            linked=bool(payload.get("linked", True)),
+            link_url=str(payload.get("link_url", "") or ""),
+            status=str(payload.get("status", "") or ""),
+            allowed_channels=list(payload.get("allowed_channels", []) or []),
+            has_badge_or_emote=bool(payload.get("has_badge_or_emote", False)),
+            all_drops_claimed=bool(payload.get("all_drops_claimed", False)),
+            requires_subscription=bool(payload.get("requires_subscription", False)),
+            next_drop_name=str(payload.get("next_drop_name", "") or ""),
+            next_drop_remaining_minutes=int(payload.get("next_drop_remaining_minutes", 0) or 0),
+            next_drop_required_minutes=int(payload.get("next_drop_required_minutes", 0) or 0),
+            drops=list(payload.get("drops", []) or []),
+        )
+
+    def _load_campaign_cache(self) -> None:
+        if not CAMPAIGN_CACHE_FILE.exists():
+            return
+        try:
+            payload = json.loads(CAMPAIGN_CACHE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        entries = payload.get("campaigns", []) if isinstance(payload, dict) else []
+        loaded: list[DropCampaign] = []
+        now = datetime.now(timezone.utc)
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            campaign = self._campaign_from_cache_payload(item)
+            if campaign and campaign.ends_at > now:
+                loaded.append(campaign)
+        if loaded:
+            self._campaign_cache = loaded
+            self._note(f"Loaded persisted campaign cache ({len(loaded)}).")
+
+    def _save_campaign_cache(self) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "campaigns": [self._campaign_to_cache_payload(campaign) for campaign in self._campaign_cache],
+        }
+        try:
+            CAMPAIGN_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            self._note("Could not persist campaign cache to disk.")
 
     def export_session_json(self) -> str:
         """Exporta a sessão completa como JSON para importar depois (modo duradouro)."""
@@ -788,13 +874,62 @@ class TwitchClient:
                 return False
         return True
 
+    def _campaign_claimed_from_payload(self, payload: dict[str, Any]) -> bool:
+        claim_flag_keys = {
+            "allrewardsclaimed",
+            "allclaimed",
+            "alldropsclaimed",
+            "allbenefitsclaimed",
+        }
+        claim_state_keys = {
+            "campaignclaimstate",
+            "campaignrewardclaimstate",
+        }
+        claim_state_values = {
+            "all_claimed",
+            "completed",
+        }
+        candidate_nodes = [payload]
+        payload_self = payload.get("self")
+        if isinstance(payload_self, dict):
+            candidate_nodes.append(payload_self)
+        campaign_node = payload.get("campaign")
+        if isinstance(campaign_node, dict):
+            candidate_nodes.append(campaign_node)
+            campaign_self = campaign_node.get("self")
+            if isinstance(campaign_self, dict):
+                candidate_nodes.append(campaign_self)
+
+        for node in candidate_nodes:
+            for key, value in node.items():
+                key_norm = str(key).strip().replace("_", "").casefold()
+                if key_norm in claim_flag_keys and bool(value):
+                    return True
+                if key_norm in claim_state_keys and isinstance(value, str):
+                    value_norm = value.strip().replace("_", "").casefold()
+                    if value_norm in claim_state_values:
+                        return True
+        return False
+
     def _campaign_requires_subscription(self, payload: dict[str, Any], drops: list[dict[str, Any]]) -> bool:
         keyword_patterns = (
             "subscribe to redeem",
+            "subscription only",
+            "subscription-only",
+            "requires subscription",
+            "requires a subscription",
             "subscribers only",
             "subscriber only",
+            "sub only",
+            "subs only",
+            "subs-only",
             "subscricao para resgatar",
             "subscrição para resgatar",
+            "subscricao obrigatoria",
+            "subscrição obrigatória",
+            "apenas subs",
+            "apenas para subs",
+            "só para subs",
         )
 
         subscription_flag_keys = {
@@ -803,6 +938,10 @@ class TwitchClient:
             "subscriptionrequired",
             "requires_subscription",
             "is_subscriber_only",
+            "issubscriptionrequired",
+            "issubonly",
+            "subscribersonly",
+            "subscriberonly",
         }
 
         subscription_value_keys = {
@@ -811,6 +950,9 @@ class TwitchClient:
             "unlockmethod",
             "accesstype",
             "requirementtype",
+            "redemptiontype",
+            "redeemtype",
+            "eligibilitytype",
         }
 
         def walk_struct(node: Any) -> bool:
@@ -818,6 +960,8 @@ class TwitchClient:
                 for key, value in node.items():
                     key_norm = str(key).strip().replace("_", "").casefold()
                     if key_norm in subscription_flag_keys and bool(value):
+                        return True
+                    if ("subscription" in key_norm or "subscriber" in key_norm) and bool(value):
                         return True
                     if key_norm in subscription_value_keys and isinstance(value, str):
                         value_norm = value.strip().casefold()
@@ -836,6 +980,10 @@ class TwitchClient:
         def walk_strings(node: Any) -> bool:
             if isinstance(node, str):
                 text = node.strip().casefold()
+                if "sub" in text and any(
+                    token in text for token in ("redeem", "resgat", "claim", "required", "obrigat", "only")
+                ):
+                    return True
                 return any(pattern in text for pattern in keyword_patterns)
             if isinstance(node, dict):
                 for value in node.values():
@@ -859,6 +1007,64 @@ class TwitchClient:
             if walk_strings(drop):
                 return True
         return False
+
+    def _drop_progress_items(self, drops: list[dict[str, Any]]) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for drop in drops:
+            required = int(drop.get("requiredMinutesWatched", 0) or 0)
+            current = int((drop.get("self") or {}).get("currentMinutesWatched", 0) or 0)
+            claimed = bool((drop.get("self") or {}).get("isClaimed", False))
+            name = str(drop.get("name", "") or "").strip()
+            image_url = ""
+
+            def pick_image(candidate: Any) -> str:
+                if not isinstance(candidate, str):
+                    return ""
+                text = candidate.strip().replace("\\/", "/")
+                if text.startswith("http://") or text.startswith("https://"):
+                    return text
+                return ""
+
+            image_url = pick_image(drop.get("imageAssetURL") or drop.get("imageAssetUrl"))
+            if not image_url:
+                image_url = pick_image(drop.get("boxArtURL") or drop.get("boxArtUrl"))
+            for edge in drop.get("benefitEdges", []) or []:
+                benefit = edge.get("benefit", {}) or {}
+                if not name:
+                    candidate = str(benefit.get("name", "") or "").strip()
+                    if candidate:
+                        name = candidate
+                if not image_url:
+                    image_url = pick_image(
+                        benefit.get("imageAssetURL")
+                        or benefit.get("imageAssetUrl")
+                        or benefit.get("imageURL")
+                        or benefit.get("imageUrl")
+                    )
+                if name and image_url:
+                    break
+            if not name:
+                name = "Drop"
+            remaining = max(0, required - current)
+            items.append(
+                {
+                    "name": name,
+                    "image_url": image_url,
+                    "required_minutes": required,
+                    "current_minutes": min(current, required) if required > 0 else current,
+                    "remaining_minutes": remaining,
+                    "claimed": claimed,
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                bool(item.get("claimed", False)),
+                int(item.get("remaining_minutes", 0)),
+                str(item.get("name", "")).casefold(),
+            )
+        )
+        return items
 
     def _extract_drop_like_entries(self, payload: Any) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
@@ -995,13 +1201,26 @@ class TwitchClient:
 
         html = response.text
         patterns = (
-            r'"id":"([0-9a-fA-F-]{36})".{0,600}?"status":"(ACTIVE|UPCOMING)"',
-            r'\\"id\\":\\"([0-9a-fA-F-]{36})\\".{0,600}?\\"status\\":\\"(ACTIVE|UPCOMING)\\"',
+            # Standard JSON blocks.
+            r'"id"\s*:\s*"([0-9a-fA-F-]{36})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
+            r'"status"\s*:\s*"(ACTIVE|UPCOMING)".{0,2000}?"id"\s*:\s*"([0-9a-fA-F-]{36})"',
+            # Escaped JSON inside script payloads.
+            r'\\"id\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
+            r'\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\".{0,2000}?\\"id\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\"',
+            # Alternative id key names used by some Twitch payloads.
+            r'"(?:dropID|campaignId|dropCampaignId)"\s*:\s*"([0-9a-fA-F-]{36})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
+            r'\\"(?:dropID|campaignId|dropCampaignId)\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
         )
         found: dict[str, dict[str, Any]] = {}
         for pattern in patterns:
             for match in re.finditer(pattern, html, flags=re.DOTALL):
-                campaign_id, status = match.groups()
+                first, second = match.groups()
+                if first in {"ACTIVE", "UPCOMING"}:
+                    status = first
+                    campaign_id = second
+                else:
+                    campaign_id = first
+                    status = second
                 found[campaign_id] = {"id": campaign_id, "status": status}
 
         if found:
@@ -1018,9 +1237,20 @@ class TwitchClient:
 
     def _parse_browser_campaign_datetime(self, raw: str, utc_offset_hours: int) -> datetime | None:
         text = re.sub(r"\s+", " ", raw).strip()
-        try:
-            naive = datetime.strptime(text, "%a, %b %d, %I:%M %p")
-        except ValueError:
+        naive: datetime | None = None
+        formats = (
+            "%a, %b %d, %I:%M %p",
+            "%A, %b %d, %I:%M %p",
+            "%a, %b %d, %H:%M",
+            "%A, %b %d, %H:%M",
+        )
+        for fmt in formats:
+            try:
+                naive = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+        if naive is None:
             return None
         now = datetime.now()
         local_tz = timezone(timedelta(hours=utc_offset_hours))
@@ -1041,16 +1271,23 @@ class TwitchClient:
             or "subscription required" in lowered
             or "subscriber only" in lowered
             or "subscribers only" in lowered
+            or "subscrição" in lowered
+            or "subscricao" in lowered
+            or "subscrição necessária" in lowered
+            or "subscricao necessaria" in lowered
+            or "apenas subs" in lowered
         )
         schedule = lines[-1]
-        match = re.search(r"(.+?)\s+-\s+(.+?)\s+GMT([+-]\d+)", schedule)
+        match = re.search(r"(.+?)\s+-\s+(.+?)\s+(GMT|UTC)([+-]\d+)?", schedule)
         if match is None:
             return None
-        start_raw, end_raw, offset_raw = match.groups()
-        try:
-            utc_offset_hours = int(offset_raw)
-        except ValueError:
-            return None
+        start_raw, end_raw, _tz_name, offset_raw = match.groups()
+        utc_offset_hours = 0
+        if offset_raw:
+            try:
+                utc_offset_hours = int(offset_raw)
+            except ValueError:
+                return None
         starts_at = self._parse_browser_campaign_datetime(start_raw, utc_offset_hours)
         ends_at = self._parse_browser_campaign_datetime(end_raw, utc_offset_hours)
         if starts_at is None or ends_at is None:
@@ -1078,6 +1315,85 @@ class TwitchClient:
             status=status,
             requires_subscription=requires_subscription,
         )
+
+    def _campaigns_from_browser_body_text(self, body_text: str) -> list[DropCampaign]:
+        lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+        if not lines:
+            return []
+
+        start_markers = (
+            "Open Drop Campaigns",
+            "All Campaigns",
+            "Drops & Rewards",
+            "Campanhas",
+            "Campanhas abertas",
+            "Campanhas de drops abertas",
+        )
+        start_index = 0
+        for marker in start_markers:
+            if marker in lines:
+                start_index = lines.index(marker) + 1
+                break
+
+        campaigns: list[DropCampaign] = []
+        seen: set[str] = set()
+        noise_prefixes = (
+            "Some Drops campaigns may not be available",
+            "To include Drops in your streams",
+            "Learn more about Drops",
+            "Use the Right Arrow Key",
+            "Cookies and Advertising Choices",
+            "Accept",
+            "Customize",
+            "Reject",
+            "Skip to",
+            "Alt",
+        )
+        stop_markers = {
+            "Enable account linking",
+            "Frequently Asked Questions",
+            "Closed Drop Campaigns",
+            "Back to top",
+        }
+        index = start_index
+        while index < len(lines):
+            title = lines[index]
+            if title in stop_markers:
+                break
+            if title.startswith(noise_prefixes):
+                index += 1
+                continue
+
+            schedule_index: int | None = None
+            for candidate in range(index + 2, min(len(lines), index + 10)):
+                schedule_line = lines[candidate]
+                if " - " in schedule_line and ("GMT" in schedule_line or "UTC" in schedule_line):
+                    schedule_index = candidate
+                    break
+                if schedule_line in stop_markers:
+                    break
+            if schedule_index is None:
+                index += 1
+                continue
+
+            block_lines = lines[index : schedule_index + 1]
+            if len(block_lines) < 3:
+                index = schedule_index + 1
+                continue
+
+            campaign = self._campaign_from_browser_text("\n".join(block_lines))
+            if campaign is None or campaign.status == "EXPIRED":
+                index = schedule_index + 1
+                continue
+
+            fingerprint = f"{campaign.game_name}|{campaign.starts_at.isoformat()}|{campaign.ends_at.isoformat()}"
+            if fingerprint in seen:
+                index = schedule_index + 1
+                continue
+            seen.add(fingerprint)
+            campaigns.append(campaign)
+            index = schedule_index + 1
+        return campaigns
 
     def _campaigns_from_browser_page(self) -> list[DropCampaign]:
         try:
@@ -1150,26 +1466,35 @@ class TwitchClient:
 
             def collect_cards() -> None:
                 script = """
-                    JSON.stringify(
-                        Array.from(document.querySelectorAll("button"))
-                            .map((button) => (button.innerText || "").trim())
-                            .filter(
-                                (text) =>
-                                    /GMT[+-]\\d+/.test(text) &&
-                                    text.split(/\\n+/).filter(Boolean).length >= 3
-                            )
-                            .slice(0, 250)
-                    );
+                    (() => {
+                        const consentLabels = ["Accept", "Aceitar", "I agree", "Concordo"];
+                        const buttons = Array.from(document.querySelectorAll("button"));
+                        for (const button of buttons) {
+                            const text = (button.innerText || button.textContent || "").trim();
+                            if (consentLabels.includes(text)) {
+                                button.click();
+                                break;
+                            }
+                        }
+                        const bodyText = (document.body && document.body.innerText ? document.body.innerText : "").trim();
+                        if (!bodyText) {
+                            return "";
+                        }
+                        return bodyText;
+                    })();
                 """
 
                 def on_result(raw: Any) -> None:
                     text = raw if isinstance(raw, str) else ""
-                    if text and text != "[]":
+                    has_campaign_like_schedule = bool(
+                        re.search(r"(?:GMT|UTC)(?:[+-]\\d+)?", text)
+                    )
+                    if text and has_campaign_like_schedule:
                         payload["raw"] = text
                         finish()
                         return
                     empty_rounds["value"] += 1
-                    if empty_rounds["value"] >= 4:
+                    if empty_rounds["value"] >= 12:
                         self._note("Browser fallback stopped early after repeated empty card polls.")
                         finish()
 
@@ -1193,7 +1518,7 @@ class TwitchClient:
             timeout.timeout.connect(on_timeout)
             poll_timer.timeout.connect(collect_cards)
             page.loadFinished.connect(on_loaded)
-            timeout.start(60_000)
+            timeout.start(25_000)
             page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
             loop.exec()
 
@@ -1214,25 +1539,7 @@ class TwitchClient:
             self._note("Browser fallback did not capture any rendered campaign cards.")
             return []
 
-        try:
-            card_texts = json.loads(raw_cards)
-        except json.JSONDecodeError:
-            self._note("Browser fallback returned an unreadable payload.")
-            return []
-
-        campaigns: list[DropCampaign] = []
-        seen: set[str] = set()
-        for card_text in card_texts:
-            if not isinstance(card_text, str):
-                continue
-            campaign = self._campaign_from_browser_text(card_text)
-            if campaign is None or campaign.status == "EXPIRED":
-                continue
-            fingerprint = f"{campaign.game_name}|{campaign.starts_at.isoformat()}|{campaign.ends_at.isoformat()}"
-            if fingerprint in seen:
-                continue
-            seen.add(fingerprint)
-            campaigns.append(campaign)
+        campaigns = self._campaigns_from_browser_body_text(raw_cards)
 
         if campaigns:
             self._note(
@@ -1432,6 +1739,11 @@ class TwitchClient:
                 next_drop_name = str(data.get("name", "")).strip() or "Drop"
                 next_drop_remaining = total_remaining
                 next_drop_required = total_required
+        # Some campaign payloads omit/lag per-drop claim flags while total remaining is already 0.
+        if not all_drops_claimed and total_required > 0 and total_remaining <= 0:
+            all_drops_claimed = True
+        if not all_drops_claimed and self._campaign_claimed_from_payload(data):
+            all_drops_claimed = True
         allowed = data.get("allow") or {}
         allowed_channels = []
         if allowed.get("isEnabled", True):
@@ -1461,10 +1773,11 @@ class TwitchClient:
             next_drop_name=next_drop_name,
             next_drop_remaining_minutes=next_drop_remaining,
             next_drop_required_minutes=next_drop_required,
+            drops=self._drop_progress_items(drops),
         )
         return campaign
 
-    def fetch_campaigns(self) -> list[DropCampaign]:
+    def fetch_campaigns(self, *, allow_browser_fallback: bool = True) -> list[DropCampaign]:
         self._diagnostics.clear()
         if not self.login_state.oauth_token:
             self._note("No auth-token cookie value saved yet.")
@@ -1511,6 +1824,11 @@ class TwitchClient:
                 campaigns_response = attempted_response
         except requests.RequestException as exc:
             self._note(f"ViewerDropsDashboard query failed: {exc}")
+        dashboard_errors = self._graphql_error_messages(campaigns_response)
+        dashboard_integrity_blocked = any(
+            "failed integrity check" in message.casefold()
+            for message in dashboard_errors
+        )
         if not campaigns_response:
             cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
             if cached:
@@ -1538,13 +1856,33 @@ class TwitchClient:
             if campaign.get("id") and campaign.get("status") in valid_statuses
         }
         weak_listing = False
+        minimum_expected = max(6, len(inventory_data))
+        fallback_campaigns = self._campaigns_from_drops_page()
+        if dashboard_integrity_blocked:
+            self._note(
+                "ViewerDropsDashboard blocked by integrity check. Using drops-page IDs plus inventory/cache fallback."
+            )
+        if available_campaigns and len(available_campaigns) <= minimum_expected:
+            self._note(
+                "ViewerDropsDashboard returned a small campaign list. "
+                "Enriching with drops page fallback IDs."
+            )
+        if fallback_campaigns:
+            missing_fallback_ids = set(fallback_campaigns) - set(available_campaigns)
+            if missing_fallback_ids:
+                weak_listing = True
+                self._note(
+                    "Drops page fallback found additional active/upcoming campaign IDs "
+                    "not present in ViewerDropsDashboard."
+                )
+            available_campaigns = {
+                **fallback_campaigns,
+                **available_campaigns,
+            }
         if available_campaigns:
             self._note("ViewerDropsDashboard returned campaigns.")
         if not available_campaigns:
             weak_listing = True
-            available_campaigns = self._campaigns_from_drops_page()
-            if available_campaigns:
-                weak_listing = False
         self._note(f"Dashboard returned {len(available_campaigns)} active/upcoming campaign(s).")
 
         detailed_campaigns: dict[str, dict[str, Any]] = {}
@@ -1609,11 +1947,22 @@ class TwitchClient:
                     self._note(f"Campaign '{campaign.title}' has no progress data (0/0 min)")
 
         now = datetime.now(timezone.utc)
+        recent_expired_window = timedelta(days=7)
         before_time_filter = len(campaigns)
         campaigns = [
             campaign
             for campaign in campaigns
-            if campaign.ends_at > now and campaign.status != "EXPIRED"
+            if (
+                (campaign.ends_at > now and campaign.status != "EXPIRED")
+                or (
+                    campaign.all_drops_claimed
+                    and campaign.ends_at > now - timedelta(days=30)
+                )
+                or (
+                    campaign.remaining_minutes > 0
+                    and campaign.ends_at > now - recent_expired_window
+                )
+            )
         ]
         if len(campaigns) != before_time_filter:
             self._note(
@@ -1622,10 +1971,23 @@ class TwitchClient:
 
         campaigns.sort(key=lambda item: item.starts_at)
         campaigns.sort(key=lambda item: item.active, reverse=True)
-        if campaigns and weak_listing and len(campaigns) <= max(1, len(inventory_data)):
-            self._note(
-                "Inventory returned only in-progress campaigns. Trying rendered browser fallback for the full list."
-            )
+        listing_too_small = len(campaigns) < max(minimum_expected, len(fallback_campaigns))
+        should_try_browser_fallback = weak_listing or listing_too_small
+        if dashboard_integrity_blocked and campaigns:
+            # When integrity checks block dashboard listing, we often only see in-progress inventory campaigns.
+            inventory_only_snapshot = bool(inventory_data) and len(campaigns) <= len(inventory_data)
+            if not available_campaigns and inventory_only_snapshot:
+                should_try_browser_fallback = True
+
+        if campaigns and should_try_browser_fallback and allow_browser_fallback:
+            if dashboard_integrity_blocked:
+                self._note(
+                    "Campaign listing is integrity-limited. Trying rendered browser fallback for extra campaigns."
+                )
+            else:
+                self._note(
+                    "Campaign listing appears incomplete. Trying rendered browser fallback for the full list."
+                )
             browser_campaigns = self._campaigns_from_browser_page()
             if browser_campaigns:
                 # Merge by both ID and game name to preserve progress data
@@ -1639,6 +2001,7 @@ class TwitchClient:
                         # Use browser campaign for better schedule/details, but keep progress from existing
                         browser_campaign.progress_minutes = existing.progress_minutes
                         browser_campaign.required_minutes = existing.required_minutes
+                        browser_campaign.drops = list(existing.drops)
                         browser_campaign.next_drop_name = existing.next_drop_name
                         browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
                         browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
@@ -1653,6 +2016,7 @@ class TwitchClient:
                         # Use browser campaign for schedule but keep progress from inventory
                         browser_campaign.progress_minutes = existing.progress_minutes
                         browser_campaign.required_minutes = existing.required_minutes
+                        browser_campaign.drops = list(existing.drops)
                         browser_campaign.next_drop_name = existing.next_drop_name
                         browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
                         browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
@@ -1672,13 +2036,24 @@ class TwitchClient:
                 campaigns.sort(key=lambda item: item.starts_at)
                 campaigns.sort(key=lambda item: item.active, reverse=True)
                 weak_listing = False
+        elif campaigns and should_try_browser_fallback and not allow_browser_fallback:
+            self._note("Browser fallback disabled for this campaign fetch call.")
         if not campaigns:
-            self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
-            campaigns = self._campaigns_from_browser_page()
-            campaigns.sort(key=lambda item: item.starts_at)
-            campaigns.sort(key=lambda item: item.active, reverse=True)
-            if campaigns:
-                weak_listing = False
+            if inventory_data or dashboard_integrity_blocked:
+                self._note("ViewerDropsDashboard is empty or integrity-protected. Skipping browser fallback.")
+                cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
+                if cached:
+                    self._note(f"Using cached campaign list ({len(cached)}) instead of browser fallback.")
+                    campaigns = cached
+            elif allow_browser_fallback:
+                self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
+                campaigns = self._campaigns_from_browser_page()
+                campaigns.sort(key=lambda item: item.starts_at)
+                campaigns.sort(key=lambda item: item.active, reverse=True)
+                if campaigns:
+                    weak_listing = False
+            else:
+                self._note("ViewerDropsDashboard is empty or integrity-protected, and browser fallback is disabled.")
         now = datetime.now(timezone.utc)
         cached_campaigns = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
         if campaigns and cached_campaigns:
@@ -1709,14 +2084,24 @@ class TwitchClient:
                 self._note(
                     f"Merged cached campaigns ({len(campaigns)}) because Twitch listing appears incomplete."
                 )
+        if campaigns and cached_campaigns and weak_listing:
+            # Prevent sudden campaign drops when Twitch returns only a partial listing.
+            if len(campaigns) < len(cached_campaigns):
+                campaigns = cached_campaigns
+                self._note(
+                    "Kept cached campaign snapshot because fresh listing was smaller and likely incomplete."
+                )
+
         if campaigns:
             # Keep a best-effort cache so the UI does not go empty when Twitch integrity checks block listing APIs.
             self._campaign_cache = [campaign for campaign in campaigns if campaign.ends_at > now]
+            self._save_campaign_cache()
         elif self._campaign_cache:
             cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
             if cached:
                 campaigns = cached
                 self._campaign_cache = cached
+                self._save_campaign_cache()
                 self._note(
                     f"Using cached campaign list ({len(cached)}) because Twitch returned no active campaigns."
                 )
@@ -1773,6 +2158,11 @@ class TwitchClient:
                 return art_url
         except requests.RequestException as exc:
             self._note(f"DirectoryGameRedirect failed while resolving box art for {game_name}: {exc}")
+
+        directory_art = self._resolve_twitch_directory_box_art_url(game_name, slug=slug)
+        if directory_art:
+            self._game_box_art_cache[cache_key] = directory_art
+            return directory_art
 
         external_url = self._resolve_external_game_box_art_url(game_name)
         if external_url:
@@ -1844,10 +2234,44 @@ class TwitchClient:
             self._external_box_art_cache[cache_key] = tiny_image
             return tiny_image
 
+        duckduckgo = self._resolve_duckduckgo_game_box_art_url(game_name)
+        if duckduckgo:
+            self._external_box_art_cache[cache_key] = duckduckgo
+            return duckduckgo
+
         fallback = self._resolve_google_game_box_art_url(game_name)
         if fallback:
             self._external_box_art_cache[cache_key] = fallback
         return fallback
+
+    def _resolve_twitch_directory_box_art_url(self, game_name: str, *, slug: str = "") -> str:
+        final_slug = (slug or "").strip() or self.resolve_game_slug(game_name)
+        if not final_slug:
+            return ""
+        try:
+            response = self.session.get(
+                f"{TWITCH_URL}/directory/category/{quote(final_slug, safe='')}",
+                headers={"User-Agent": WEB_USER_AGENT},
+                timeout=12,
+            )
+            response.raise_for_status()
+            html = response.text
+        except requests.RequestException:
+            return ""
+
+        patterns = [
+            r'<meta\s+property="og:image"\s+content="(https://[^"]+)"',
+            r'<meta\s+content="(https://[^"]+)"\s+property="og:image"',
+            r'"boxArtURL"\s*:\s*"(https?://[^"\\]+)"',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, flags=re.IGNORECASE)
+            if match is None:
+                continue
+            candidate = match.group(1).replace("\\/", "/").strip()
+            if candidate:
+                return candidate
+        return ""
 
     def _resolve_duckduckgo_game_box_art_url(self, game_name: str) -> str:
         query = f"{game_name} game cover art"

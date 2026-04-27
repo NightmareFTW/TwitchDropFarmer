@@ -25,6 +25,7 @@ class DropCampaign:
     next_drop_name: str = ""
     next_drop_remaining_minutes: int = 0
     next_drop_required_minutes: int = 0
+    drops: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def completion(self) -> float:
