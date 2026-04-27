@@ -40,22 +40,14 @@ def _latest_source_mtime(src_root: Path) -> float:
 def main() -> int:
     project_root = Path(__file__).resolve().parent
 
-    # Prefer packaged EXE when it exists and is up-to-date.
+    # Prefer packaged EXE whenever it exists.
     # This avoids Python default taskbar/file icon behavior when launching from .pyw.
     # Opt-out with TDF_USE_DIST=0.
     if sys.platform == "win32" and not getattr(sys, "frozen", False):
         packaged_exe = project_root / "dist" / "TwitchDropFarmer" / "TwitchDropFarmer.exe"
         if packaged_exe.exists() and os.environ.get("TDF_USE_DIST", "1") != "0":
-            src_latest = _latest_source_mtime(project_root / "src")
-            try:
-                exe_mtime = packaged_exe.stat().st_mtime
-            except OSError:
-                exe_mtime = 0.0
-
-            # Launch the EXE only when it is as recent as source code.
-            if exe_mtime >= src_latest:
-                subprocess.Popen([str(packaged_exe)], cwd=str(project_root))
-                return 0
+            subprocess.Popen([str(packaged_exe)], cwd=str(project_root))
+            return 0
 
     src_path = project_root / "src"
     if str(src_path) not in sys.path:
