@@ -2,7 +2,7 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-Aplicacao desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotacao automatica de canais.
+Aplicacao desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
 Versao atual: `2.0.24`
 
