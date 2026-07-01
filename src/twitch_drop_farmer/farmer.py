@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import logging
+import threading
 
 from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
@@ -74,9 +76,8 @@ class FarmEngine:
                 for stream in base_valid
                 if stream.login.casefold() in allowed
             ]
-            # Twitch ACL payload can contain labels that are not channel logins.
-            # If no live stream matches ACL entries, fall back to drops-enabled streams.
-            valid = filtered if filtered else base_valid
+            # When the campaign restricts to specific channels, only those are eligible.
+            valid = filtered
         else:
             valid = base_valid
         valid.sort(key=self._channel_priority, reverse=True)
@@ -108,8 +109,10 @@ class FarmEngine:
             phase = 2
         return (phase, self._campaign_sort_key(campaign))
 
-    def poll(self) -> FarmSnapshot:
-        campaigns = self.client.fetch_campaigns()
+    def poll(self, *, allow_browser_fallback: bool | None = None) -> FarmSnapshot:
+        if allow_browser_fallback is None:
+            allow_browser_fallback = threading.current_thread() is threading.main_thread()
+        campaigns = self.client.fetch_campaigns(allow_browser_fallback=allow_browser_fallback)
         messages = self.client.consume_diagnostics()
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
@@ -139,7 +142,8 @@ class FarmEngine:
                 continue
 
             # Subscription-only campaigns cannot be farmed by watch-time automation.
-            if campaign.requires_subscription and not campaign.all_drops_claimed:
+            # If the campaign has at least one watchable drop, proceed to farm those instead.
+            if campaign.requires_subscription and not campaign.has_watchable_drops and not campaign.all_drops_claimed:
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,
@@ -167,6 +171,22 @@ class FarmEngine:
                 )
                 continue
 
+            subscription_only = (
+                bool(campaign.drops)
+                and not campaign.has_watchable_drops
+                and campaign.required_minutes <= 0
+            )
+            if (campaign.requires_subscription or subscription_only) and not campaign.all_drops_claimed:
+                campaign.requires_subscription = True
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code="subscription_required",
+                    )
+                )
+                continue
+
             if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
                 decisions.append(
                     FarmDecision(
@@ -177,27 +197,68 @@ class FarmEngine:
                 )
                 continue
 
-            # Check for expiring campaigns
-            if campaign.required_minutes > 0 and campaign.remaining_minutes < 60:
-                if self.config.alert_campaign_expiring:
-                    self.alert_manager.raise_alert(
-                        AlertType.CAMPAIGN_EXPIRING_SOON,
-                        AlertSeverity.WARNING,
-                        "Campanha Expirando",
-                        f"{campaign.game_name} - {campaign.remaining_minutes} minutos restantes"
-                    )
-
-            if not campaign.active:
+            # Browser-only / no actionable drop data: campanha sem dados de drop farmiável.
+            # Campanhas activas sem dados passam à detecção de streams para mostrar o
+            # ribbon correcto (LIVE vs SEM CANAIS) em vez de INATIVO.  Só ignora
+            # campanhas inactivas que também não têm dados de drop watchável.
+            if campaign.required_minutes == 0 and not campaign.drops and not campaign.active:
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,
                         stream=None,
-                        reason_code="campaign_upcoming" if campaign.upcoming else "campaign_not_active",
+                        reason_code="no_actionable_drop_data",
                     )
                 )
                 continue
 
-            if not campaign.eligible:
+            # Check for expiring campaigns — use real campaign endAt, not watch time remaining.
+            if (
+                getattr(campaign, "timestamp_source", "") == "campaign"
+                and campaign.seconds_until_end < 3600
+            ):
+                if self.config.alert_campaign_expiring_soon:
+                    self.alert_manager.raise_alert(
+                        AlertType.CAMPAIGN_EXPIRING_SOON,
+                        AlertSeverity.WARNING,
+                        "Campanha a expirar",
+                        f"{campaign.game_name} — termina em {campaign.seconds_until_end // 60} minutos"
+                    )
+
+            # Inventory campaigns with synthetic timestamps (missing startAt/endAt from
+            # Twitch API) may arrive as EXPIRED/inactive.  Repair them so the active
+            # property returns True and the campaign can be farmed.
+            # Também repara campanhas activas sem dados de drop (required_minutes=0,
+            # drops=[]) que chegam com timestamps sintéticos — a API devolveu status
+            # ACTIVE mas sem datas, por isso o campaign.active seria False sem a reparação.
+            _has_actionable = bool(campaign.drops) or campaign.required_minutes > 0
+            _api_says_active = campaign.status == "ACTIVE"
+            if campaign.timestamps_are_synthetic and (_has_actionable or _api_says_active) and not campaign.active:
+                _now = datetime.now(timezone.utc)
+                campaign.starts_at = _now - timedelta(hours=1)
+                campaign.ends_at = _now + timedelta(days=30)
+                campaign.status = "ACTIVE"
+
+            if not campaign.active:
+                if campaign.upcoming:
+                    _reason = "campaign_upcoming"
+                elif campaign.status == "EXPIRED" and not campaign.timestamps_are_synthetic:
+                    _reason = "campaign_expired"
+                else:
+                    _reason = "campaign_not_active"
+                decisions.append(
+                    FarmDecision(
+                        campaign=campaign,
+                        stream=None,
+                        reason_code=_reason,
+                    )
+                )
+                continue
+
+            # Inventory campaigns (non-empty drops) may have linked=False when
+            # isAccountConnected=False in the Twitch API response.  Account linking
+            # is only required at claim time; watch-time accumulates regardless.
+            _is_inventory = bool(campaign.drops) or campaign.required_minutes > 0
+            if not campaign.eligible and not _is_inventory:
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,

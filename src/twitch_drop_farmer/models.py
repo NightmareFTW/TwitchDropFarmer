@@ -22,10 +22,13 @@ class DropCampaign:
     has_badge_or_emote: bool = False
     all_drops_claimed: bool = False
     requires_subscription: bool = False
+    has_watchable_drops: bool = False
     next_drop_name: str = ""
     next_drop_remaining_minutes: int = 0
     next_drop_required_minutes: int = 0
     drops: list[dict[str, object]] = field(default_factory=list)
+    timestamps_are_synthetic: bool = False
+    timestamp_source: str = ""  # "campaign" | "drop" | "synthetic"
 
     @property
     def completion(self) -> float:

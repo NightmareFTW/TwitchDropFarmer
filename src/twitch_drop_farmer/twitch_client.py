@@ -3,13 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import base64
+import gzip
 import hashlib
+import html as html_module
 import json
+import os
 from pathlib import Path
 import re
 import secrets
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 from urllib.parse import quote, urljoin
@@ -49,7 +53,13 @@ ANDROID_APP_USER_AGENT = (
     "tv.twitch.android.app/25.3.0/2503006"
 )
 TWITCH_URL = "https://www.twitch.tv"
-CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
+CAMPAIGN_UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Jogos "especiais" cujas campanhas podem ser farmadas em qualquer stream com drops activos.
+# IRL (509672) e Special Events (509663) — correspondem ao mesmo critério do DevilXD/TwitchDropsMiner.
+SPECIAL_GAME_SLUGS: frozenset[str] = frozenset({"irl", "special-events"})
 
 INVENTORY_QUERY = {
     "operationName": "Inventory",
@@ -103,7 +113,7 @@ GAME_DIRECTORY_QUERY = {
             "freeformTags": None,
             "includeRestricted": ["SUB_ONLY_LIVE"],
             "recommendationsContext": {"platform": "web"},
-            "sort": "RELEVANCE",
+            "sort": "VIEWER_COUNT",
             "systemFilters": ["DROPS_ENABLED"],
             "tags": [],
             "requestID": "JIRA-VXP-2397",
@@ -145,10 +155,19 @@ STREAM_INFO_QUERY = {
         }
     },
 }
-
-SPADE_PATTERN = re.compile(r'"spade_?url"\s*:\s*"(https://[^"\\]+)"', re.I)
-SETTINGS_PATTERN = re.compile(r'src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"', re.I)
-
+CURRENT_DROP_QUERY = {
+    "operationName": "CurrentDrop",
+    "query": (
+        "query CurrentDrop($channelID: String!) { "
+        "currentUser { "
+        "dropCurrentSession(channelID: $channelID) { "
+        "dropID currentMinutesWatched "
+        "} "
+        "} "
+        "}"
+    ),
+    "variables": {"channelID": ""},
+}
 
 @dataclass(slots=True)
 class LoginState:
@@ -178,13 +197,12 @@ class TwitchClient:
         self._slug_cache: dict[str, str] = {}
         self._game_box_art_cache: dict[str, str] = {}
         self._external_box_art_cache: dict[str, str] = {}
-        self._campaign_cache: list[DropCampaign] = []
-        self._streamless_media_playlist: dict[str, str] = {}
-        self._streamless_spade_url: dict[str, str] = {}
+        self._streamless_media_playlist_cache: dict[str, str] = {}
+        # Cache for _stream_info results: {login_lower: (channel_id, broadcast_id, game_id, timestamp)}
+        self._streamless_stream_info_cache: dict[str, tuple[str, str, str, float]] = {}
         self.device_id = ""
         self.session_id = secrets.token_hex(16)
         self._load_cookies()
-        self._load_campaign_cache()
 
     def _note(self, message: str) -> None:
         self._diagnostics.append(message)
@@ -224,7 +242,8 @@ class TwitchClient:
             {"name": cookie.name, "value": cookie.value, "domain": cookie.domain}
             for cookie in self.session.cookies
         ]
-        COOKIE_FILE.write_text(
+        tmp = COOKIE_FILE.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps(
                 {
                     "cookies": serialized,
@@ -238,90 +257,7 @@ class TwitchClient:
             ),
             encoding="utf-8",
         )
-
-    def _campaign_to_cache_payload(self, campaign: DropCampaign) -> dict[str, Any]:
-        return {
-            "id": campaign.id,
-            "game_name": campaign.game_name,
-            "title": campaign.title,
-            "ends_at": campaign.ends_at.isoformat(),
-            "progress_minutes": campaign.progress_minutes,
-            "required_minutes": campaign.required_minutes,
-            "starts_at": campaign.starts_at.isoformat(),
-            "game_slug": campaign.game_slug,
-            "game_box_art_url": campaign.game_box_art_url,
-            "linked": campaign.linked,
-            "link_url": campaign.link_url,
-            "status": campaign.status,
-            "allowed_channels": list(campaign.allowed_channels),
-            "has_badge_or_emote": campaign.has_badge_or_emote,
-            "all_drops_claimed": campaign.all_drops_claimed,
-            "requires_subscription": campaign.requires_subscription,
-            "next_drop_name": campaign.next_drop_name,
-            "next_drop_remaining_minutes": campaign.next_drop_remaining_minutes,
-            "next_drop_required_minutes": campaign.next_drop_required_minutes,
-            "drops": campaign.drops,
-        }
-
-    def _campaign_from_cache_payload(self, payload: dict[str, Any]) -> DropCampaign | None:
-        campaign_id = str(payload.get("id", "") or "").strip()
-        if not campaign_id:
-            return None
-        ends_at = self._parse_timestamp(payload.get("ends_at"))
-        starts_at = self._parse_timestamp(payload.get("starts_at"))
-        return DropCampaign(
-            id=campaign_id,
-            game_name=str(payload.get("game_name", "") or ""),
-            title=str(payload.get("title", "") or ""),
-            ends_at=ends_at,
-            progress_minutes=int(payload.get("progress_minutes", 0) or 0),
-            required_minutes=int(payload.get("required_minutes", 0) or 0),
-            starts_at=starts_at,
-            game_slug=str(payload.get("game_slug", "") or ""),
-            game_box_art_url=str(payload.get("game_box_art_url", "") or ""),
-            linked=bool(payload.get("linked", True)),
-            link_url=str(payload.get("link_url", "") or ""),
-            status=str(payload.get("status", "") or ""),
-            allowed_channels=list(payload.get("allowed_channels", []) or []),
-            has_badge_or_emote=bool(payload.get("has_badge_or_emote", False)),
-            all_drops_claimed=bool(payload.get("all_drops_claimed", False)),
-            requires_subscription=bool(payload.get("requires_subscription", False)),
-            next_drop_name=str(payload.get("next_drop_name", "") or ""),
-            next_drop_remaining_minutes=int(payload.get("next_drop_remaining_minutes", 0) or 0),
-            next_drop_required_minutes=int(payload.get("next_drop_required_minutes", 0) or 0),
-            drops=list(payload.get("drops", []) or []),
-        )
-
-    def _load_campaign_cache(self) -> None:
-        if not CAMPAIGN_CACHE_FILE.exists():
-            return
-        try:
-            payload = json.loads(CAMPAIGN_CACHE_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        entries = payload.get("campaigns", []) if isinstance(payload, dict) else []
-        loaded: list[DropCampaign] = []
-        now = datetime.now(timezone.utc)
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            campaign = self._campaign_from_cache_payload(item)
-            if campaign and campaign.ends_at > now:
-                loaded.append(campaign)
-        if loaded:
-            self._campaign_cache = loaded
-            self._note(f"Loaded persisted campaign cache ({len(loaded)}).")
-
-    def _save_campaign_cache(self) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "campaigns": [self._campaign_to_cache_payload(campaign) for campaign in self._campaign_cache],
-        }
-        try:
-            CAMPAIGN_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            self._note("Could not persist campaign cache to disk.")
+        os.replace(tmp, COOKIE_FILE)
 
     def export_session_json(self) -> str:
         """Exporta a sessão completa como JSON para importar depois (modo duradouro)."""
@@ -448,7 +384,7 @@ class TwitchClient:
         return data
 
     def _streamless_media_playlist(self, channel_login: str) -> str:
-        cached = self._streamless_media_playlist.get(channel_login.casefold(), "")
+        cached = self._streamless_media_playlist_cache.get(channel_login.casefold(), "")
         if cached:
             return cached
 
@@ -492,87 +428,75 @@ class TwitchClient:
         if not media_playlist:
             raise ValueError("Could not resolve media playlist from HLS master manifest.")
 
-        self._streamless_media_playlist[channel_login.casefold()] = media_playlist
+        self._streamless_media_playlist_cache[channel_login.casefold()] = media_playlist
         return media_playlist
 
     def _stream_info(self, channel_login: str) -> dict[str, str]:
         payload = self._clone_query(STREAM_INFO_QUERY)
         payload["variables"]["channel"] = channel_login
         response = self._post_gql(payload, client_profile="web")
-        user = response.get("data", {}).get("user") or {}
+        user = (response.get("data") or {}).get("user") or {}
         stream = user.get("stream") or {}
+        settings = user.get("broadcastSettings") or {}
+        game = settings.get("game") or {}
         channel_id = str(user.get("id", "") or "").strip()
         broadcast_id = str(stream.get("id", "") or "").strip()
+        game_id = str(game.get("id", "") or "").strip()
         return {
             "channel_id": channel_id,
             "broadcast_id": broadcast_id,
+            "game_id": game_id,
         }
 
-    def _extract_spade_url(self, html_or_js: str) -> str:
-        match = SPADE_PATTERN.search(html_or_js)
-        if match is None:
-            return ""
-        return match.group(1).replace(r"\/", "/")
-
-    def _streamless_spade_endpoint(self, channel_login: str) -> str:
-        cache_key = channel_login.casefold()
-        cached = self._streamless_spade_url.get(cache_key, "")
-        if cached:
-            return cached
-
-        response = self.session.get(
-            f"https://m.twitch.tv/{channel_login}",
-            headers={"User-Agent": WEB_USER_AGENT},
-            timeout=20,
-        )
-        response.raise_for_status()
-        html = response.text
-
-        spade_url = self._extract_spade_url(html)
-        if not spade_url:
-            settings_match = SETTINGS_PATTERN.search(html)
-            if settings_match is None:
-                raise ValueError("Could not locate Twitch settings script for spade URL extraction.")
-            settings_url = settings_match.group(1)
-            settings_response = self.session.get(
-                settings_url,
-                headers={"User-Agent": WEB_USER_AGENT},
-                timeout=20,
-            )
-            settings_response.raise_for_status()
-            spade_url = self._extract_spade_url(settings_response.text)
-        if not spade_url:
-            raise ValueError("Could not extract spade URL from channel page.")
-
-        self._streamless_spade_url[cache_key] = spade_url
-        return spade_url
-
-    def _streamless_spade_payload(
+    def _streamless_gql_payload(
         self,
         *,
         channel_login: str,
         channel_id: str,
         broadcast_id: str,
-    ) -> dict[str, str]:
-        payload = [
-            {
-                "event": "minute-watched",
-                "properties": {
-                    "broadcast_id": broadcast_id,
-                    "channel_id": channel_id,
-                    "channel": channel_login,
-                    "hidden": False,
-                    "live": True,
-                    "location": "channel",
-                    "logged_in": True,
-                    "muted": False,
-                    "player": "site",
-                    "user_id": self.login_state.user_id,
-                },
-            }
-        ]
+        game_name: str = "",
+        game_id: str = "",
+    ) -> dict[str, Any]:
+        """Build a sendSpadeEvents GQL mutation payload for the minute-watched event.
+
+        Twitch now routes watch-time attribution through the GQL endpoint
+        (mutation SendEvents / sendSpadeEvents) rather than the deprecated
+        external spade.twitch.tv analytics endpoint.  The event data is
+        gzip-compressed, base64-encoded, and sent as the `input` variable.
+        """
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        properties: dict[str, object] = {
+            # Twitch expects these fields as strings in the minute-watched event payload.
+            "broadcast_id": str(broadcast_id),
+            "channel_id": str(channel_id),
+            "channel": channel_login,
+            "client_time": now_iso,
+            "game": game_name,
+            "game_id": game_id,
+            "hidden": False,
+            "is_live": True,
+            "live": True,
+            "logged_in": True,
+            "minutes_logged": 1,
+            "muted": False,
+            "user_id": str(self.login_state.user_id),
+        }
+        payload = [{"event": "minute-watched", "properties": properties}]
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
-        return {"data": base64.b64encode(raw.encode("utf-8")).decode("ascii")}
+        encoded = base64.b64encode(gzip.compress(raw.encode("utf-8"))).decode("ascii")
+        return {
+            "query": (
+                "\n mutation SendEvents($input: SendSpadeEventsInput!) "
+                "{\n sendSpadeEvents(input: $input) {\n statusCode\n}\n}\n"
+            ),
+            "variables": {
+                "input": {
+                    "data": encoded,
+                    "repository": "twilight",
+                    "encoding": "GZIP_B64",
+                }
+            },
+        }
 
     def _streamless_watch_hls_head(self, channel_login: str) -> bool:
         try:
@@ -584,7 +508,7 @@ class TwitchClient:
             )
             playlist_response.raise_for_status()
         except Exception as exc:
-            self._streamless_media_playlist.pop(channel_login.casefold(), None)
+            self._streamless_media_playlist_cache.pop(channel_login.casefold(), None)
             self._note(f"Streamless HLS fallback failed for {channel_login}: {exc}")
             return False
 
@@ -611,48 +535,145 @@ class TwitchClient:
             return False
         return True
 
+    def _streamless_watch_hls_range_get(self, channel_login: str) -> bool:
+        """Perform a small ranged GET on a media segment to emulate real viewing traffic."""
+        try:
+            playlist_url = self._streamless_media_playlist(channel_login)
+            playlist_response = self.session.get(
+                playlist_url,
+                headers=self._stream_headers(channel_login),
+                timeout=20,
+            )
+            playlist_response.raise_for_status()
+        except Exception as exc:
+            self._streamless_media_playlist_cache.pop(channel_login.casefold(), None)
+            self._note(f"Streamless HLS range-get fallback failed for {channel_login}: {exc}")
+            return False
+
+        segment_url = ""
+        chunks = [line.strip() for line in playlist_response.text.splitlines() if line.strip()]
+        for candidate in reversed(chunks):
+            if candidate.startswith("#"):
+                continue
+            segment_url = urljoin(playlist_response.url, candidate)
+            break
+        if not segment_url:
+            self._note(f"Streamless HLS range-get did not find media segments for {channel_login}.")
+            return False
+
+        try:
+            headers = self._stream_headers(channel_login)
+            headers["Range"] = "bytes=0-4095"
+            headers["Connection"] = "close"
+            segment_response = self.session.get(
+                segment_url,
+                headers=headers,
+                timeout=20,
+                stream=True,
+            )
+            segment_response.raise_for_status()
+            # Read a tiny amount to ensure the request is actually consumed.
+            for _chunk in segment_response.iter_content(chunk_size=1024):
+                break
+        except Exception as exc:
+            self._note(f"Streamless HLS range-get request failed for {channel_login}: {exc}")
+            return False
+        finally:
+            try:
+                segment_response.close()
+            except Exception:
+                pass
+        return True
+
+    def _stream_info_cached(self, channel_login: str) -> dict[str, str]:
+        """Return stream info with a 90-second TTL cache to minimise GQL chatter."""
+        cache_key = channel_login.casefold()
+        cached = self._streamless_stream_info_cache.get(cache_key)
+        if cached:
+            channel_id, broadcast_id, game_id, ts = cached
+            if time.monotonic() - ts < 90:
+                return {"channel_id": channel_id, "broadcast_id": broadcast_id, "game_id": game_id}
+        ids = self._stream_info(channel_login)
+        self._streamless_stream_info_cache[cache_key] = (
+            ids.get("channel_id", ""),
+            ids.get("broadcast_id", ""),
+            ids.get("game_id", ""),
+            time.monotonic(),
+        )
+        return ids
+
     def streamless_watch_heartbeat(
         self,
         channel_login: str,
         *,
         channel_id: str = "",
         broadcast_id: str = "",
+        game_name: str = "",
     ) -> bool:
+        """Send a minute-watched event via the GQL sendSpadeEvents mutation.
+
+        Twitch deprecated the external spade.twitch.tv analytics endpoint.
+        Watch-time attribution now goes through the GQL API directly.
+        Falls back to HLS HEAD request if the GQL mutation fails.
+        """
         login = channel_login.strip()
         if not login:
             return False
         if not self.login_state.oauth_token:
-            self._note("Streamless heartbeat skipped because no auth-token is set.")
+            self._note("Streamless heartbeat skipped: sem auth-token.")
+            return False
+        if not self.login_state.user_id:
+            self._note("Streamless heartbeat skipped: user_id não resolvido — aguardar validação do token.")
             return False
 
         try:
-            ids = {"channel_id": channel_id.strip(), "broadcast_id": broadcast_id.strip()}
-            if not ids["channel_id"] or not ids["broadcast_id"]:
-                ids = self._stream_info(login)
+            # Always refresh stream IDs via a TTL-cached GQL call so stale broadcast_ids
+            # (from a snapshot that pre-dates a stream restart) never silently break
+            # watch-time attribution on Twitch's side.
+            ids = self._stream_info_cached(login)
+            # If the cache returned empty IDs, fall back to the caller-supplied values.
+            if not ids.get("channel_id") or not ids.get("broadcast_id"):
+                ids = {
+                    "channel_id": channel_id.strip(),
+                    "broadcast_id": broadcast_id.strip(),
+                    "game_id": "",
+                }
             if not ids["channel_id"] or not ids["broadcast_id"]:
                 self._note(f"Streamless heartbeat could not resolve stream IDs for {login}.")
                 return self._streamless_watch_hls_head(login)
 
-            spade_url = self._streamless_spade_endpoint(login)
-            payload = self._streamless_spade_payload(
+            mutation = self._streamless_gql_payload(
                 channel_login=login,
                 channel_id=ids["channel_id"],
                 broadcast_id=ids["broadcast_id"],
+                game_name=game_name,
+                game_id=ids.get("game_id", ""),
             )
-            response = self.session.post(
-                spade_url,
-                data=payload,
-                headers=self._stream_headers(login),
-                timeout=20,
+            response = self._post_gql_web(mutation)
+            status_code = (
+                (response.get("data") or {})
+                .get("sendSpadeEvents", {})
+                .get("statusCode")
             )
-            if response.status_code == 204:
-                self._note(f"Streamless watcher is tracking channel {login}.")
+            if status_code == 204:
+                uid = self.login_state.user_id or "?"
+                bcast = ids.get("broadcast_id", "?")
+                self._note(
+                    f"sendSpadeEvents OK | canal={login} | uid={uid}"
+                    f" | broadcast={bcast} | canal_id={ids.get('channel_id', '?')}"
+                )
+                # Reinforce watch attribution with a lightweight media segment touch.
+                # Some sessions acknowledge sendSpadeEvents (204) but only advance
+                # drop minutes once HLS media endpoints are touched periodically.
+                if not self._streamless_watch_hls_range_get(login):
+                    if not self._streamless_watch_hls_head(login):
+                        self._note(f"HLS reinforcement ping falhou para {login} (GQL já OK).")
                 return True
-            self._note(f"Spade heartbeat returned HTTP {response.status_code} for {login}.")
+            self._note(f"sendSpadeEvents devolveu status {status_code} para {login}.")
             return self._streamless_watch_hls_head(login)
         except Exception as exc:
-            self._note(f"Streamless heartbeat failed for {login}: {exc}")
-            self._streamless_spade_url.pop(login.casefold(), None)
+            self._note(f"Streamless heartbeat falhou para {login}: {exc}")
+            self._streamless_stream_info_cache.pop(login.casefold(), None)
             return self._streamless_watch_hls_head(login)
 
     def set_oauth_token(self, token: str) -> None:
@@ -820,7 +841,11 @@ class TwitchClient:
         if not raw:
             return datetime.now(timezone.utc)
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                # Backward compatibility with cache files that stored naive timestamps.
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
         except (TypeError, ValueError):
             self._note(f"Invalid timestamp received from Twitch: {raw!r}")
             return datetime.now(timezone.utc)
@@ -835,8 +860,14 @@ class TwitchClient:
         def totals(drop_id: str) -> tuple[int, int]:
             drop = by_id.get(drop_id, {})
             required = int(drop.get("requiredMinutesWatched", 0) or 0)
-            current = int(drop.get("self", {}).get("currentMinutesWatched", 0) or 0)
-            remaining = max(0, required - current)
+            drop_self = drop.get("self") or {}
+            # Claimed drops need 0 additional time regardless of currentMinutesWatched
+            is_claimed = bool(drop_self.get("isClaimed", False))
+            if is_claimed:
+                remaining = 0
+            else:
+                current = int(drop_self.get("currentMinutesWatched", 0) or 0)
+                remaining = max(0, required - current)
             pre_ids = [
                 item.get("id", "")
                 for item in drop.get("preconditionDrops", []) or []
@@ -927,6 +958,8 @@ class TwitchClient:
             "subscrição para resgatar",
             "subscricao obrigatoria",
             "subscrição obrigatória",
+            "subscricao necessaria",
+            "subscrição necessária",
             "apenas subs",
             "apenas para subs",
             "só para subs",
@@ -959,9 +992,11 @@ class TwitchClient:
             if isinstance(node, dict):
                 for key, value in node.items():
                     key_norm = str(key).strip().replace("_", "").casefold()
+                    # Only match explicit boolean-flag keys known to mean "subscription required".
+                    # Avoid broad matching on any key that contains "subscription" because
+                    # Twitch returns many non-requirement fields (e.g. subscriptionBenefit) that
+                    # are legitimately present on open campaigns and would cause false positives.
                     if key_norm in subscription_flag_keys and bool(value):
-                        return True
-                    if ("subscription" in key_norm or "subscriber" in key_norm) and bool(value):
                         return True
                     if key_norm in subscription_value_keys and isinstance(value, str):
                         value_norm = value.strip().casefold()
@@ -980,10 +1015,9 @@ class TwitchClient:
         def walk_strings(node: Any) -> bool:
             if isinstance(node, str):
                 text = node.strip().casefold()
-                if "sub" in text and any(
-                    token in text for token in ("redeem", "resgat", "claim", "required", "obrigat", "only")
-                ):
-                    return True
+                # Only match explicit full-phrase patterns.  The previous broad heuristic
+                # ("sub" in text + token) caused false positives on strings like
+                # "SUBSCRIBER_BONUS_CLAIM" that appear in open (non-sub-only) campaigns.
                 return any(pattern in text for pattern in keyword_patterns)
             if isinstance(node, dict):
                 for value in node.values():
@@ -1001,16 +1035,42 @@ class TwitchClient:
             return True
         if walk_strings(payload):
             return True
+
+        has_drops = False
+        has_watchable_drop = False
         for drop in drops:
+            if not isinstance(drop, dict):
+                continue
+            has_drops = True
+            required_minutes = int(drop.get("requiredMinutesWatched", 0) or 0)
+            if required_minutes > 0:
+                has_watchable_drop = True
+                break
             if walk_struct(drop):
                 return True
             if walk_strings(drop):
+                return True
+        # Campaigns that only expose 0-minute drops are subscription-locked in
+        # Twitch's inventory UI, even when the payload omits explicit subscription flags.
+        if has_drops and not has_watchable_drop:
+            return True
+        return False
+
+    def _compute_has_watchable_drops(self, drops: list[dict[str, Any]]) -> bool:
+        """Return True if at least one drop can be earned by watching (no subscription required)."""
+        for drop in drops:
+            required = int(drop.get("requiredMinutesWatched", 0) or 0)
+            if required <= 0:
+                continue
+            # Re-use subscription check scoped to this single drop (empty campaign payload)
+            if not self._campaign_requires_subscription({}, [drop]):
                 return True
         return False
 
     def _drop_progress_items(self, drops: list[dict[str, Any]]) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for drop in drops:
+            drop_id = str(drop.get("id", "") or "").strip()
             required = int(drop.get("requiredMinutesWatched", 0) or 0)
             current = int((drop.get("self") or {}).get("currentMinutesWatched", 0) or 0)
             claimed = bool((drop.get("self") or {}).get("isClaimed", False))
@@ -1048,6 +1108,7 @@ class TwitchClient:
             remaining = max(0, required - current)
             items.append(
                 {
+                    "id": drop_id,
                     "name": name,
                     "image_url": image_url,
                     "required_minutes": required,
@@ -1065,6 +1126,45 @@ class TwitchClient:
             )
         )
         return items
+
+    def fetch_current_drop_progress(self, channel_id: str) -> dict[str, object] | None:
+        """Fetch current drop session progress for a channel.
+
+        Used as a lightweight reconciliation signal when inventory progress lags
+        behind acknowledged streamless heartbeats.
+        """
+        channel_key = str(channel_id or "").strip()
+        if not channel_key:
+            return None
+        if not self.login_state.oauth_token:
+            return None
+
+        payload = self._clone_query(CURRENT_DROP_QUERY)
+        payload["variables"]["channelID"] = channel_key
+        try:
+            response = self._post_gql(payload, client_profile="web")
+        except requests.RequestException as exc:
+            self._note(f"CurrentDrop query failed for channel {channel_key}: {exc}")
+            return None
+
+        current_user = (response.get("data") or {}).get("currentUser") or {}
+        session = current_user.get("dropCurrentSession")
+        if not isinstance(session, dict):
+            return None
+
+        drop_id = str(session.get("dropID", "") or "").strip()
+        if not drop_id:
+            return None
+        try:
+            current_minutes = int(session.get("currentMinutesWatched", 0) or 0)
+        except (TypeError, ValueError):
+            current_minutes = 0
+
+        return {
+            "drop_id": drop_id,
+            "current_minutes": max(0, current_minutes),
+            "channel_id": channel_key,
+        }
 
     def _extract_drop_like_entries(self, payload: Any) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
@@ -1136,8 +1236,15 @@ class TwitchClient:
             if drop_id in memo:
                 return memo[drop_id]
             drop = by_id.get(drop_id, {})
+            drop_self = drop.get("self") or {}
+            # Claimed drops contribute 0 remaining time regardless of currentMinutesWatched.
+            # Without this check, a precondition drop with isClaimed=True but stale
+            # currentMinutesWatched=0 would inflate the ETA of dependent drops.
+            if bool(drop_self.get("isClaimed", False)):
+                memo[drop_id] = 0
+                return 0
             required = int(drop.get("requiredMinutesWatched", 0) or 0)
-            current = int(drop.get("self", {}).get("currentMinutesWatched", 0) or 0)
+            current = int(drop_self.get("currentMinutesWatched", 0) or 0)
             own_remaining = max(0, required - current)
             chained_remaining = 0
             for item in drop.get("preconditionDrops", []) or []:
@@ -1199,32 +1306,211 @@ class TwitchClient:
             self._note(f"Drops page fallback failed: {exc}")
             return {}
 
-        html = response.text
+        page_html = response.text
+        found: dict[str, dict[str, Any]] = {}
+
+        def _normalize_status(status: str) -> str:
+            normalized_status = str(status or "").strip().upper()
+            if normalized_status not in {"ACTIVE", "UPCOMING", "EXPIRED"}:
+                return ""
+            return normalized_status
+
+        def _merge_found(payload: dict[str, Any]) -> None:
+            cid = str(payload.get("id", "") or "").strip()
+            if not CAMPAIGN_UUID_PATTERN.fullmatch(cid):
+                return
+
+            current = found.get(cid)
+            if current is None:
+                current = {"id": cid}
+                found[cid] = current
+
+            incoming_status = _normalize_status(str(payload.get("status", "") or ""))
+            current_status = _normalize_status(str(current.get("status", "") or ""))
+            if incoming_status and current_status != "ACTIVE":
+                current["status"] = incoming_status
+
+            for key in (
+                "name",
+                "title",
+                "startAt",
+                "startsAt",
+                "endAt",
+                "endsAt",
+                "accountLinkURL",
+            ):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip() and not current.get(key):
+                    current[key] = value
+
+            for key in ("allow", "self", "game"):
+                value = payload.get(key)
+                existing = current.get(key)
+                if isinstance(value, dict) and value:
+                    if isinstance(existing, dict) and existing:
+                        current[key] = self._merge_data(existing, value)
+                    else:
+                        current[key] = value
+
+            drops_value = payload.get("timeBasedDrops")
+            existing_drops = current.get("timeBasedDrops")
+            if isinstance(drops_value, list) and drops_value:
+                if not isinstance(existing_drops, list) or len(drops_value) > len(existing_drops):
+                    current["timeBasedDrops"] = drops_value
+
+        def _normalize_game_payload(node: dict[str, Any]) -> dict[str, Any]:
+            game_raw = node.get("game")
+            if isinstance(game_raw, dict):
+                game: dict[str, Any] = dict(game_raw)
+            elif isinstance(game_raw, str) and game_raw.strip():
+                game = {"displayName": game_raw.strip()}
+            else:
+                game = {}
+
+            for source_key, target_key in (
+                ("gameName", "displayName"),
+                ("displayName", "displayName"),
+                ("name", "name"),
+                ("slug", "slug"),
+                ("boxArtURL", "boxArtURL"),
+            ):
+                value = node.get(source_key)
+                if isinstance(value, str) and value.strip() and not game.get(target_key):
+                    game[target_key] = value.strip()
+            return game
+
+        def _campaign_payload_from_node(node: dict[str, Any]) -> dict[str, Any] | None:
+            if "dropInstanceID" in node:
+                return None
+
+            campaign_like = (
+                "timeBasedDrops" in node
+                or "allow" in node
+                or "game" in node
+                or "gameName" in node
+            )
+            if not campaign_like:
+                return None
+
+            cid = str(node.get("id", "") or "").strip()
+            if not CAMPAIGN_UUID_PATTERN.fullmatch(cid):
+                return None
+
+            payload: dict[str, Any] = {
+                "id": cid,
+                "status": _normalize_status(str(node.get("status", "") or "")),
+            }
+            name = node.get("name") or node.get("title")
+            if isinstance(name, str) and name.strip():
+                payload["name"] = name.strip()
+
+            for key in ("startAt", "startsAt", "endAt", "endsAt", "accountLinkURL"):
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    payload[key] = value.strip()
+
+            for key in ("allow", "self"):
+                value = node.get(key)
+                if isinstance(value, dict) and value:
+                    payload[key] = value
+
+            drops_value = node.get("timeBasedDrops")
+            if isinstance(drops_value, list) and drops_value:
+                payload["timeBasedDrops"] = drops_value
+
+            game_payload = _normalize_game_payload(node)
+            if game_payload:
+                payload["game"] = game_payload
+
+            return payload
+
+        def _extract_campaigns_from_json_blob(blob: str) -> None:
+            text = html_module.unescape(str(blob or "").strip())
+            if not text:
+                return
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                return
+
+            stack: list[Any] = [parsed]
+            nodes_seen = 0
+            while stack and nodes_seen < 20000:
+                nodes_seen += 1
+                current = stack.pop()
+                if isinstance(current, dict):
+                    payload = _campaign_payload_from_node(current)
+                    if payload is not None:
+                        _merge_found(payload)
+                    stack.extend(current.values())
+                elif isinstance(current, list):
+                    stack.extend(current)
+
+        # Extract structured JSON payloads first to maximize data available when
+        # DropCampaignDetails is blocked by integrity checks.
+        json_blob_patterns = (
+            r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+            r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;\s*</script>',
+        )
+        for pattern in json_blob_patterns:
+            for match in re.finditer(pattern, page_html, flags=re.DOTALL | re.IGNORECASE):
+                _extract_campaigns_from_json_blob(match.group(1))
+
+        def _add_found(campaign_id: str, status: str = "") -> None:
+            cid = str(campaign_id or "").strip()
+            if not CAMPAIGN_UUID_PATTERN.fullmatch(cid):
+                return
+            _merge_found({"id": cid, "status": _normalize_status(status)})
+
         patterns = (
             # Standard JSON blocks.
-            r'"id"\s*:\s*"([0-9a-fA-F-]{36})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
-            r'"status"\s*:\s*"(ACTIVE|UPCOMING)".{0,2000}?"id"\s*:\s*"([0-9a-fA-F-]{36})"',
+            r'"id"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
+            r'"status"\s*:\s*"(ACTIVE|UPCOMING)".{0,2000}?"id"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"',
             # Escaped JSON inside script payloads.
-            r'\\"id\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
-            r'\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\".{0,2000}?\\"id\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\"',
+            r'\\"id\\"\s*:\s*\\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
+            r'\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\".{0,2000}?\\"id\\"\s*:\s*\\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\"',
             # Alternative id key names used by some Twitch payloads.
-            r'"(?:dropID|campaignId|dropCampaignId)"\s*:\s*"([0-9a-fA-F-]{36})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
-            r'\\"(?:dropID|campaignId|dropCampaignId)\\"\s*:\s*\\"([0-9a-fA-F-]{36})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
+            r'"(?:dropID|campaignId|dropCampaignId)"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})".{0,2000}?"status"\s*:\s*"(ACTIVE|UPCOMING)"',
+            r'\\"(?:dropID|campaignId|dropCampaignId)\\"\s*:\s*\\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\".{0,2000}?\\"status\\"\s*:\s*\\"(ACTIVE|UPCOMING)\\"',
         )
-        found: dict[str, dict[str, Any]] = {}
         for pattern in patterns:
-            for match in re.finditer(pattern, html, flags=re.DOTALL):
+            for match in re.finditer(pattern, page_html, flags=re.DOTALL):
                 first, second = match.groups()
                 if first in {"ACTIVE", "UPCOMING"}:
-                    status = first
-                    campaign_id = second
+                    _add_found(second, first)
                 else:
-                    campaign_id = first
-                    status = second
-                found[campaign_id] = {"id": campaign_id, "status": status}
+                    _add_found(first, second)
 
+        # If Twitch changes payload shape, still extract candidate campaign IDs from
+        # URL/query patterns and JSON keys, then let DropCampaignDetails validate them.
+        id_only_patterns = (
+            r'(?:dropID|campaignId|dropCampaignId)=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+            r'"(?:dropID|campaignId|dropCampaignId|id)"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"',
+            r'\\"(?:dropID|campaignId|dropCampaignId|id)\\"\s*:\s*\\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\"',
+        )
+        for pattern in id_only_patterns:
+            for match in re.finditer(pattern, page_html, flags=re.DOTALL):
+                _add_found(match.group(1))
+
+        # Last-resort scan: pair UUID-like IDs with nearby ACTIVE/UPCOMING markers.
+        for match in re.finditer(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", page_html):
+            campaign_id = match.group(0)
+            start = max(0, match.start() - 400)
+            end = min(len(page_html), match.end() + 400)
+            context = page_html[start:end]
+            status = ""
+            if re.search(r"ACTIVE", context):
+                status = "ACTIVE"
+            elif re.search(r"UPCOMING", context):
+                status = "UPCOMING"
+            _add_found(campaign_id, status)
+
+        with_status = sum(1 for item in found.values() if item.get("status") in {"ACTIVE", "UPCOMING"})
         if found:
-            self._note(f"Drops page fallback discovered {len(found)} active/upcoming campaign(s).")
+            self._note(
+                "Drops page fallback discovered "
+                f"{len(found)} campaign ID(s) ({with_status} with ACTIVE/UPCOMING status)."
+            )
         else:
             self._note("Drops page fallback could not discover campaigns in the HTML payload.")
         return found
@@ -1316,6 +1602,79 @@ class TwitchClient:
             requires_subscription=requires_subscription,
         )
 
+    def _campaign_from_browser_row(
+        self,
+        *,
+        campaign_id: str = "",
+        title: str,
+        schedule: str,
+        requires_subscription: bool,
+    ) -> DropCampaign | None:
+        title_clean = str(title or "").strip()
+        schedule_clean = re.sub(r"\s+", " ", str(schedule or "").strip())
+        if not title_clean:
+            return None
+
+        now = datetime.now(timezone.utc)
+        starts_at: datetime
+        ends_at: datetime
+        status: str
+
+        match = re.search(r"(.+?)\s+-\s+(.+?)\s+(GMT|UTC)([+-]\d+)?", schedule_clean)
+        if match is not None:
+            start_raw, end_raw, _tz_name, offset_raw = match.groups()
+            utc_offset_hours = 0
+            if offset_raw:
+                try:
+                    utc_offset_hours = int(offset_raw)
+                except ValueError:
+                    return None
+
+            starts_at = self._parse_browser_campaign_datetime(start_raw, utc_offset_hours)
+            ends_at = self._parse_browser_campaign_datetime(end_raw, utc_offset_hours)
+            if starts_at is None or ends_at is None or ends_at <= starts_at:
+                return None
+
+            if now >= ends_at:
+                status = "EXPIRED"
+            elif now < starts_at:
+                status = "UPCOMING"
+            else:
+                status = "ACTIVE"
+        else:
+            # Some locales/layouts omit GMT/UTC schedules in card text.
+            # Use a conservative synthetic active window so the campaign remains visible.
+            starts_at = now - timedelta(hours=1)
+            ends_at = now + timedelta(days=21)
+            lowered = f"{title_clean}\n{schedule_clean}".casefold()
+            if "ended" in lowered or "terminada" in lowered or "expirada" in lowered:
+                status = "EXPIRED"
+            elif "upcoming" in lowered or "starts" in lowered or "comeca" in lowered:
+                status = "UPCOMING"
+            else:
+                status = "ACTIVE"
+
+        if status == "EXPIRED":
+            return None
+
+        explicit_id = str(campaign_id or "").strip()
+        if not CAMPAIGN_UUID_PATTERN.fullmatch(explicit_id):
+            explicit_id = self._browser_campaign_id(title_clean, starts_at, ends_at)
+
+        return DropCampaign(
+            id=explicit_id,
+            game_name=title_clean,
+            title=title_clean,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            linked=True,
+            link_url=f"{TWITCH_URL}/drops/campaigns",
+            status=status,
+            requires_subscription=bool(requires_subscription),
+            timestamps_are_synthetic=(match is None),
+            timestamp_source=("synthetic" if match is None else "campaign"),
+        )
+
     def _campaigns_from_browser_body_text(self, body_text: str) -> list[DropCampaign]:
         lines = [line.strip() for line in body_text.splitlines() if line.strip()]
         if not lines:
@@ -1395,7 +1754,263 @@ class TwitchClient:
             index = schedule_index + 1
         return campaigns
 
+    def _campaigns_via_browser_gql_intercept(self) -> list[DropCampaign]:
+        """Intercept the GQL calls the Twitch web app makes when it loads in QWebEngine.
+        The web app generates integrity tokens client-side, so its GQL requests succeed
+        where our direct Python requests are blocked."""
+        try:
+            from PySide6.QtCore import QEventLoop, QTimer, QUrl
+            from PySide6.QtNetwork import QNetworkCookie
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
+            from shiboken6 import delete as shiboken_delete
+        except Exception as exc:
+            self._note(f"Browser GQL intercept unavailable: {exc}")
+            return []
+
+        app = QApplication.instance()
+        owned_app = False
+        if app is None:
+            app = QApplication([])
+            owned_app = True
+
+        class SilentWebEnginePage(QWebEnginePage):
+            def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
+                return
+
+        profile = QWebEngineProfile(app)
+        page = SilentWebEnginePage(profile, app)
+        cookie_store = profile.cookieStore()
+
+        def push_cookie(name: str, value: str, *, domain: str = ".twitch.tv") -> None:
+            if not value:
+                return
+            cookie = QNetworkCookie()
+            cookie.setName(name.encode("utf-8"))
+            cookie.setValue(value.encode("utf-8"))
+            cookie.setDomain(domain)
+            cookie.setPath("/")
+            cookie.setSecure(True)
+            cookie_store.setCookie(cookie, QUrl(f"{TWITCH_URL}/"))
+
+        for session_cookie in self.session.cookies:
+            push_cookie(
+                session_cookie.name,
+                session_cookie.value,
+                domain=session_cookie.domain or ".twitch.tv",
+            )
+
+        auth_token = self.login_state.oauth_token
+        persistent_id = self.login_state.user_id
+        unique_id = (
+            self.device_id
+            or self.session.cookies.get("unique_id", domain=".twitch.tv")
+            or self.session.cookies.get("unique_id", domain="www.twitch.tv")
+            or ""
+        )
+        push_cookie("auth-token", auth_token)
+        push_cookie("auth-token", auth_token, domain="www.twitch.tv")
+        push_cookie("persistent", persistent_id)
+        push_cookie("unique_id", unique_id)
+
+        # Pre-load script injected before any page JavaScript runs.
+        # Patches window.fetch and XMLHttpRequest to capture GQL /gql responses.
+        INTERCEPT_JS = """(function() {
+    if (window.__tdfGqlInterceptInstalled) return;
+    window.__tdfGqlInterceptInstalled = true;
+    window.__tdfGqlStore = {};
+
+    function _store(c) {
+        if (!c || !c.id) return;
+        var ex = window.__tdfGqlStore[c.id];
+        if (!ex) { window.__tdfGqlStore[c.id] = c; return; }
+        var hasNew = c.timeBasedDrops && c.timeBasedDrops.length > 0;
+        var hasEx  = ex.timeBasedDrops  && ex.timeBasedDrops.length  > 0;
+        if (hasNew && !hasEx) {
+            window.__tdfGqlStore[c.id] = Object.assign({}, ex, c);
+        } else {
+            window.__tdfGqlStore[c.id] = Object.assign({}, c, ex);
+        }
+    }
+
+    function _process(data) {
+        try {
+            var items = Array.isArray(data) ? data : [data];
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                if (!item || !item.data) continue;
+                var d = item.data;
+                var cu = d.currentUser;
+                if (cu) {
+                    if (Array.isArray(cu.dropCampaigns))
+                        cu.dropCampaigns.forEach(_store);
+                    if (cu.inventory && Array.isArray(cu.inventory.dropCampaignsInProgress))
+                        cu.inventory.dropCampaignsInProgress.forEach(_store);
+                }
+                if (d.user && d.user.dropCampaign) _store(d.user.dropCampaign);
+                if (d.dropCampaign) _store(d.dropCampaign);
+            }
+        } catch(e) {}
+    }
+
+    var _oFetch = window.fetch;
+    window.fetch = function(input, init) {
+        return _oFetch.call(this, input, init).then(function(r) {
+            try {
+                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                if (url.indexOf('/gql') !== -1)
+                    r.clone().json().then(_process)['catch'](function() {});
+            } catch(e) {}
+            return r;
+        });
+    };
+
+    var _oOpen = XMLHttpRequest.prototype.open;
+    var _oSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, url) {
+        this.__tdfU = String(url || '');
+        return _oOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function() {
+        if (this.__tdfU && this.__tdfU.indexOf('/gql') !== -1) {
+            var x = this;
+            this.addEventListener('load', function() {
+                try { _process(JSON.parse(x.responseText)); } catch(e) {}
+            });
+        }
+        return _oSend.apply(this, arguments);
+    };
+})();"""
+
+        script = QWebEngineScript()
+        script.setName("tdf_gql_intercept")
+        script.setSourceCode(INTERCEPT_JS)
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        profile.scripts().insert(script)
+
+        loop = QEventLoop()
+        captured: dict[str, Any] = {"data": {}, "last_count": -1, "stable": 0}
+        timed_out = {"value": False}
+        poll_timer = QTimer()
+        poll_timer.setInterval(1_500)
+        poll_timer.setSingleShot(False)
+
+        RETRIEVE_JS = """(() => {
+    try {
+        return JSON.stringify(Object.values(window.__tdfGqlStore || {}));
+    } catch(e) { return '[]'; }
+})();"""
+
+        CLICK_TAB_JS = """(() => {
+    var labels = ['All Campaigns', 'Todas as campanhas', 'Todas as Campanhas'];
+    Array.from(document.querySelectorAll('a, button, [role="tab"]')).forEach(function(n) {
+        var t = (n.innerText || n.textContent || '').trim();
+        if (labels.indexOf(t) !== -1 && n.getAttribute('aria-selected') !== 'true') {
+            n.click();
+        }
+    });
+})();"""
+
+        try:
+            def finish() -> None:
+                if loop.isRunning():
+                    loop.quit()
+
+            def poll() -> None:
+                page.runJavaScript(CLICK_TAB_JS)
+
+                def on_data(raw: Any) -> None:
+                    if not isinstance(raw, str):
+                        return
+                    try:
+                        items = json.loads(raw)
+                        if not isinstance(items, list):
+                            return
+                        for c in items:
+                            cid = str(c.get("id", "") or "").strip() if isinstance(c, dict) else ""
+                            if cid and CAMPAIGN_UUID_PATTERN.fullmatch(cid):
+                                captured["data"][cid] = c
+                        current = len(captured["data"])
+                        if current == captured["last_count"]:
+                            captured["stable"] += 1
+                        else:
+                            captured["stable"] = 0
+                            captured["last_count"] = current
+                        if current > 0 and captured["stable"] >= 5:
+                            finish()
+                        elif captured["stable"] >= 25:
+                            finish()
+                    except Exception:
+                        pass
+
+                page.runJavaScript(RETRIEVE_JS, on_data)
+
+            def on_loaded(ok: bool) -> None:
+                if not ok:
+                    self._note("Browser GQL intercept: page load failed.")
+                    finish()
+                    return
+                poll_timer.start()
+
+            def on_timeout() -> None:
+                timed_out["value"] = True
+                finish()
+
+            timeout_timer = QTimer()
+            timeout_timer.setSingleShot(True)
+            timeout_timer.timeout.connect(on_timeout)
+            poll_timer.timeout.connect(poll)
+            page.loadFinished.connect(on_loaded)
+            timeout_timer.start(55_000)
+            page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
+            loop.exec()
+            poll_timer.stop()
+            timeout_timer.stop()
+        finally:
+            shiboken_delete(page)
+            shiboken_delete(profile)
+            if owned_app:
+                app.quit()
+
+        if timed_out["value"]:
+            self._note("Browser GQL intercept timed out.")
+
+        raw_payloads = list(captured["data"].values())
+        if not raw_payloads:
+            self._note("Browser GQL intercept: sem dados de campanhas capturados.")
+            return []
+
+        self._note(f"Browser GQL intercept capturou {len(raw_payloads)} payload(s) de campanha.")
+        now = datetime.now(timezone.utc)
+        campaigns: list[DropCampaign] = []
+        seen: set[str] = set()
+        for payload in raw_payloads:
+            if not isinstance(payload, dict):
+                continue
+            campaign = self._parse_campaign(payload)
+            if campaign is None or campaign.id in seen:
+                continue
+            if campaign.status == "EXPIRED" and campaign.ends_at <= now:
+                continue
+            seen.add(campaign.id)
+            campaigns.append(campaign)
+
+        if campaigns:
+            campaigns.sort(key=lambda c: c.starts_at)
+            campaigns.sort(key=lambda c: c.active, reverse=True)
+            self._note(f"Browser GQL intercept extraiu {len(campaigns)} campanha(s) utilizáveis.")
+        return campaigns
+
     def _campaigns_from_browser_page(self) -> list[DropCampaign]:
+        # Primary path: intercept the GQL calls the Twitch web app makes in QWebEngine.
+        # The web app generates integrity tokens client-side, bypassing the integrity check.
+        gql_campaigns = self._campaigns_via_browser_gql_intercept()
+        if gql_campaigns:
+            return gql_campaigns
+        self._note("Browser GQL intercept sem resultados — a tentar análise de HTML renderizado.")
+
         try:
             from PySide6.QtCore import QEventLoop, QTimer, QUrl
             from PySide6.QtNetwork import QNetworkCookie
@@ -1452,11 +2067,13 @@ class TwitchClient:
         push_cookie("unique_id", unique_id)
 
         loop = QEventLoop()
-        payload: dict[str, Any] = {"raw": ""}
+        payload: dict[str, Any] = {"raw": "", "best_len": 0, "rows": [], "best_row_count": 0, "best_uuid_hits": 0}
         timed_out = {"value": False}
         empty_rounds = {"value": 0}
+        stable_rounds = {"value": 0}
+        near_bottom_rounds = {"value": 0}
         poll_timer = QTimer()
-        poll_timer.setInterval(2_000)
+        poll_timer.setInterval(1_200)
         poll_timer.setSingleShot(False)
 
         try:
@@ -1476,26 +2093,338 @@ class TwitchClient:
                                 break;
                             }
                         }
-                        const bodyText = (document.body && document.body.innerText ? document.body.innerText : "").trim();
-                        if (!bodyText) {
-                            return "";
+
+                        const allCampaignLabels = [
+                            "All Campaigns",
+                            "Todas as campanhas",
+                            "Todas as Campanhas",
+                        ];
+                        const tabCandidates = Array.from(document.querySelectorAll('a, button, [role="tab"]'));
+                        for (const node of tabCandidates) {
+                            const text = (node.innerText || node.textContent || "").trim();
+                            if (!text) {
+                                continue;
+                            }
+                            if (!allCampaignLabels.includes(text)) {
+                                continue;
+                            }
+                            const selected = (node.getAttribute && node.getAttribute('aria-selected') === 'true');
+                            if (!selected && typeof node.click === 'function') {
+                                node.click();
+                            }
+                            break;
                         }
-                        return bodyText;
+
+                        const explicitContainers = [
+                            document.querySelector('[data-a-target="tw-core-scrollable-area"]'),
+                            document.querySelector('[data-test-selector="drops-campaigns-page"]'),
+                            document.querySelector('main[role="main"]'),
+                            document.scrollingElement,
+                            document.body,
+                        ].filter(Boolean);
+                        const dynamicContainers = Array.from(document.querySelectorAll('main, section, div')).filter((el) => {
+                            try {
+                                return el && el.scrollHeight > (el.clientHeight + 200);
+                            } catch (_err) {
+                                return false;
+                            }
+                        });
+                        const containers = [...explicitContainers, ...dynamicContainers];
+                        let scroller = document.scrollingElement || document.body;
+                        let bestScore = -1;
+                        for (const el of containers) {
+                            const score = Number((el.scrollHeight || 0) - (el.clientHeight || 0));
+                            if (score > bestScore) {
+                                bestScore = score;
+                                scroller = el;
+                            }
+                        }
+                        if (scroller && typeof scroller.scrollBy === 'function') {
+                            scroller.scrollBy(0, Math.max(500, Math.floor((scroller.clientHeight || window.innerHeight || 800) * 0.9)));
+                        }
+
+                        const bodyText = (document.body && document.body.innerText ? document.body.innerText : "").trim();
+
+                        const rowMap = new Map();
+                        const scheduleRegex = /(?:GMT|UTC)(?:[+-]\\d+)?/;
+                        const uuidRegex = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+                        const noised = new Set([
+                            'Inventory',
+                            'All Campaigns',
+                            'Social Media Badge',
+                            'Drops & Rewards',
+                            'Open',
+                            'Details',
+                            'Expand',
+                            'Collapse',
+                        ]);
+                        const scheduleNodes = Array.from(document.querySelectorAll('div, li, article, section, tr, p, span'));
+                        for (const node of scheduleNodes) {
+                            const scheduleText = (node.innerText || node.textContent || '').trim();
+                            if (!scheduleText || scheduleText.length > 200) {
+                                continue;
+                            }
+                            if (!scheduleRegex.test(scheduleText) || !scheduleText.includes(' - ')) {
+                                continue;
+                            }
+
+                            let row = node;
+                            for (let i = 0; i < 6 && row && row.parentElement; i += 1) {
+                                const t = (row.innerText || '').trim();
+                                if (t.includes(scheduleText) && t.length >= scheduleText.length + 4) {
+                                    const lines = t.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+                                    if (lines.length >= 2) {
+                                        break;
+                                    }
+                                }
+                                row = row.parentElement;
+                            }
+                            if (!row) {
+                                continue;
+                            }
+
+                            const rowText = (row.innerText || '').trim();
+                            if (!rowText) {
+                                continue;
+                            }
+                            const lines = rowText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+                            if (!lines.length) {
+                                continue;
+                            }
+                            let title = '';
+                            for (const line of lines) {
+                                if (line === scheduleText) {
+                                    continue;
+                                }
+                                if (line.length > 120) {
+                                    continue;
+                                }
+                                if (scheduleRegex.test(line)) {
+                                    continue;
+                                }
+                                if (noised.has(line)) {
+                                    continue;
+                                }
+                                title = line;
+                                break;
+                            }
+                            if (!title) {
+                                continue;
+                            }
+
+                            const lowered = rowText.toLowerCase();
+                            const requiresSubscription = (
+                                lowered.includes('subscribe to redeem') ||
+                                lowered.includes('subscription required') ||
+                                lowered.includes('subscriber only') ||
+                                lowered.includes('subscribers only') ||
+                                lowered.includes('subscrição') ||
+                                lowered.includes('subscricao') ||
+                                lowered.includes('subscrição necessária') ||
+                                lowered.includes('subscricao necessaria') ||
+                                lowered.includes('apenas subs')
+                            );
+
+                            let campaignId = '';
+                            try {
+                                const hrefNode = row.querySelector('a[href*="drops/campaign"], a[href*="dropID"], a[href*="campaignId"]');
+                                if (hrefNode && hrefNode.href) {
+                                    const m = hrefNode.href.match(uuidRegex);
+                                    if (m) {
+                                        campaignId = m[0];
+                                    }
+                                }
+                            } catch (_err) {}
+
+                            const key = `${campaignId}|||${title}|||${scheduleText}`;
+                            rowMap.set(key, {
+                                campaign_id: campaignId,
+                                title,
+                                schedule: scheduleText,
+                                requires_subscription: requiresSubscription,
+                            });
+                        }
+
+                        // Secondary extraction for layouts without explicit GMT/UTC schedule lines.
+                        const linkNodes = Array.from(document.querySelectorAll('a[href*="drops/campaign"], a[href*="dropID"], a[href*="campaignId"]'));
+                        for (const link of linkNodes) {
+                            const href = (link && link.href ? link.href : '').trim();
+                            const match = href.match(uuidRegex);
+                            if (!match) {
+                                continue;
+                            }
+                            const campaignId = match[0];
+                            let row = link;
+                            for (let i = 0; i < 6 && row && row.parentElement; i += 1) {
+                                const text = (row.innerText || row.textContent || '').trim();
+                                if (text.length >= 8) {
+                                    break;
+                                }
+                                row = row.parentElement;
+                            }
+                            if (!row) {
+                                continue;
+                            }
+                            const rowText = (row.innerText || row.textContent || '').trim();
+                            if (!rowText) {
+                                continue;
+                            }
+                            const lines = rowText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+                            if (!lines.length) {
+                                continue;
+                            }
+                            let title = '';
+                            let schedule = '';
+                            for (const line of lines) {
+                                if (!title && !noised.has(line) && line.length >= 2 && line.length <= 120 && !uuidRegex.test(line)) {
+                                    title = line;
+                                }
+                                if (!schedule && scheduleRegex.test(line)) {
+                                    schedule = line;
+                                }
+                            }
+                            if (!title) {
+                                continue;
+                            }
+
+                            const lowered = rowText.toLowerCase();
+                            const requiresSubscription = (
+                                lowered.includes('subscribe to redeem') ||
+                                lowered.includes('subscription required') ||
+                                lowered.includes('subscriber only') ||
+                                lowered.includes('subscribers only') ||
+                                lowered.includes('subscrição') ||
+                                lowered.includes('subscricao') ||
+                                lowered.includes('subscrição necessária') ||
+                                lowered.includes('subscricao necessaria') ||
+                                lowered.includes('apenas subs')
+                            );
+
+                            const key = `${campaignId}|||${title}|||${schedule}`;
+                            if (!rowMap.has(key)) {
+                                rowMap.set(key, {
+                                    campaign_id: campaignId,
+                                    title,
+                                    schedule,
+                                    requires_subscription: requiresSubscription,
+                                });
+                            }
+                        }
+
+                        const cardSelectors = [
+                            'article',
+                            '[data-a-target="drops-campaign-card"]',
+                            '[data-test-selector*="campaign"]',
+                            '[class*="drops"] [class*="card"]',
+                        ];
+                        const cardTextParts = [];
+                        for (const selector of cardSelectors) {
+                            const nodes = Array.from(document.querySelectorAll(selector));
+                            for (const node of nodes) {
+                                const text = (node && node.innerText ? node.innerText : "").trim();
+                                if (text) {
+                                    cardTextParts.push(text);
+                                }
+                            }
+                        }
+
+                        return {
+                            bodyText,
+                            cardText: cardTextParts.join("\n\n"),
+                            structuredRows: Array.from(rowMap.values()),
+                            scheduleHits: (bodyText.match(/(?:GMT|UTC)(?:[+-]\\d+)?/g) || []).length,
+                            uuidHits: (bodyText.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g) || []).length,
+                            scrollTop: Number(scroller && scroller.scrollTop ? scroller.scrollTop : 0),
+                            scrollHeight: Number(scroller && scroller.scrollHeight ? scroller.scrollHeight : 0),
+                            clientHeight: Number(scroller && scroller.clientHeight ? scroller.clientHeight : 0),
+                        };
                     })();
                 """
 
                 def on_result(raw: Any) -> None:
-                    text = raw if isinstance(raw, str) else ""
-                    has_campaign_like_schedule = bool(
-                        re.search(r"(?:GMT|UTC)(?:[+-]\\d+)?", text)
-                    )
-                    if text and has_campaign_like_schedule:
-                        payload["raw"] = text
-                        finish()
+                    if isinstance(raw, dict):
+                        body_text = str(raw.get("bodyText", "") or "")
+                        card_text = str(raw.get("cardText", "") or "")
+                        rows_raw = raw.get("structuredRows") or []
+                        text = (card_text + "\n" + body_text).strip()
+                        schedule_hits = int(raw.get("scheduleHits", 0) or 0)
+                        uuid_hits = int(raw.get("uuidHits", 0) or 0)
+                        scroll_top = int(raw.get("scrollTop", 0) or 0)
+                        scroll_height = int(raw.get("scrollHeight", 0) or 0)
+                        client_height = int(raw.get("clientHeight", 0) or 0)
+                        near_bottom = scroll_height > 0 and (scroll_top + client_height) >= (scroll_height - 120)
+                    else:
+                        rows_raw = []
+                        text = raw if isinstance(raw, str) else ""
+                        schedule_hits = 0
+                        uuid_hits = 0
+                        near_bottom = False
+
+                    if isinstance(rows_raw, list):
+                        normalized_rows: list[dict[str, Any]] = []
+                        for item in rows_raw:
+                            if not isinstance(item, dict):
+                                continue
+                            title = str(item.get("title", "") or "").strip()
+                            schedule = str(item.get("schedule", "") or "").strip()
+                            if not title:
+                                continue
+                            normalized_rows.append(
+                                {
+                                    "campaign_id": str(item.get("campaign_id", "") or "").strip(),
+                                    "title": title,
+                                    "schedule": schedule,
+                                    "requires_subscription": bool(item.get("requires_subscription", False)),
+                                }
+                            )
+                        if len(normalized_rows) > int(payload.get("best_row_count", 0) or 0):
+                            payload["rows"] = normalized_rows
+                            payload["best_row_count"] = len(normalized_rows)
+
+                    has_campaign_like_schedule = bool(re.search(r"(?:GMT|UTC)(?:[+-]\\d+)?", text))
+                    has_structured_rows = bool(isinstance(rows_raw, list) and len(rows_raw) > 0)
+                    has_campaign_identifiers = uuid_hits > 0 or bool(re.search(r"drops?\s+campaign", text, flags=re.IGNORECASE))
+                    text_len = len(text)
+
+                    if text and (has_campaign_like_schedule or has_structured_rows or has_campaign_identifiers):
+                        previous_best = int(payload.get("best_len", 0) or 0)
+                        previous_hits = int(payload.get("best_hits", 0) or 0)
+                        previous_uuid_hits = int(payload.get("best_uuid_hits", 0) or 0)
+                        if text_len > previous_best:
+                            payload["raw"] = text
+                            payload["best_len"] = text_len
+                            payload["best_hits"] = max(previous_hits, schedule_hits)
+                            payload["best_uuid_hits"] = max(previous_uuid_hits, uuid_hits)
+                            stable_rounds["value"] = 0
+                        elif schedule_hits > previous_hits:
+                            payload["raw"] = text
+                            payload["best_len"] = text_len
+                            payload["best_hits"] = schedule_hits
+                            payload["best_uuid_hits"] = max(previous_uuid_hits, uuid_hits)
+                            stable_rounds["value"] = 0
+                        elif uuid_hits > previous_uuid_hits:
+                            payload["raw"] = text
+                            payload["best_len"] = text_len
+                            payload["best_hits"] = max(previous_hits, schedule_hits)
+                            payload["best_uuid_hits"] = uuid_hits
+                            stable_rounds["value"] = 0
+                        else:
+                            stable_rounds["value"] += 1
+                        empty_rounds["value"] = 0
+
+                        if near_bottom:
+                            near_bottom_rounds["value"] += 1
+                        else:
+                            near_bottom_rounds["value"] = 0
+
+                        # Stop when content stopped growing and we've likely scanned the full page.
+                        if stable_rounds["value"] >= 8 and near_bottom_rounds["value"] >= 4:
+                            finish()
                         return
+
                     empty_rounds["value"] += 1
-                    if empty_rounds["value"] >= 12:
-                        self._note("Browser fallback stopped early after repeated empty card polls.")
+                    if empty_rounds["value"] >= 20:
+                        self._note("Browser fallback stopped after repeated empty campaign extraction polls.")
                         finish()
 
                 page.runJavaScript(script, on_result)
@@ -1518,7 +2447,7 @@ class TwitchClient:
             timeout.timeout.connect(on_timeout)
             poll_timer.timeout.connect(collect_cards)
             page.loadFinished.connect(on_loaded)
-            timeout.start(25_000)
+            timeout.start(65_000)
             page.load(QUrl(f"{TWITCH_URL}/drops/campaigns"))
             loop.exec()
 
@@ -1535,11 +2464,32 @@ class TwitchClient:
             return []
 
         raw_cards = payload["raw"]
-        if not raw_cards:
-            self._note("Browser fallback did not capture any rendered campaign cards.")
-            return []
+        campaigns: list[DropCampaign] = []
+        rows = payload.get("rows") or []
+        if isinstance(rows, list) and rows:
+            seen_fp: set[str] = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                campaign = self._campaign_from_browser_row(
+                    campaign_id=str(row.get("campaign_id", "") or "").strip(),
+                    title=str(row.get("title", "") or ""),
+                    schedule=str(row.get("schedule", "") or ""),
+                    requires_subscription=bool(row.get("requires_subscription", False)),
+                )
+                if campaign is None:
+                    continue
+                fp = f"{campaign.title}|{campaign.starts_at.isoformat()}|{campaign.ends_at.isoformat()}"
+                if fp in seen_fp:
+                    continue
+                seen_fp.add(fp)
+                campaigns.append(campaign)
 
-        campaigns = self._campaigns_from_browser_body_text(raw_cards)
+        if not campaigns:
+            if not raw_cards:
+                self._note("Browser fallback did not capture any rendered campaign cards.")
+                return []
+            campaigns = self._campaigns_from_browser_body_text(raw_cards)
 
         if campaigns:
             self._note(
@@ -1709,17 +2659,44 @@ class TwitchClient:
 
         starts_at_raw = data.get("startAt") or data.get("startsAt")
         ends_at_raw = data.get("endAt") or data.get("endsAt")
-        starts_at = self._parse_timestamp(starts_at_raw)
-        ends_at = self._parse_timestamp(ends_at_raw)
         status = str(data.get("status", "") or "").strip().upper()
         now = datetime.now(timezone.utc)
 
-        if ends_at <= starts_at:
-            self._note(
-                f"Skipping campaign '{data.get('name') or game_name}' due to invalid schedule "
-                f"({starts_at.isoformat()} -> {ends_at.isoformat()})."
-            )
-            return None
+        timestamp_source = ""
+        timestamps_are_synthetic = False
+
+        if starts_at_raw and ends_at_raw:
+            timestamp_source = "campaign"
+            starts_at = self._parse_timestamp(starts_at_raw)
+            ends_at = self._parse_timestamp(ends_at_raw)
+            if ends_at <= starts_at:
+                self._note(
+                    f"Skipping campaign '{data.get('name') or game_name}' due to invalid schedule "
+                    f"({starts_at.isoformat()} -> {ends_at.isoformat()})."
+                )
+                return None
+        else:
+            # No campaign-level timestamps — look for drop-level endAt.
+            drops_raw_ts = data.get("timeBasedDrops", []) or []
+            drop_end_datetimes: list[datetime] = []
+            for drop in drops_raw_ts:
+                if isinstance(drop, dict) and drop.get("endAt"):
+                    try:
+                        drop_end_datetimes.append(
+                            datetime.fromisoformat(str(drop["endAt"]).replace("Z", "+00:00"))
+                        )
+                    except (ValueError, TypeError):
+                        pass
+            if drop_end_datetimes:
+                ends_at = max(drop_end_datetimes)
+                starts_at = ends_at - timedelta(days=7)
+                timestamp_source = "drop"
+            else:
+                # No timestamps anywhere — fabricate a safe window.
+                starts_at = now - timedelta(hours=1)
+                ends_at = now + timedelta(days=30)
+                timestamp_source = "synthetic"
+                timestamps_are_synthetic = True
 
         if ends_at <= now:
             status = "EXPIRED"
@@ -1731,7 +2708,27 @@ class TwitchClient:
         next_drop_name, next_drop_remaining, next_drop_required = self._next_drop_info(drops)
         all_drops_claimed = self._all_drops_claimed(drops)
         requires_subscription = self._campaign_requires_subscription(data, drops)
-        
+        has_watchable_drops = self._compute_has_watchable_drops(drops)
+
+        # Guard against stale per-drop progress: DropCampaignDetails may return
+        # timeBasedDrops with currentMinutesWatched=0 while the Inventory query
+        # stores the real campaign-level progress in data["self"]["currentMinutesWatched"].
+        # This fires whenever inventory shows MORE progress than the per-drop computation
+        # (not only when computed progress is exactly 0) to handle partial-stale scenarios.
+        campaign_self = data.get("self") or {}
+        if isinstance(campaign_self, dict) and total_required > 0:
+            inv_current = int(campaign_self.get("currentMinutesWatched", 0) or 0)
+            computed_progress = total_required - total_remaining
+            if inv_current > computed_progress:
+                total_remaining = max(0, total_required - inv_current)
+                # Re-estimate next_drop_remaining: how much of inv_current applies to
+                # drops before the current one (prev_required), then the rest is
+                # progress already accumulated on the next drop.
+                if next_drop_required > 0:
+                    prev_required = total_required - next_drop_required
+                    next_drop_progress = max(0, inv_current - prev_required)
+                    next_drop_remaining = max(0, next_drop_required - next_drop_progress)
+
         # If no drops found in standard locations, try alternative extraction
         if total_required <= 0:
             total_required, total_remaining = self._extract_campaign_progress_data(data)
@@ -1739,6 +2736,15 @@ class TwitchClient:
                 next_drop_name = str(data.get("name", "")).strip() or "Drop"
                 next_drop_remaining = total_remaining
                 next_drop_required = total_required
+
+        # Inventory-backed campaigns can arrive with ambiguous/incorrect status values
+        # when dashboard/detail queries are integrity-limited. If they still have
+        # watch-time progress and are not expired by schedule, treat them as active.
+        if status in {"", "INACTIVE"} and ends_at > now:
+            inv_self = data.get("self") or {}
+            inv_minutes = int(inv_self.get("currentMinutesWatched", 0) or 0) if isinstance(inv_self, dict) else 0
+            if total_required > 0 or inv_minutes > 0:
+                status = "ACTIVE"
         # Some campaign payloads omit/lag per-drop claim flags while total remaining is already 0.
         if not all_drops_claimed and total_required > 0 and total_remaining <= 0:
             all_drops_claimed = True
@@ -1770,15 +2776,55 @@ class TwitchClient:
             has_badge_or_emote=self._campaign_has_badge_or_emote(drops),
             all_drops_claimed=all_drops_claimed,
             requires_subscription=requires_subscription,
+            has_watchable_drops=has_watchable_drops,
             next_drop_name=next_drop_name,
             next_drop_remaining_minutes=next_drop_remaining,
             next_drop_required_minutes=next_drop_required,
             drops=self._drop_progress_items(drops),
+            timestamps_are_synthetic=timestamps_are_synthetic,
+            timestamp_source=timestamp_source,
         )
         return campaign
 
+    def fetch_inventory_progress(self) -> dict[str, DropCampaign]:
+        """Fetch only in-progress inventory campaigns for fast progress reconciliation."""
+        progress_by_campaign: dict[str, DropCampaign] = {}
+        if not self.login_state.oauth_token:
+            self._note("Inventory progress refresh skipped: sem auth-token.")
+            return progress_by_campaign
+
+        try:
+            inventory_response = self._post_gql(INVENTORY_QUERY, client_profile="android")
+        except requests.RequestException as exc:
+            self._note(f"Inventory progress refresh failed: {exc}")
+            return progress_by_campaign
+
+        current_user = (inventory_response.get("data") or {}).get("currentUser")
+        if current_user is None:
+            self._note("Inventory progress refresh returned currentUser=null.")
+            return progress_by_campaign
+
+        inventory = current_user.get("inventory", {}) or {}
+        ongoing_campaigns = inventory.get("dropCampaignsInProgress", []) or []
+        for payload in ongoing_campaigns:
+            if not isinstance(payload, dict):
+                continue
+            campaign = self._parse_campaign(payload)
+            if campaign is None or not campaign.id:
+                continue
+            progress_by_campaign[campaign.id] = campaign
+
+        self._note(
+            f"Inventory progress refresh: {len(progress_by_campaign)} campanha(s) em progresso."
+        )
+        return progress_by_campaign
+
     def fetch_campaigns(self, *, allow_browser_fallback: bool = True) -> list[DropCampaign]:
         self._diagnostics.clear()
+        if allow_browser_fallback and threading.current_thread() is not threading.main_thread():
+            # QWebEngine fallback must stay on Qt/main thread; worker-thread usage can crash the app.
+            allow_browser_fallback = False
+            self._note("Browser fallback ignorado fora do thread principal (segurança de estabilidade).")
         if not self.login_state.oauth_token:
             self._note("No auth-token cookie value saved yet.")
             return []
@@ -1790,12 +2836,6 @@ class TwitchClient:
             return []
         except requests.RequestException as exc:
             self._note(f"OAuth validation request failed: {exc}")
-            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
-            if cached:
-                self._note(
-                    f"Using cached campaign list ({len(cached)}) after transient validation failure."
-                )
-                return cached
             return []
 
         try:
@@ -1830,22 +2870,10 @@ class TwitchClient:
             for message in dashboard_errors
         )
         if not campaigns_response:
-            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
-            if cached:
-                self._note(
-                    f"ViewerDropsDashboard returned no payload. Using cached campaign list ({len(cached)})."
-                )
-                return cached
             return []
         dashboard_user = campaigns_response.get("data", {}).get("currentUser")
         if dashboard_user is None:
             self._note("ViewerDropsDashboard returned currentUser=null.")
-            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
-            if cached:
-                self._note(
-                    f"Using cached campaign list ({len(cached)}) after currentUser=null from dashboard."
-                )
-                return cached
             return []
 
         available_list = dashboard_user.get("dropCampaigns", []) or []
@@ -1860,7 +2888,7 @@ class TwitchClient:
         fallback_campaigns = self._campaigns_from_drops_page()
         if dashboard_integrity_blocked:
             self._note(
-                "ViewerDropsDashboard blocked by integrity check. Using drops-page IDs plus inventory/cache fallback."
+                "ViewerDropsDashboard bloqueado por integrity check. A usar IDs da página de drops e inventário (sem cache)."
             )
         if available_campaigns and len(available_campaigns) <= minimum_expected:
             self._note(
@@ -1885,6 +2913,19 @@ class TwitchClient:
             weak_listing = True
         self._note(f"Dashboard returned {len(available_campaigns)} active/upcoming campaign(s).")
 
+        # Build a broader detail-ID set when dashboard listing is integrity-limited.
+        # This avoids being stuck with only in-progress inventory campaigns.
+        detail_id_candidates: set[str] = set(available_campaigns)
+        detail_id_candidates.update(inventory_data)
+        detail_id_candidates = {
+            cid for cid in detail_id_candidates if CAMPAIGN_UUID_PATTERN.fullmatch(str(cid or "").strip())
+        }
+        if (dashboard_integrity_blocked or not available_campaigns) and detail_id_candidates:
+            self._note(
+                "Integrity-limited listing: expanding DropCampaignDetails IDs with "
+                f"inventory/drops-page hints ({len(detail_id_candidates)} candidate IDs)."
+            )
+
         detailed_campaigns: dict[str, dict[str, Any]] = {}
         identity_candidates = [
             candidate
@@ -1893,7 +2934,7 @@ class TwitchClient:
         ]
         for identity in identity_candidates:
             details_payload: list[dict[str, Any]] = []
-            for campaign_id in available_campaigns:
+            for campaign_id in detail_id_candidates:
                 operation = self._clone_query(CAMPAIGN_DETAILS_QUERY)
                 operation["variables"]["channelLogin"] = identity
                 operation["variables"]["dropID"] = campaign_id
@@ -1936,6 +2977,22 @@ class TwitchClient:
                 merged = self._merge_data(merged, available_campaigns[campaign_id]) if merged else available_campaigns[campaign_id]
             if campaign_id in detailed_campaigns:
                 merged = self._merge_data(merged, detailed_campaigns[campaign_id]) if merged else detailed_campaigns[campaign_id]
+            # Inventory is the authoritative source for user watch-time progress.
+            # Re-apply it after structural merging to prevent stale progress in the UI.
+            if campaign_id in inventory_data:
+                inv = inventory_data[campaign_id]
+                inv_drops = inv.get("timeBasedDrops") or []
+                if inv_drops:
+                    # Use inventory drops directly so progress/claim state always matches Twitch.
+                    merged = {**merged, "timeBasedDrops": list(inv_drops)}
+
+                inv_self = inv.get("self")
+                if isinstance(inv_self, dict):
+                    current_self = merged.get("self") or {}
+                    if not isinstance(current_self, dict):
+                        current_self = {}
+                    # Keep inventory campaign-level minutes authoritative as well.
+                    merged = {**merged, "self": {**current_self, **inv_self}}
             merged_campaigns[campaign_id] = merged
 
         campaigns: list[DropCampaign] = []
@@ -1990,9 +3047,9 @@ class TwitchClient:
                 )
             browser_campaigns = self._campaigns_from_browser_page()
             if browser_campaigns:
-                # Merge by both ID and game name to preserve progress data
+                # Merge only by campaign ID to avoid mixing drop progress across
+                # different campaigns that happen to share the same game name.
                 merged_by_id = {campaign.id: campaign for campaign in campaigns}
-                merged_by_game = {campaign.game_name.lower(): campaign for campaign in campaigns}
                 
                 for browser_campaign in browser_campaigns:
                     # Try exact ID match first
@@ -2010,24 +3067,6 @@ class TwitchClient:
                             browser_campaign.requires_subscription or existing.requires_subscription
                         )
                         merged_by_id[browser_campaign.id] = browser_campaign
-                    # Try game name match (case-insensitive)
-                    elif browser_campaign.game_name.lower() in merged_by_game:
-                        existing = merged_by_game[browser_campaign.game_name.lower()]
-                        # Use browser campaign for schedule but keep progress from inventory
-                        browser_campaign.progress_minutes = existing.progress_minutes
-                        browser_campaign.required_minutes = existing.required_minutes
-                        browser_campaign.drops = list(existing.drops)
-                        browser_campaign.next_drop_name = existing.next_drop_name
-                        browser_campaign.next_drop_remaining_minutes = existing.next_drop_remaining_minutes
-                        browser_campaign.next_drop_required_minutes = existing.next_drop_required_minutes
-                        browser_campaign.all_drops_claimed = existing.all_drops_claimed
-                        browser_campaign.requires_subscription = (
-                            browser_campaign.requires_subscription or existing.requires_subscription
-                        )
-                        # Remove old campaign and add merged one
-                        del merged_by_id[existing.id]
-                        merged_by_id[browser_campaign.id] = browser_campaign
-                        merged_by_game[browser_campaign.game_name.lower()] = browser_campaign
                     else:
                         # New campaign from browser
                         merged_by_id[browser_campaign.id] = browser_campaign
@@ -2041,10 +3080,6 @@ class TwitchClient:
         if not campaigns:
             if inventory_data or dashboard_integrity_blocked:
                 self._note("ViewerDropsDashboard is empty or integrity-protected. Skipping browser fallback.")
-                cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > datetime.now(timezone.utc)]
-                if cached:
-                    self._note(f"Using cached campaign list ({len(cached)}) instead of browser fallback.")
-                    campaigns = cached
             elif allow_browser_fallback:
                 self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
                 campaigns = self._campaigns_from_browser_page()
@@ -2054,57 +3089,6 @@ class TwitchClient:
                     weak_listing = False
             else:
                 self._note("ViewerDropsDashboard is empty or integrity-protected, and browser fallback is disabled.")
-        now = datetime.now(timezone.utc)
-        cached_campaigns = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
-        if campaigns and cached_campaigns:
-            inventory_ids = set(inventory_data)
-            fresh_ids = {campaign.id for campaign in campaigns}
-            cached_ids = {campaign.id for campaign in cached_campaigns}
-            dashboard_matches_inventory = bool(inventory_ids) and fresh_ids == inventory_ids
-            cache_has_more_campaigns = len(cached_ids) > len(fresh_ids) and bool(cached_ids - fresh_ids)
-            if dashboard_matches_inventory and cache_has_more_campaigns:
-                weak_listing = True
-                self._note(
-                    "Dashboard listing mirrors only in-progress inventory campaigns. "
-                    "Keeping cached active/upcoming campaigns as fallback."
-                )
-        if campaigns and self._campaign_cache and weak_listing:
-            # Inventory-only responses can hide valid active/upcoming campaigns.
-            merged_by_id: dict[str, DropCampaign] = {
-                campaign.id: campaign
-                for campaign in cached_campaigns
-                if campaign.ends_at > now
-            }
-            for campaign in campaigns:
-                merged_by_id[campaign.id] = campaign
-            if len(merged_by_id) > len(campaigns):
-                campaigns = list(merged_by_id.values())
-                campaigns.sort(key=lambda item: item.starts_at)
-                campaigns.sort(key=lambda item: item.active, reverse=True)
-                self._note(
-                    f"Merged cached campaigns ({len(campaigns)}) because Twitch listing appears incomplete."
-                )
-        if campaigns and cached_campaigns and weak_listing:
-            # Prevent sudden campaign drops when Twitch returns only a partial listing.
-            if len(campaigns) < len(cached_campaigns):
-                campaigns = cached_campaigns
-                self._note(
-                    "Kept cached campaign snapshot because fresh listing was smaller and likely incomplete."
-                )
-
-        if campaigns:
-            # Keep a best-effort cache so the UI does not go empty when Twitch integrity checks block listing APIs.
-            self._campaign_cache = [campaign for campaign in campaigns if campaign.ends_at > now]
-            self._save_campaign_cache()
-        elif self._campaign_cache:
-            cached = [campaign for campaign in self._campaign_cache if campaign.ends_at > now]
-            if cached:
-                campaigns = cached
-                self._campaign_cache = cached
-                self._save_campaign_cache()
-                self._note(
-                    f"Using cached campaign list ({len(cached)}) because Twitch returned no active campaigns."
-                )
         self._note(
             f"Parsed {len(campaigns)} campaign(s), {sum(campaign.eligible for campaign in campaigns)} eligible for farming."
         )
@@ -2120,7 +3104,7 @@ class TwitchClient:
         payload = self._clone_query(GAME_REDIRECT_QUERY)
         payload["variables"]["name"] = game_name
         response = self._post_gql(payload)
-        slug = response.get("data", {}).get("game", {}).get("slug", "") or ""
+        slug = ((response.get("data") or {}).get("game") or {}).get("slug", "") or ""
         self._slug_cache[game_name.casefold()] = slug
         if not slug:
             self._note(f"Could not resolve a Twitch directory slug for {game_name}.")
@@ -2139,7 +3123,7 @@ class TwitchClient:
                 payload["variables"]["slug"] = slug
                 payload["variables"]["limit"] = 1
                 response = self._post_gql(payload)
-                game = response.get("data", {}).get("game", {}) or {}
+                game = (response.get("data") or {}).get("game") or {}
                 art_url = self._game_box_art_url(game)
                 if art_url:
                     self._game_box_art_cache[cache_key] = art_url
@@ -2151,7 +3135,7 @@ class TwitchClient:
             payload = self._clone_query(GAME_REDIRECT_QUERY)
             payload["variables"]["name"] = game_name
             response = self._post_gql(payload)
-            game = response.get("data", {}).get("game", {}) or {}
+            game = (response.get("data") or {}).get("game") or {}
             art_url = self._game_box_art_url(game)
             if art_url:
                 self._game_box_art_cache[cache_key] = art_url
@@ -2356,15 +3340,29 @@ class TwitchClient:
         self._note(f"Google image search did not return a usable box art URL for {game_name}.")
         return ""
 
-    def fetch_streams(self, campaign: DropCampaign) -> list[StreamCandidate]:
-        slug = campaign.game_slug or self.resolve_game_slug(campaign.game_name)
-        if not slug:
-            return []
-
+    def _fetch_streams_for_slug(
+        self, campaign: DropCampaign, slug: str
+    ) -> list[StreamCandidate]:
+        """Query the game directory for live drops-enabled streams using a resolved slug."""
         payload = self._clone_query(GAME_DIRECTORY_QUERY)
         payload["variables"]["slug"] = slug
         response = self._post_gql(payload)
-        edges = response.get("data", {}).get("game", {}).get("streams", {}).get("edges", []) or []
+        # response["data"] can be None (e.g. PersistedQueryNotFound returns data:null)
+        # Use `or {}` instead of `.get("data", {})` to guard against the None case.
+        game_data = (response.get("data") or {}).get("game") or {}
+        if not game_data:
+            errors = self._graphql_error_messages(response)
+            if errors:
+                self._note(
+                    f"DirectoryPage_Game returned no data for {campaign.game_name} "
+                    f"(slug={slug!r}): {errors[0]}"
+                )
+            else:
+                self._note(
+                    f"DirectoryPage_Game returned empty game data for {campaign.game_name} "
+                    f"(slug={slug!r}). Slug may be wrong."
+                )
+        edges = (game_data.get("streams") or {}).get("edges") or []
         output: list[StreamCandidate] = []
         for edge in edges:
             node = edge.get("node", {}) or {}
@@ -2385,6 +3383,74 @@ class TwitchClient:
             )
         self._note(f"Found {len(output)} drops-enabled stream(s) for {campaign.game_name}.")
         return output
+
+    def _fetch_streams_from_allowed_channels(
+        self, campaign: DropCampaign
+    ) -> list[StreamCandidate]:
+        """Query each allowed channel directly and return only the live ones."""
+        output: list[StreamCandidate] = []
+        for login in campaign.allowed_channels:
+            try:
+                info = self._stream_info(login)
+            except Exception as exc:
+                self._note(f"_stream_info failed for allowed channel {login!r}: {exc}")
+                continue
+            broadcast_id = info.get("broadcast_id", "")
+            if not broadcast_id:
+                # Channel is offline or not streaming
+                continue
+            channel_id = info.get("channel_id", "")
+            output.append(
+                StreamCandidate(
+                    login=login,
+                    display_name=login,
+                    game_name=campaign.game_name,
+                    viewer_count=0,
+                    drops_enabled=True,
+                    channel_id=channel_id,
+                    broadcast_id=broadcast_id,
+                )
+            )
+        self._note(
+            f"Found {len(output)} live allowed channel(s) for {campaign.game_name}."
+        )
+        return output
+
+    def fetch_streams(self, campaign: DropCampaign) -> list[StreamCandidate]:
+        slug = campaign.game_slug or self.resolve_game_slug(campaign.game_name)
+
+        if slug and slug.casefold() in SPECIAL_GAME_SLUGS:
+            self._note(
+                f"Campanha '{campaign.title}' é de jogo especial ({campaign.game_name}) — "
+                "drops ganhos em qualquer stream com drops activos."
+            )
+
+        if not slug:
+            # No slug: can only check allowed channels individually.
+            if campaign.allowed_channels:
+                return self._fetch_streams_from_allowed_channels(campaign)
+            return []
+
+        # Always query the game directory first (one API call, top streams by viewers).
+        directory_streams = self._fetch_streams_for_slug(campaign, slug)
+
+        if not campaign.allowed_channels:
+            # No channel restriction — any drops-enabled stream is valid.
+            return directory_streams
+
+        # Campaign restricts which channels grant drops: filter the directory results.
+        allowed_set = {login.casefold() for login in campaign.allowed_channels}
+        filtered = [s for s in directory_streams if s.login.casefold() in allowed_set]
+        if filtered:
+            return filtered
+
+        # None of the top directory streams are in the allowed list.
+        # Fall back to checking each allowed channel individually.
+        self._note(
+            f"No allowed channels in top directory streams for {campaign.game_name}; "
+            f"checking {len(campaign.allowed_channels)} allowed channel(s) directly."
+        )
+        return self._fetch_streams_from_allowed_channels(campaign)
 
 
 if __name__ == "__main__":

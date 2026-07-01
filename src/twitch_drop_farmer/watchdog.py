@@ -55,16 +55,35 @@ class Watchdog:
         self.recovery_attempts = 0
         self.last_recovery_time = 0.0
         self.is_enabled = True
+        # Stall detection tracks when progress LAST ADVANCED, not when update_progress
+        # was last called.  update_progress is called every poll cycle regardless of
+        # whether minutes actually incremented, so comparing timestamps is incorrect.
+        self._last_known_progress: int = -1
+        self._last_progress_change_time: float = 0.0
+        self._last_stall_campaign_id: str = ""
 
     def update_progress(self, total_progress_minutes: int, campaign_id: str, channel: str) -> None:
         """Update current farming progress."""
+        now = time.time()
+        # Reset the stall clock only when the campaign changes or progress actually
+        # increases.  Calling update_progress with the same value every 120-second poll
+        # must NOT reset the clock — that would prevent stall detection entirely.
+        campaign_changed = campaign_id != self._last_stall_campaign_id
+        progress_advanced = total_progress_minutes > self._last_known_progress
+        if campaign_changed or progress_advanced:
+            self._last_known_progress = total_progress_minutes
+            self._last_stall_campaign_id = campaign_id
+            self._last_progress_change_time = now
+            if progress_advanced:
+                self.recovery_attempts = 0  # Reset only on real progress
+
         self.last_snapshot = ProgressSnapshot(
             total_progress_minutes=total_progress_minutes,
             active_campaign_id=campaign_id,
             active_channel=channel,
         )
-        self.recovery_attempts = 0  # Reset counter on progress
-        self.state = WatchdogState.MONITORING
+        if self.state not in (WatchdogState.STALLED, WatchdogState.RECOVERING):
+            self.state = WatchdogState.MONITORING
 
     def check_stall(self) -> tuple[bool, str]:
         """
@@ -75,10 +94,10 @@ class Watchdog:
         if not self.is_enabled or self.state == WatchdogState.RECOVERING:
             return False, ""
 
-        if self.last_snapshot is None:
+        if self.last_snapshot is None or self._last_progress_change_time == 0.0:
             return False, "No progress snapshot yet"
 
-        elapsed_min = self.last_snapshot.time_since_snapshot() / 60
+        elapsed_min = (time.time() - self._last_progress_change_time) / 60
         if elapsed_min >= self.config.stall_timeout_min:
             self.state = WatchdogState.STALLED
             reason = f"No progress for {elapsed_min:.0f} minutes (threshold: {self.config.stall_timeout_min})"
@@ -130,6 +149,9 @@ class Watchdog:
         self.last_snapshot = None
         self.recovery_attempts = 0
         self.last_recovery_time = 0.0
+        self._last_known_progress = -1
+        self._last_progress_change_time = 0.0
+        self._last_stall_campaign_id = ""
 
     def get_status(self) -> dict:
         """Get current watchdog status."""

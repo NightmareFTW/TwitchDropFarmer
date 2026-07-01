@@ -93,8 +93,12 @@ CHECK_MARK = "\u2713"
 BOX_ART_FALLBACK_URL = "https://static-cdn.jtvnw.net/ttv-static/404_boxart.jpg"
 
 # ── Ribbon constants ────────────────────────────────────────────────────────
-RIBBON_FARMING = ("FARMING", "#9147ff")  # purple
-RIBBON_LIVE    = ("LIVE",    "#00b167")  # green
+RIBBON_FARMING     = ("FARMING",    "#9147ff")  # purple
+RIBBON_LIVE        = ("LIVE",       "#00b167")  # green
+RIBBON_NO_CHANNELS = ("SEM CANAIS", "#c0392b")  # red
+RIBBON_SUB         = ("SUBSCRIÇÃO", "#e67e22")  # orange  – campanha apenas para subscritores
+RIBBON_DONE        = ("CONCLUÍDO",  "#2980b9")  # blue    – todos os drops já obtidos
+RIBBON_INACTIVE    = ("INATIVO",   "#7f8c8d")  # gray    – campanha futura, expirada ou sem dados
 
 
 class GameCard(QWidget):
@@ -744,7 +748,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
         "tab_dashboard": "Dashboard",
-        "tab_dashboard": "Dashboard",
         "tab_account": "Conta",
         "tab_filters": "Filtros",
         "tab_settings": "Definições",
@@ -764,25 +767,27 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_badge_offline": "Sem stream",
         "dashboard_badge_no_data": "Sem dados",
         "dashboard_badge_completed": "Completo",
-        "dashboard_badge_subscription_required": "Subscricao Requerida",
+        "dashboard_badge_subscription_required": "Subscrição Requerida",
         "dashboard_badge_lost_full": "Perdida",
         "dashboard_badge_lost_partial": "Parcial perdida",
         "dashboard_completed_tooltip": "Todos os drops deste jogo ja foram concluidos nesta conta.",
         "dashboard_completed_tooltip_detail": "Concluidas {completed}/{total} campanhas rastreaveis deste jogo.",
-        "dashboard_subscription_required_tooltip": "Este drop exige subscricao ativa para ser resgatado.",
+        "dashboard_subscription_required_tooltip": "Este drop exige subscrição ativa para ser resgatado.",
         "dashboard_lost_full_tooltip": "Campanha expirada sem progresso: {lost}/{total} campanhas perderam todos os drops.",
         "dashboard_lost_partial_tooltip": "Campanha expirada com progresso parcial: {lost}/{total} campanhas ficaram incompletas.",
         "dashboard_upcoming_tooltip": "A campanha ainda nao comecou.",
         "dashboard_offline_tooltip": "Sem stream valida no momento para esta campanha.",
         "dashboard_ribbon_lost_full": "PERDIDA",
         "dashboard_ribbon_lost_partial": "PARCIAL",
-        "dashboard_ribbon_subscription_required": "SUBSCRICAO",
+        "dashboard_ribbon_subscription_required": "SUBSCRIÇÃO",
+        "dashboard_ribbon_no_channels": "SEM CANAIS",
+        "dashboard_no_channels_tooltip": "Nenhum canal com drops ativos encontrado para esta campanha neste momento.",
         "active_drops_group": "Drops ativos",
         "active_drops_group_game": "Drops ativos de {game}",
         "active_drops_empty": "Sem drops ativos para mostrar.",
         "active_drops_claimed": "Resgatado",
         "active_drops_progress": "{current}/{required} min",
-        "active_drops_subscription_hint": "Esta campanha exige subscricao ativa para resgatar.",
+        "active_drops_subscription_hint": "Esta campanha exige subscrição ativa para resgatar.",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
@@ -854,9 +859,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_stream_selected": "Melhor stream por drops ativos e viewers.",
         "reason_channel_priority": "Whitelist de canais aplicada.",
         "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
-        "reason_subscription_required": "Campanha requer subscricao ativa para resgatar.",
+        "reason_subscription_required": "Campanha requer subscrição ativa para resgatar.",
         "reason_campaign_upcoming": "Campanha ainda não começou.",
         "reason_campaign_not_active": "Campanha não está activa neste momento.",
+        "reason_campaign_expired": "Campanha expirada.",
+        "reason_no_actionable_drop_data": "Campanha sem dados de drop farmáveis.",
         "reason_campaign_completed": "Campanha concluída (todos os drops já completos).",
         "link_opened": "Link de campanha aberto no navegador.",
         "drops_page_opened": "Página de Drops aberta no navegador.",
@@ -1006,7 +1013,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_farming_now": "Farming now",
         "tab_campaign_explorer": "Campaigns",
         "tab_dashboard": "Dashboard",
-        "tab_dashboard": "Dashboard",
         "tab_account": "Account",
         "tab_filters": "Filters",
         "tab_settings": "Settings",
@@ -1039,6 +1045,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_ribbon_lost_full": "LOST",
         "dashboard_ribbon_lost_partial": "PARTIAL",
         "dashboard_ribbon_subscription_required": "SUB REQUIRED",
+        "dashboard_ribbon_no_channels": "NO CHANNELS",
+        "dashboard_no_channels_tooltip": "No drop-enabled channel found for this campaign right now.",
         "active_drops_group": "Active drops",
         "active_drops_group_game": "Active drops for {game}",
         "active_drops_empty": "No active drops to display.",
@@ -1119,6 +1127,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "reason_subscription_required": "Campaign requires an active subscription to redeem.",
         "reason_campaign_upcoming": "Campaign has not started yet.",
         "reason_campaign_not_active": "Campaign is not active right now.",
+        "reason_campaign_expired": "Campaign has expired.",
+        "reason_no_actionable_drop_data": "Campaign has no actionable drop data.",
         "reason_campaign_completed": "Campaign completed (all drops already finished).",
         "link_opened": "Campaign link opened in the browser.",
         "drops_page_opened": "Drops page opened in the browser.",
@@ -1555,6 +1565,23 @@ class MainWindow(QMainWindow):
         self._update_poll_timer = QTimer(self)
         self._update_poll_timer.setInterval(250)
         self._update_poll_timer.timeout.connect(self._poll_update_future)
+        self._snap_future: Future | None = None
+        self._snap_poll_timer = QTimer(self)
+        self._snap_poll_timer.setInterval(250)
+        self._snap_poll_timer.timeout.connect(self._poll_snap_future)
+        self._heartbeat_future: Future | None = None
+        self._heartbeat_pending_channel: str = ""
+        self._heartbeat_pending_channel_id: str = ""
+        self._heartbeat_pending_campaign_id: str = ""
+        self._heartbeat_pending_game_name: str = ""
+        self._heartbeat_pending_campaign_title: str = ""
+        self._heartbeat_pending_progress_before: int = 0
+        self._heartbeat_pending_required_before: int = 0
+        self._heartbeat_no_progress_cycles: int = 0
+        self._heartbeat_retry_after_snapshot: bool = False
+        self._heartbeat_poll_timer = QTimer(self)
+        self._heartbeat_poll_timer.setInterval(250)
+        self._heartbeat_poll_timer.timeout.connect(self._poll_heartbeat_future)
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
@@ -1583,7 +1610,8 @@ class MainWindow(QMainWindow):
         self.live_refresh_timer.setInterval(90_000)
         self.live_refresh_timer.timeout.connect(self.refresh_snapshot)
         self.streamless_timer = QTimer(self)
-        self.streamless_timer.setInterval(25_000)
+        # Keep heartbeat cadence close to Twitch's expected minute-watch rhythm.
+        self.streamless_timer.setInterval(59_000)
         self.streamless_timer.timeout.connect(self._streamless_heartbeat_tick)
 
         self._retranslate_ui()
@@ -2496,10 +2524,6 @@ class MainWindow(QMainWindow):
         self.tabs_left.setTabText(1, self._t("tab_account"))
         self.tabs_left.setTabText(2, self._t("tab_filters"))
         self.tabs_left.setTabText(3, self._t("tab_settings"))
-        self.tabs_left.setTabText(0, self._t("tab_dashboard"))
-        self.tabs_left.setTabText(1, self._t("tab_account"))
-        self.tabs_left.setTabText(2, self._t("tab_filters"))
-        self.tabs_left.setTabText(3, self._t("tab_settings"))
         self.tabs_right.setTabText(0, self._t("tab_farming_now"))
         self.tabs_right.setTabText(1, self._t("tab_campaign_explorer"))
         
@@ -2656,6 +2680,8 @@ class MainWindow(QMainWindow):
     def _with_errors(self, fn: Callable[[], None]) -> None:
         try:
             fn()
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             QMessageBox.critical(self, self._t("error_title"), str(exc))
 
@@ -2725,7 +2751,8 @@ class MainWindow(QMainWindow):
         campaign = decision.campaign
         if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
             return False
-        if not (campaign.active and campaign.eligible and decision.stream is not None):
+        _is_inventory = bool(campaign.drops) or campaign.required_minutes > 0
+        if not (campaign.active and (campaign.eligible or _is_inventory) and decision.stream is not None):
             return False
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
@@ -2735,14 +2762,21 @@ class MainWindow(QMainWindow):
         campaign = decision.campaign
         if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
             return False
-        if not (campaign.active and campaign.eligible):
+        _is_inventory = bool(campaign.drops) or campaign.required_minutes > 0
+        if not (campaign.active and (campaign.eligible or _is_inventory)):
             return False
         if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
             return False
         return True
 
     def _campaign_is_known_subscription_locked(self, campaign: DropCampaign) -> bool:
-        if campaign.requires_subscription:
+        # Mixed campaigns (sub drop + watch drop) have watchable drops — not fully locked.
+        subscription_only = (
+            bool(campaign.drops)
+            and not campaign.has_watchable_drops
+            and campaign.required_minutes <= 0
+        )
+        if (campaign.requires_subscription or subscription_only) and not campaign.all_drops_claimed:
             return True
 
         text_chunks: list[str] = [campaign.title, campaign.next_drop_name, campaign.link_url]
@@ -2753,6 +2787,10 @@ class MainWindow(QMainWindow):
 
         combined = "\n".join(chunk for chunk in text_chunks if chunk).casefold()
         if not combined:
+            return False
+
+        # If the campaign has watchable drops, don't lock it even if sub text appears.
+        if campaign.has_watchable_drops:
             return False
 
         patterns = (
@@ -3349,6 +3387,10 @@ class MainWindow(QMainWindow):
             return self._t("reason_campaign_upcoming")
         if decision.reason_code == "campaign_not_active":
             return self._t("reason_campaign_not_active")
+        if decision.reason_code == "campaign_expired":
+            return self._t("reason_campaign_expired")
+        if decision.reason_code == "no_actionable_drop_data":
+            return self._t("reason_no_actionable_drop_data")
         if decision.reason_code == "campaign_completed":
             return self._t("reason_campaign_completed")
         if decision.reason_code == "no_valid_stream":
@@ -3487,14 +3529,37 @@ class MainWindow(QMainWindow):
             self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
             return
 
-        # Determina o jogo atualmente em farm e os que têm stream farmável
+        # Determina o jogo atualmente em farm e os que têm stream farmável.
+        # Todas as comparações usam casefold() para evitar erros de capitalização entre o
+        # nome da campanha (API Twitch) e o label da whitelist (introduzido pelo utilizador).
         active_decision = self._current_farm_decision()
-        active_game_label = active_decision.campaign.game_name if active_decision else ""
-        farmable_game_labels: set[str] = set()
+        active_game_key = active_decision.campaign.game_name.casefold() if active_decision else ""
+
+        # Cada set agrupa jogos cujo melhor reason_code é o respectivo estado.
+        # Um jogo pode ter várias campanhas/decisões; o ribbon de prioridade mais alta vence.
+        farmable_game_keys:     set[str] = set()  # stream_selected
+        done_game_keys:         set[str] = set()  # campaign_completed
+        no_channels_game_keys:  set[str] = set()  # no_valid_stream
+        subscription_game_keys: set[str] = set()  # subscription_required
+        inactive_game_keys:     set[str] = set()  # upcoming / expired / not_active / no_data
+        _inactive_rc = frozenset({
+            "campaign_upcoming", "campaign_expired", "campaign_not_active",
+            "account_not_linked", "no_actionable_drop_data",
+        })
         if self.latest_snapshot:
             for decision in self.latest_snapshot.decisions:
+                gk  = decision.campaign.game_name.casefold()
+                rc  = decision.reason_code
                 if self._decision_is_farmable_now(decision):
-                    farmable_game_labels.add(decision.campaign.game_name)
+                    farmable_game_keys.add(gk)
+                elif rc == "campaign_completed":
+                    done_game_keys.add(gk)
+                elif rc == "no_valid_stream":
+                    no_channels_game_keys.add(gk)
+                elif rc == "subscription_required":
+                    subscription_game_keys.add(gk)
+                elif rc in _inactive_rc:
+                    inactive_game_keys.add(gk)
 
         campaigns_by_game: dict[str, list[DropCampaign]] = {}
         if self.latest_snapshot:
@@ -3526,22 +3591,41 @@ class MainWindow(QMainWindow):
             col = visible_index % columns
             visible_index += 1
 
-            is_farming = (entry.label == active_game_label and active_decision is not None)
-            has_live   = entry.label in farmable_game_labels
+            game_key = entry.label.casefold()
+            is_farming = (game_key == active_game_key and active_decision is not None)
+            has_live   = game_key in farmable_game_keys
+            # all_done: todas as campanhas do inventário já foram reclamadas (fonte: UI)
+            all_done   = not actionable_campaigns and bool(related_campaigns)
 
-            # Ribbon de estado
+            # Ribbon de estado — prioridade decrescente:
+            # 1. A farmar agora  2. Stream activa (farmável)  3. Concluído
+            # 4. Sem canais activos  5. Subscrição  6. Inativo/outro  (garantia: nunca None)
             if is_farming:
                 ribbon = RIBBON_FARMING
             elif has_live:
                 ribbon = RIBBON_LIVE
+            elif all_done:
+                # Todos os drops do inventário reclamados — DONE tem prioridade sobre sub/no-channels
+                # porque não há nada a fazer neste jogo independentemente de outros estados.
+                ribbon = RIBBON_DONE
+            elif game_key in no_channels_game_keys:
+                ribbon = RIBBON_NO_CHANNELS
+            elif game_key in subscription_game_keys:
+                ribbon = RIBBON_SUB
+            elif game_key in done_game_keys:
+                # Motor reportou campanha concluída (tempo esgotado) mas inventário ainda não confirmou
+                ribbon = RIBBON_DONE
+            elif game_key in inactive_game_keys:
+                ribbon = RIBBON_INACTIVE
             else:
-                ribbon = None
+                # Fallback: jogo na whitelist mas sem nenhuma decisão no snapshot actual.
+                ribbon = RIBBON_INACTIVE
 
             # Box art: prefere URL da campanha se disponível
             best_decision = None
             if self.latest_snapshot:
                 for decision in self.latest_snapshot.decisions:
-                    if decision.campaign.game_name == entry.label and self._decision_is_farmable_now(decision):
+                    if decision.campaign.game_name.casefold() == game_key and self._decision_is_farmable_now(decision):
                         best_decision = decision
                         break
             if best_decision:
@@ -3587,7 +3671,7 @@ class MainWindow(QMainWindow):
                     best_decision = decision
 
         if best_decision is None or best_decision.stream is None:
-            self._log(self._t("dashboard_no_stream", game=game_label))
+            self._log(self._t("dashboard_game_unavailable", game=game_label))
             return
 
         # Força o farm deste jogo
@@ -3599,7 +3683,7 @@ class MainWindow(QMainWindow):
         self._streamless_heartbeat_tick()
         self._log(
             self._t(
-                "dashboard_game_selected",
+                "dashboard_selected",
                 game=game_label,
             )
         )
@@ -3704,6 +3788,13 @@ class MainWindow(QMainWindow):
     def _streamless_heartbeat_tick(self) -> None:
         if not self.timer.isActive():
             return
+        if self._snap_future is not None and not self._snap_future.done():
+            self._heartbeat_retry_after_snapshot = True
+            self._log("Heartbeat streamless adiado: atualização de campanhas ainda em curso.")
+            return
+        if self._heartbeat_future is not None and not self._heartbeat_future.done():
+            self._log("Heartbeat streamless adiado: ciclo anterior ainda em execução.")
+            return
         decision = self._current_farm_decision()
         if decision is None or decision.stream is None:
             if not self._streamless_no_target_logged:
@@ -3720,16 +3811,238 @@ class MainWindow(QMainWindow):
             self._streamless_failure_channel = ""
             self._log(self._t("streamless_target", channel=channel_login))
 
-        ok = self.client.streamless_watch_heartbeat(
-            channel_login,
-            channel_id=decision.stream.channel_id,
-            broadcast_id=decision.stream.broadcast_id,
-        )
-        for message in self.client.consume_diagnostics():
+        _channel_id = decision.stream.channel_id
+        _broadcast_id = decision.stream.broadcast_id
+        _game_name = decision.campaign.game_name
+        _campaign_id = decision.campaign.id
+        _campaign_title = decision.campaign.title
+        _progress_before = int(decision.campaign.progress_minutes)
+        _required_before = int(decision.campaign.required_minutes)
+        _channel_login = channel_login
+
+        def _run_heartbeat() -> tuple[bool, list[str], DropCampaign | None, dict[str, object] | None]:
+            ok = self.client.streamless_watch_heartbeat(
+                _channel_login,
+                channel_id=_channel_id,
+                broadcast_id=_broadcast_id,
+                game_name=_game_name,
+            )
+            reconciled_campaign: DropCampaign | None = None
+            current_drop_session: dict[str, object] | None = None
+            if ok:
+                progress_map = self.client.fetch_inventory_progress()
+                if _campaign_id:
+                    reconciled_campaign = progress_map.get(_campaign_id)
+                if reconciled_campaign is None and _game_name:
+                    game_key = _game_name.casefold()
+                    title_key = (_campaign_title or "").strip().casefold()
+                    game_matches = [
+                        campaign
+                        for campaign in progress_map.values()
+                        if campaign.game_name.casefold() == game_key
+                    ]
+                    if title_key:
+                        exact_title = [
+                            campaign
+                            for campaign in game_matches
+                            if campaign.title.strip().casefold() == title_key
+                        ]
+                        if exact_title:
+                            reconciled_campaign = exact_title[0]
+                    if reconciled_campaign is None and game_matches:
+                        # Prefer the most progressed active campaign for this game.
+                        game_matches.sort(
+                            key=lambda campaign: (
+                                int(campaign.active),
+                                int(campaign.progress_minutes),
+                                -int(campaign.remaining_minutes),
+                            ),
+                            reverse=True,
+                        )
+                        reconciled_campaign = game_matches[0]
+                current_drop_session = self.client.fetch_current_drop_progress(_channel_id)
+            messages = self.client.consume_diagnostics()
+            return ok, messages, reconciled_campaign, current_drop_session
+
+        self._heartbeat_pending_channel = _channel_login
+        self._heartbeat_pending_channel_id = _channel_id
+        self._heartbeat_pending_campaign_id = _campaign_id
+        self._heartbeat_pending_game_name = _game_name
+        self._heartbeat_pending_campaign_title = _campaign_title
+        self._heartbeat_pending_progress_before = _progress_before
+        self._heartbeat_pending_required_before = _required_before
+        self._heartbeat_retry_after_snapshot = False
+        self._heartbeat_future = self.executor.submit(_run_heartbeat)
+        self._heartbeat_poll_timer.start()
+
+    def _merge_campaign_progress(self, target: DropCampaign, fresh: DropCampaign) -> None:
+        target.progress_minutes = fresh.progress_minutes
+        target.required_minutes = fresh.required_minutes
+        target.next_drop_name = fresh.next_drop_name
+        target.next_drop_remaining_minutes = fresh.next_drop_remaining_minutes
+        target.next_drop_required_minutes = fresh.next_drop_required_minutes
+        target.all_drops_claimed = fresh.all_drops_claimed
+        target.requires_subscription = fresh.requires_subscription
+        target.has_watchable_drops = fresh.has_watchable_drops
+        target.status = fresh.status
+        target.starts_at = fresh.starts_at
+        target.ends_at = fresh.ends_at
+        target.drops = fresh.drops
+
+    def _apply_reconciled_campaign_progress(
+        self,
+        campaign_id: str,
+        game_name: str,
+        campaign_title: str,
+        fresh: DropCampaign,
+    ) -> tuple[int | None, str]:
+        if self.latest_snapshot is None:
+            return None, ""
+
+        target: DropCampaign | None = None
+        if campaign_id:
+            target = next((item for item in self.latest_snapshot.campaigns if item.id == campaign_id), None)
+        if target is None and fresh.id:
+            target = next((item for item in self.latest_snapshot.campaigns if item.id == fresh.id), None)
+        if target is None and campaign_title:
+            title_key = campaign_title.strip().casefold()
+            target = next(
+                (
+                    item
+                    for item in self.latest_snapshot.campaigns
+                    if item.title.strip().casefold() == title_key
+                ),
+                None,
+            )
+        if target is None and game_name:
+            game_key = game_name.casefold()
+            candidates = [
+                item
+                for item in self.latest_snapshot.campaigns
+                if item.game_name.casefold() == game_key
+            ]
+            if candidates:
+                candidates.sort(
+                    key=lambda item: (
+                        int(item.active),
+                        int(item.progress_minutes),
+                        -int(item.remaining_minutes),
+                    ),
+                    reverse=True,
+                )
+                target = candidates[0]
+        if target is None:
+            return None, ""
+        previous = int(target.progress_minutes)
+        self._merge_campaign_progress(target, fresh)
+        return previous, target.id
+
+    def _poll_heartbeat_future(self) -> None:
+        future = self._heartbeat_future
+        if future is None:
+            self._heartbeat_poll_timer.stop()
+            return
+        if not future.done():
+            return
+        self._heartbeat_poll_timer.stop()
+        self._heartbeat_future = None
+        pending_channel = self._heartbeat_pending_channel
+        pending_channel_id = self._heartbeat_pending_channel_id
+        pending_campaign_id = self._heartbeat_pending_campaign_id
+        pending_game_name = self._heartbeat_pending_game_name
+        pending_campaign_title = self._heartbeat_pending_campaign_title
+        pending_progress_before = self._heartbeat_pending_progress_before
+        pending_required_before = self._heartbeat_pending_required_before
+        self._heartbeat_pending_channel = ""
+        self._heartbeat_pending_channel_id = ""
+        self._heartbeat_pending_campaign_id = ""
+        self._heartbeat_pending_game_name = ""
+        self._heartbeat_pending_campaign_title = ""
+        self._heartbeat_pending_progress_before = 0
+        self._heartbeat_pending_required_before = 0
+        try:
+            ok, messages, reconciled_campaign, current_drop_session = future.result()
+        except Exception as exc:
+            self._log(f"Heartbeat error: {exc}")
+            return
+        for message in messages:
             self._log(message)
-        if not ok and channel_login.casefold() != self._streamless_failure_channel.casefold():
-            self._streamless_failure_channel = channel_login
-            self._log(self._t("streamless_failed", channel=channel_login))
+
+        if ok and reconciled_campaign is not None:
+            previous, mapped_campaign_id = self._apply_reconciled_campaign_progress(
+                pending_campaign_id,
+                pending_game_name,
+                pending_campaign_title,
+                reconciled_campaign,
+            )
+            if previous is not None:
+                current = int(reconciled_campaign.progress_minutes)
+                required = int(reconciled_campaign.required_minutes)
+                self._refresh_priority_label()
+                self._refresh_farming_now()
+                self._refresh_campaign_list()
+                self._refresh_campaign_details()
+                if current > previous:
+                    self._heartbeat_no_progress_cycles = 0
+                    self._log(
+                        f"Progresso reconciliado: {previous}/{required} -> {current}/{required} min"
+                        f" | campanha={mapped_campaign_id or reconciled_campaign.id or '?'}"
+                    )
+                else:
+                    self._heartbeat_no_progress_cycles += 1
+                    self._log(
+                        f"Sem avanço após heartbeat ({current}/{required} min)."
+                        f" | campanha={mapped_campaign_id or reconciled_campaign.id or '?'}"
+                    )
+                    if isinstance(current_drop_session, dict):
+                        current_drop_id = str(current_drop_session.get("drop_id", "") or "")
+                        current_drop_minutes = int(current_drop_session.get("current_minutes", 0) or 0)
+                        if current_drop_id:
+                            self._log(
+                                "Sinal CurrentDrop: "
+                                f"drop={current_drop_id} | minutos={current_drop_minutes}"
+                            )
+                            if current_drop_minutes > current:
+                                self._heartbeat_no_progress_cycles = 0
+                                self._log(
+                                    "CurrentDrop indica progresso mais recente que o Inventory; "
+                                    "a forçar atualização completa imediata."
+                                )
+                                self.refresh_snapshot()
+                                return
+            else:
+                self._log(
+                    "Heartbeat sem mapeamento de campanha no snapshot: "
+                    f"id={pending_campaign_id or '-'} | jogo={pending_game_name or '-'}"
+                )
+                # Fallback: use the pending values if the campaign is no longer in snapshot.
+                if pending_progress_before >= 0 and pending_required_before >= 0:
+                    self._log(
+                        f"Sem reconciliação no snapshot atual ({pending_progress_before}/{pending_required_before} min)."
+                    )
+        elif ok:
+            self._log(
+                "Heartbeat sem campanha reconciliada no Inventory: "
+                f"id={pending_campaign_id or '-'} | jogo={pending_game_name or '-'}"
+            )
+            if isinstance(current_drop_session, dict):
+                current_drop_id = str(current_drop_session.get("drop_id", "") or "")
+                current_drop_minutes = int(current_drop_session.get("current_minutes", 0) or 0)
+                if current_drop_id:
+                    self._log(
+                        "Sinal CurrentDrop sem reconciliação de campanha: "
+                        f"canal_id={pending_channel_id or '-'} | drop={current_drop_id}"
+                        f" | minutos={current_drop_minutes}"
+                    )
+
+        if self._heartbeat_no_progress_cycles >= 3:
+            self._heartbeat_no_progress_cycles = 0
+            self._log("Sem avanço em 3 heartbeats seguidos; a forçar atualização completa.")
+            self.refresh_snapshot()
+
+        if not ok and pending_channel and pending_channel.casefold() != self._streamless_failure_channel.casefold():
+            self._streamless_failure_channel = pending_channel
+            self._log(self._t("streamless_failed", channel=pending_channel))
 
     def handle_language_change(self) -> None:
         self.config.language = self._current_language()
@@ -3988,7 +4301,7 @@ class MainWindow(QMainWindow):
         self._update_auth_status()
         self._log(self._t("oauth_saved"))
         self._log(self._t("oauth_refreshing"))
-        self._do_refresh()
+        self.refresh_snapshot()
 
     def handle_edit_oauth(self) -> None:
         self._set_oauth_hidden(False)
@@ -4023,7 +4336,7 @@ class MainWindow(QMainWindow):
         self.client.validate_oauth_token()
         self._update_auth_status()
         self._log(self._t("oauth_refreshing"))
-        self._do_refresh()
+        self.refresh_snapshot()
 
     def handle_save_config(self) -> None:
         self._with_errors(self._do_save_config)
@@ -4057,6 +4370,7 @@ class MainWindow(QMainWindow):
         self._streamless_channel = ""
         self._streamless_failure_channel = ""
         self._streamless_no_target_logged = False
+        self._heartbeat_no_progress_cycles = 0
         self.refresh_snapshot()
         self._streamless_heartbeat_tick()
         self._log(self._t("farming_started"))
@@ -4072,6 +4386,7 @@ class MainWindow(QMainWindow):
         self._streamless_channel = ""
         self._streamless_failure_channel = ""
         self._streamless_no_target_logged = False
+        self._heartbeat_no_progress_cycles = 0
         self._log(self._t("farming_stopped"))
 
     def handle_campaign_selection_changed(self) -> None:
@@ -4163,10 +4478,59 @@ class MainWindow(QMainWindow):
         )
 
     def refresh_snapshot(self) -> None:
-        self._with_errors(self._do_refresh)
+        """Lança engine.poll() em background. Ignorado se já estiver em curso."""
+        if self._snap_future is not None and not self._snap_future.done():
+            return
+        if self._heartbeat_future is not None and not self._heartbeat_future.done():
+            return
+        self._snap_future = self.executor.submit(self.engine.poll)
+        self._snap_poll_timer.start()
 
-    def _do_refresh(self) -> None:
-        snapshot = self.engine.poll()
+    def _poll_snap_future(self) -> None:
+        future = self._snap_future
+        if future is None:
+            self._snap_poll_timer.stop()
+            return
+        if not future.done():
+            return
+        self._snap_poll_timer.stop()
+        self._snap_future = None
+        try:
+            snapshot = future.result()
+        except KeyboardInterrupt:
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, self._t("error_title"), str(exc))
+            return
+        self._apply_snapshot(snapshot)
+
+    def _apply_snapshot(self, snapshot, *, from_browser_enrichment: bool = False) -> None:
+        # If background polling is integrity-limited, try one on-demand foreground
+        # refresh with browser fallback enabled (must run on Qt/main thread).
+        if not from_browser_enrichment:
+            integrity_limited = any(
+                (
+                    "Browser fallback disabled" in message
+                    or "Browser fallback ignorado fora do thread principal" in message
+                )
+                for message in snapshot.messages
+            )
+            if integrity_limited:
+                self._log("Listagem limitada pela integridade da Twitch; a tentar fallback do browser no thread principal...")
+                try:
+                    enriched_snapshot = self.engine.poll(allow_browser_fallback=True)
+                except Exception as exc:
+                    self._log(f"Falha no fallback do browser: {exc}")
+                else:
+                    if len(enriched_snapshot.campaigns) > len(snapshot.campaigns):
+                        self._log(
+                            "Fallback do browser adicionou campanhas: "
+                            f"{len(snapshot.campaigns)} -> {len(enriched_snapshot.campaigns)}"
+                        )
+                        self._apply_snapshot(enriched_snapshot, from_browser_enrichment=True)
+                        return
+                    self._log("Fallback do browser não encontrou campanhas adicionais nesta tentativa.")
+
         self._last_refresh_at = datetime.now().strftime("%H:%M:%S")
         self.latest_snapshot = snapshot
         self.engine.config = self.config
@@ -4190,8 +4554,12 @@ class MainWindow(QMainWindow):
         for message in snapshot.messages:
             self._log(message)
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))
+        if self.timer.isActive() and (self._heartbeat_retry_after_snapshot or self._streamless_channel == ""):
+            self._streamless_heartbeat_tick()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._snap_poll_timer.stop()
+        self._heartbeat_poll_timer.stop()
         self.executor.shutdown(wait=False)
         self._thumb_executor.shutdown(wait=False)
         super().closeEvent(event)
@@ -4232,6 +4600,17 @@ def run() -> None:
             pass
 
     app = QApplication([])
+
+    # Em aplicações sem consola, o Python recebe SIGINT através do mecanismo
+    # interno do PySide6 (timer de 100ms) e levanta KeyboardInterrupt durante
+    # operações de rede bloqueantes (SSL/socket). Como não há Ctrl+C numa app
+    # sem consola, ignoramos SIGINT completamente.
+    import signal as _signal
+    try:
+        _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
+    except (OSError, ValueError):
+        pass
+
     _ico_path = _ASSETS_DIR / "icon.ico"
     _png_path = _ASSETS_DIR / "icon.png"
     _icon = QIcon()
