@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.25] - 2026-07-01
+
+### Fixed
+
+- **Deteção de campanhas de subscrição mais robusta** — reforçadas variantes de
+  texto PT-PT com e sem acentos (`subscrição necessária` / `subscricao necessaria`)
+  nos caminhos de parsing para reduzir falsos negativos em campanhas bloqueadas
+  por subscrição.
+- **Wording PT-PT em alerta de expiração** — texto ajustado para
+  "Campanha a expirar".
+
+### Maintenance
+
+- **Bump de versão e artefacto de distribuição** — atualização do número da
+  aplicação para `2.2.25` e geração do novo zip de build.
+
 ## [2.2.24] - 2026-06-08
 
 ### Fixed

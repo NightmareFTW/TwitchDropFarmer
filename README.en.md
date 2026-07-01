@@ -4,7 +4,7 @@
 
 A Python + PySide6 desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
 
-Current version: `2.2.24`
+Current version: `2.2.25`
 
 ## About the project
 
@@ -27,7 +27,7 @@ Twitch Drop Farmer has evolved into a more resilient and predictable farming cli
 - Real-time farming status (game, campaign, channel, progress, ETA)
 - Durable session JSON import/export mode
 
-## What's new in 2.0.24
+## What's new in 2.2.25
 
 - Fixed false critical OAuth diagnostic failures for durable session users.
 - Diagnostics now run in a safe mode without rendered browser fallback in worker threads.
@@ -77,7 +77,7 @@ Notes:
 
 - `v*` tags can now trigger an automated Windows release build through GitHub Actions.
 - The release publishes `TwitchDropFarmer-win64.zip` as an asset.
-- Release notes for this version: `docs/releases/v2.2.24.en.md` and `docs/releases/v2.2.24.pt-PT.md`.
+- Release notes for this version: `docs/releases/v2.2.25.en.md` and `docs/releases/v2.2.25.pt-PT.md`.
 
 ## Authentication
 
