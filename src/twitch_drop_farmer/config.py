@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 import json
+import os
 from pathlib import Path
 
 
@@ -26,10 +27,13 @@ class AppConfig:
     energy_profile: str = "Balanceado"  # Energy profile name
     watchdog_enabled: bool = True  # Enable automatic recovery
     watchdog_stall_timeout_min: int = 30  # Stall timeout
-    alert_campaign_expiring: bool = True
+    alert_campaign_expiring_soon: bool = True
     alert_token_invalid: bool = True
     alert_no_progress: bool = True
     alert_farm_complete: bool = True
+    alert_stream_offline: bool = True
+    alert_api_error: bool = True
+    alert_watchdog_recovered: bool = True
     auto_update_enabled: bool = True  # Enable automatic update + restart
     auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
     check_updates_on_startup: bool = True
@@ -47,4 +51,6 @@ def load_config() -> AppConfig:
 
 def save_config(cfg: AppConfig) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_FILE)

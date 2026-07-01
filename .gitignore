@@ -40,6 +40,7 @@ cookies.json
 *.log
 *.tmp
 *.db
+TwitchDropFarmer-v*.zip
 
 # Temporary files
 *.bak
@@ -47,3 +48,11 @@ cookies.json
 *.spec
 GRAPHQL_STRUCTURE.md
 TwitchDropFarmer/.vscode/
+
+# PyInstaller artefacts that may land at root (legacy build configs)
+/_internal/
+/TwitchDropFarmer.exe
+
+# AI / tooling databases
+ruvector.db
+*.db
