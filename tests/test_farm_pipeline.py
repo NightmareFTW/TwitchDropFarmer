@@ -1727,6 +1727,61 @@ class TestSubscriptionFilterLogic(unittest.TestCase):
                       "Non-subscription campaign must reach fetch_streams")
 
 
+class TestSubscriptionDetectionHeuristics(unittest.TestCase):
+    """Regression tests for subscription-only detection logic in TwitchClient."""
+
+    def test_missing_required_minutes_does_not_infer_subscription_only(self):
+        """
+        If a drop payload is incomplete and omits requiredMinutesWatched, the
+        campaign must NOT be inferred as subscription-only.
+        """
+        from twitch_drop_farmer.twitch_client import TwitchClient
+
+        payload = {}
+        drops = [{"id": "drop-1", "name": "Incomplete Drop"}]
+
+        result = TwitchClient._campaign_requires_subscription(MagicMock(), payload, drops)
+
+        self.assertFalse(
+            result,
+            "Missing requiredMinutesWatched must not auto-classify campaign as subscription-only",
+        )
+
+    def test_explicit_zero_required_minutes_still_marks_subscription_only(self):
+        """
+        Campaigns where all known drop requirements are explicit zeros remain
+        classified as subscription-only.
+        """
+        from twitch_drop_farmer.twitch_client import TwitchClient
+
+        payload = {}
+        drops = [
+            {"id": "drop-1", "requiredMinutesWatched": 0},
+            {"id": "drop-2", "requiredMinutesWatched": 0},
+        ]
+
+        result = TwitchClient._campaign_requires_subscription(MagicMock(), payload, drops)
+
+        self.assertTrue(result)
+
+    def test_watchable_drop_overrides_payload_subscription_flags(self):
+        """
+        Mixed campaigns can contain subscription metadata but still have watchable
+        drops; those must not be globally flagged as subscription-only.
+        """
+        from twitch_drop_farmer.twitch_client import TwitchClient
+
+        payload = {"requires_subscription": True}
+        drops = [{"id": "drop-1", "requiredMinutesWatched": 30}]
+
+        result = TwitchClient._campaign_requires_subscription(MagicMock(), payload, drops)
+
+        self.assertFalse(
+            result,
+            "Campaign with watchable drops must not be marked subscription-only",
+        )
+
+
 class TestStreamCandidateEligibility(unittest.TestCase):
     """
     Tests for stream source priority and eligibility filtering.

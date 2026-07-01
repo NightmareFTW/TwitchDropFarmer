@@ -990,28 +990,64 @@ class TwitchClient:
                 return False
             return False
 
+        def required_minutes_from_drop(drop: dict[str, Any]) -> int | None:
+            # Some fallback payloads omit requiredMinutesWatched entirely; treat that as
+            # unknown (None), not as 0, to avoid classifying normal campaigns as sub-only.
+            for key in ("requiredMinutesWatched", "required_minutes"):
+                if key not in drop:
+                    continue
+                value = drop.get(key)
+                if value is None:
+                    continue
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+            return None
+
         payload_requires_subscription = walk_struct(payload)
 
         has_drops = False
         has_watchable_drop = False
+        has_drop_struct_subscription = False
+        has_known_required_minutes = False
+        all_known_required_are_zero = True
         for drop in drops:
             if not isinstance(drop, dict):
                 continue
             has_drops = True
             drop_requires_subscription = walk_struct(drop)
-            required_minutes = int(drop.get("requiredMinutesWatched", 0) or 0)
+            if drop_requires_subscription:
+                has_drop_struct_subscription = True
+
+            required_minutes = required_minutes_from_drop(drop)
+            if required_minutes is None:
+                all_known_required_are_zero = False
+                continue
+
+            has_known_required_minutes = True
             if required_minutes > 0 and not drop_requires_subscription:
                 has_watchable_drop = True
+                all_known_required_are_zero = False
+
+        # Mixed campaigns (watchable + sub-related benefits) are not subscription-locked.
+        if has_watchable_drop:
+            return False
 
         # If campaign-level flags explicitly require a subscription and there are no
         # watchable drops, classify as subscription-locked.
-        if payload_requires_subscription and not has_watchable_drop:
+        if payload_requires_subscription:
             return True
 
-        # Campaigns that only expose 0-minute drops are subscription-locked in
-        # Twitch's inventory UI, even when the payload omits explicit subscription flags.
-        if has_drops and not has_watchable_drop:
+        # Explicit per-drop subscription flags with no watchable drops.
+        if has_drop_struct_subscription:
             return True
+
+        # Only infer sub-only when ALL known drop requirements are explicit zeros.
+        # If requirement minutes are missing/unknown, do not infer subscription lock.
+        if has_drops and has_known_required_minutes and all_known_required_are_zero:
+            return True
+
         return False
 
     def _compute_has_watchable_drops(self, drops: list[dict[str, Any]]) -> bool:
