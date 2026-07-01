@@ -943,28 +943,6 @@ class TwitchClient:
         return False
 
     def _campaign_requires_subscription(self, payload: dict[str, Any], drops: list[dict[str, Any]]) -> bool:
-        keyword_patterns = (
-            "subscribe to redeem",
-            "subscription only",
-            "subscription-only",
-            "requires subscription",
-            "requires a subscription",
-            "subscribers only",
-            "subscriber only",
-            "sub only",
-            "subs only",
-            "subs-only",
-            "subscricao para resgatar",
-            "subscrição para resgatar",
-            "subscricao obrigatoria",
-            "subscrição obrigatória",
-            "subscricao necessaria",
-            "subscrição necessária",
-            "apenas subs",
-            "apenas para subs",
-            "só para subs",
-        )
-
         subscription_flag_keys = {
             "issubscriberonly",
             "requiresubscription",
@@ -1012,29 +990,7 @@ class TwitchClient:
                 return False
             return False
 
-        def walk_strings(node: Any) -> bool:
-            if isinstance(node, str):
-                text = node.strip().casefold()
-                # Only match explicit full-phrase patterns.  The previous broad heuristic
-                # ("sub" in text + token) caused false positives on strings like
-                # "SUBSCRIBER_BONUS_CLAIM" that appear in open (non-sub-only) campaigns.
-                return any(pattern in text for pattern in keyword_patterns)
-            if isinstance(node, dict):
-                for value in node.values():
-                    if walk_strings(value):
-                        return True
-                return False
-            if isinstance(node, list):
-                for item in node:
-                    if walk_strings(item):
-                        return True
-                return False
-            return False
-
-        if walk_struct(payload):
-            return True
-        if walk_strings(payload):
-            return True
+        payload_requires_subscription = walk_struct(payload)
 
         has_drops = False
         has_watchable_drop = False
@@ -1042,14 +998,16 @@ class TwitchClient:
             if not isinstance(drop, dict):
                 continue
             has_drops = True
+            drop_requires_subscription = walk_struct(drop)
             required_minutes = int(drop.get("requiredMinutesWatched", 0) or 0)
-            if required_minutes > 0:
+            if required_minutes > 0 and not drop_requires_subscription:
                 has_watchable_drop = True
-                break
-            if walk_struct(drop):
-                return True
-            if walk_strings(drop):
-                return True
+
+        # If campaign-level flags explicitly require a subscription and there are no
+        # watchable drops, classify as subscription-locked.
+        if payload_requires_subscription and not has_watchable_drop:
+            return True
+
         # Campaigns that only expose 0-minute drops are subscription-locked in
         # Twitch's inventory UI, even when the payload omits explicit subscription flags.
         if has_drops and not has_watchable_drop:
@@ -1557,11 +1515,15 @@ class TwitchClient:
             or "subscription required" in lowered
             or "subscriber only" in lowered
             or "subscribers only" in lowered
-            or "subscrição" in lowered
-            or "subscricao" in lowered
             or "subscrição necessária" in lowered
             or "subscricao necessaria" in lowered
+            or "subscrição obrigatória" in lowered
+            or "subscricao obrigatoria" in lowered
+            or "subscrição para resgatar" in lowered
+            or "subscricao para resgatar" in lowered
             or "apenas subs" in lowered
+            or "apenas para subs" in lowered
+            or "só para subs" in lowered
         )
         schedule = lines[-1]
         match = re.search(r"(.+?)\s+-\s+(.+?)\s+(GMT|UTC)([+-]\d+)?", schedule)
@@ -2218,11 +2180,15 @@ class TwitchClient:
                                 lowered.includes('subscription required') ||
                                 lowered.includes('subscriber only') ||
                                 lowered.includes('subscribers only') ||
-                                lowered.includes('subscrição') ||
-                                lowered.includes('subscricao') ||
                                 lowered.includes('subscrição necessária') ||
                                 lowered.includes('subscricao necessaria') ||
-                                lowered.includes('apenas subs')
+                                lowered.includes('subscrição obrigatória') ||
+                                lowered.includes('subscricao obrigatoria') ||
+                                lowered.includes('subscrição para resgatar') ||
+                                lowered.includes('subscricao para resgatar') ||
+                                lowered.includes('apenas subs') ||
+                                lowered.includes('apenas para subs') ||
+                                lowered.includes('só para subs')
                             );
 
                             let campaignId = '';
@@ -2293,11 +2259,15 @@ class TwitchClient:
                                 lowered.includes('subscription required') ||
                                 lowered.includes('subscriber only') ||
                                 lowered.includes('subscribers only') ||
-                                lowered.includes('subscrição') ||
-                                lowered.includes('subscricao') ||
                                 lowered.includes('subscrição necessária') ||
                                 lowered.includes('subscricao necessaria') ||
-                                lowered.includes('apenas subs')
+                                lowered.includes('subscrição obrigatória') ||
+                                lowered.includes('subscricao obrigatoria') ||
+                                lowered.includes('subscrição para resgatar') ||
+                                lowered.includes('subscricao para resgatar') ||
+                                lowered.includes('apenas subs') ||
+                                lowered.includes('apenas para subs') ||
+                                lowered.includes('só para subs')
                             );
 
                             const key = `${campaignId}|||${title}|||${schedule}`;
