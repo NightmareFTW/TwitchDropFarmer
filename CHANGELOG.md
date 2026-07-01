@@ -6,6 +6,25 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.27] - 2026-07-01
+
+### Fixed
+
+- **Classificação sub-only corrigida de forma definitiva** — campanhas com dados
+  incompletos de drops (sem `requiredMinutesWatched`) deixam de ser inferidas como
+  "subscrição obrigatória" por defeito.
+- **Regra de inferência endurecida** — sub-only só é inferido quando há sinal
+  explícito (flags estruturadas) ou quando todos os drops têm requisitos
+  conhecidos e explicitamente a zero.
+- **Campanhas mistas** (com drop watchable e metadados de subscrição) deixam de
+  ser marcadas globalmente como sub-only.
+
+### Maintenance
+
+- **Testes de regressão adicionados** para prevenir o cenário de falso positivo
+  global de subscrição no dashboard.
+- **Bump de versão e novo artefacto zip** — atualização para `2.2.27`.
+
 ## [2.2.26] - 2026-07-01
 
 ### Fixed
