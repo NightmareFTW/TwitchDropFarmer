@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.26] - 2026-07-01
+
+### Fixed
+
+- **Falso positivo de subscrição no dashboard** — endurecida a classificação de
+  campanhas sub-only para evitar marcar campanhas normais como
+  "exige subscrição para resgatar".
+- **Heurísticas de fallback do browser** — removidos matches genéricos de texto
+  de subscrição; ficam apenas frases explícitas para reduzir classificações
+  incorrectas.
+
+### Maintenance
+
+- **Bump de versão e novo artefacto zip** — atualização para `2.2.26` com novo
+  pacote gerado.
+
 ## [2.2.25] - 2026-07-01
 
 ### Fixed
