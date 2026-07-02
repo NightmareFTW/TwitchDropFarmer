@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace as dataclass_replace
+from dataclasses import asdict, dataclass, fields, replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 import base64
 import gzip
@@ -34,10 +34,10 @@ if __package__ in {None, ""}:
     package_root = Path(__file__).resolve().parents[1]
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
-    from twitch_drop_farmer.config import COOKIE_FILE, CONFIG_DIR
+    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
 else:
-    from .config import COOKIE_FILE, CONFIG_DIR
+    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
     from .models import DropCampaign, StreamCandidate
 
 
@@ -337,8 +337,12 @@ class TwitchClient:
         # campaigns from Inventory). Merging into this cache instead of replacing it
         # lets whitelisted games outside the one being actively farmed stay visible
         # and slowly accumulate real data as richer fetches happen over time.
+        # It is also persisted to disk (see _load/_save_campaign_cache) so the full
+        # game catalog survives app restarts instead of being empty (only inventory
+        # games) until the first browser-fallback fetch succeeds again.
         self._campaign_cache: dict[str, DropCampaign] = {}
         self._campaign_cache_lock = threading.Lock()
+        self._load_campaign_cache()
         # Game the UI currently wants real per-drop detail for (the selected or
         # auto-picked farm target), set via set_priority_game(). Only 8 campaigns
         # get a detail-page visit per browser cycle out of a whitelist that can
@@ -3149,6 +3153,78 @@ class TwitchClient:
         )
         return progress_by_campaign
 
+    @staticmethod
+    def _campaign_cache_keep(campaign: DropCampaign, now: datetime) -> bool:
+        """The single retention rule shared by the in-memory prune and the on-disk
+        load: keep active/future, recently-claimed, or partly-progressed campaigns."""
+        return (
+            (campaign.ends_at > now and campaign.status != "EXPIRED")
+            or (campaign.all_drops_claimed and campaign.ends_at > now - timedelta(days=30))
+            or (campaign.remaining_minutes > 0 and campaign.ends_at > now - timedelta(days=7))
+        )
+
+    def _campaign_to_jsonable(self, campaign: DropCampaign) -> dict[str, Any]:
+        data = asdict(campaign)
+        # datetimes are not JSON-serializable; store as ISO strings.
+        data["starts_at"] = campaign.starts_at.isoformat()
+        data["ends_at"] = campaign.ends_at.isoformat()
+        return data
+
+    def _campaign_from_jsonable(self, data: dict[str, Any]) -> DropCampaign | None:
+        try:
+            known = {f.name for f in fields(DropCampaign)}
+            kwargs = {k: v for k, v in data.items() if k in known}
+            kwargs["starts_at"] = datetime.fromisoformat(str(kwargs["starts_at"]))
+            kwargs["ends_at"] = datetime.fromisoformat(str(kwargs["ends_at"]))
+            return DropCampaign(**kwargs)
+        except Exception:
+            return None
+
+    def _load_campaign_cache(self) -> None:
+        """Populate _campaign_cache from disk on startup (best-effort). Expired
+        entries are dropped using the same rule as the in-memory prune."""
+        try:
+            if not CAMPAIGN_CACHE_FILE.exists():
+                return
+            raw = json.loads(CAMPAIGN_CACHE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(raw, list):
+            return
+        now = datetime.now(timezone.utc)
+        loaded = 0
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            campaign = self._campaign_from_jsonable(item)
+            if campaign is None or not campaign.id:
+                continue
+            if not self._campaign_cache_keep(campaign, now):
+                continue
+            self._campaign_cache[campaign.id] = campaign
+            loaded += 1
+        if loaded:
+            self._note(f"Cache de campanhas: {loaded} campanha(s) carregadas do disco.")
+
+    def _save_campaign_cache(self, campaigns: list[DropCampaign]) -> None:
+        """Persist the current cache to disk atomically (best-effort; a failure
+        here must never break a poll)."""
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            payload = [self._campaign_to_jsonable(c) for c in campaigns]
+            tmp = CAMPAIGN_CACHE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, CAMPAIGN_CACHE_FILE)
+        except Exception:
+            pass
+
+    def cached_campaigns(self) -> list[DropCampaign]:
+        """Return copies of the currently-cached campaigns (loaded from disk on
+        startup and merged from every poll). Lets the UI populate the filter/
+        dashboard game lists immediately, before the first poll has run."""
+        with self._campaign_cache_lock:
+            return [dataclass_replace(c) for c in self._campaign_cache.values()]
+
     def _merge_campaign_cache(self, campaigns: list[DropCampaign]) -> list[DropCampaign]:
         """Merge a fetch_campaigns() result into the running per-client campaign
         cache (see self._campaign_cache) and return the full merged view, pruning
@@ -3162,20 +3238,21 @@ class TwitchClient:
             stale_ids = [
                 cid
                 for cid, cached in self._campaign_cache.items()
-                if not (
-                    (cached.ends_at > now and cached.status != "EXPIRED")
-                    or (cached.all_drops_claimed and cached.ends_at > now - timedelta(days=30))
-                    or (cached.remaining_minutes > 0 and cached.ends_at > now - timedelta(days=7))
-                )
+                if not self._campaign_cache_keep(cached, now)
             ]
             for cid in stale_ids:
                 del self._campaign_cache[cid]
+            # Snapshot references under the lock; we never mutate cached objects in
+            # place (callers get copies), so serialising them after releasing the
+            # lock is safe and keeps lock time minimal.
+            snapshot = list(self._campaign_cache.values())
             # Return copies, not the cached objects themselves: callers (farmer.py)
             # mutate campaign fields in place while deciding, and fetch_campaigns()
             # can be invoked concurrently from both the background poll thread and
             # the main-thread on-demand retry — sharing live objects across those
             # would let one caller's in-progress mutation bleed into another's.
-            merged = [dataclass_replace(cached) for cached in self._campaign_cache.values()]
+            merged = [dataclass_replace(cached) for cached in snapshot]
+        self._save_campaign_cache(snapshot)
         merged.sort(key=lambda item: item.starts_at)
         merged.sort(key=lambda item: item.active, reverse=True)
         return merged
