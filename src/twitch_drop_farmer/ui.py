@@ -1570,7 +1570,16 @@ class MainWindow(QMainWindow):
         self.client = TwitchClient()
         self.engine = FarmEngine(self.client, self.config)
         self.latest_snapshot: FarmSnapshot | None = None
-        self.available_game_entries: list[FilterEntry] = []
+        # Seed the game list from the disk-persisted campaign cache so the Filters
+        # and Dashboard show the full catalog immediately on launch, instead of
+        # staying empty (or inventory-only) until the first poll / browser fetch.
+        _cached_games = sorted(
+            {c.game_name for c in self.client.cached_campaigns() if c.game_name},
+            key=str.casefold,
+        )
+        self.available_game_entries: list[FilterEntry] = [
+            FilterEntry(key=name, label=name) for name in _cached_games
+        ]
         self.available_channel_entries: list[FilterEntry] = []
         self.decision_by_campaign_id: dict[str, FarmDecision] = {}
         self._thumb_cache: dict[str, QPixmap] = {}

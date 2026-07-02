@@ -9,6 +9,9 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".twitch-drop-farmer"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 COOKIE_FILE = CONFIG_DIR / "cookies.json"
+# Cached campaign catalog (non-secret metadata) so the full game list survives
+# app restarts, instead of being empty until a browser-fallback fetch succeeds.
+CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
 
 
 @dataclass(slots=True)

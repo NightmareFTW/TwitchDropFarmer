@@ -6,6 +6,31 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.40] - 2026-07-02
+
+### Fixed
+
+- **Aba de Filtros só mostrava os jogos já na whitelist** — a lista de jogos
+  (para escolher a whitelist) era construída a partir de `snapshot.available_games`,
+  que vem do resultado de `fetch_campaigns`. A cache de campanhas era só em
+  memória, pelo que a cada reinício da app ficava vazia: até um fetch do fallback
+  de browser ter sucesso, só apareciam os jogos com campanhas em progresso no
+  Inventory — que são precisamente os que já estavam a ser farmados/na whitelist.
+
+### Added
+
+- **Cache de campanhas persistida em disco** — `TwitchClient` passa a guardar o
+  catálogo de campanhas (apenas metadados públicos: nomes, IDs, datas, progresso;
+  sem credenciais) em `~/.twitch-drop-farmer/campaign_cache.json`, com escrita
+  atómica e poda de campanhas expiradas ao carregar. Assim, o catálogo completo
+  de jogos sobrevive a reinícios e a aba de Filtros mostra logo todos os jogos
+  para escolher a whitelist, sem depender de um novo fetch do browser. A lista de
+  jogos é também semeada a partir desta cache no arranque, antes do primeiro poll.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.40`.
+
 ## [2.2.39] - 2026-07-02
 
 ### Added
