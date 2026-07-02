@@ -6,6 +6,33 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.41] - 2026-07-02
+
+### Fixed
+
+- **A whitelist de jogos escondia jogos já seleccionados** — a lista dos Filtros
+  era construída apenas a partir de `snapshot.available_games` (jogos com
+  campanha no momento). Quando a Twitch limita o catálogo completo (integrity
+  check), só aparecem os jogos em progresso no Inventory — por isso um
+  utilizador com dezenas de jogos na whitelist só via os que estavam a ser
+  farmados nesse instante; os restantes ficavam invisíveis e nem podiam ser
+  desmarcados. A lista de jogos passa a ser a **união** do catálogo actual
+  (snapshot ou cache em disco), dos jogos já na whitelist/blacklist e dos
+  adicionados manualmente — por isso todos os jogos configurados aparecem
+  sempre, independentemente de terem campanha activa nesse momento.
+
+### Added
+
+- **Adicionar jogos manualmente à whitelist** — novo campo de texto + botão
+  «Adicionar» na aba de Filtros. Como a Twitch por vezes retém a lista completa
+  de campanhas (e nesses períodos nem o browser a consegue obter), o utilizador
+  pode agora escrever o nome exacto de qualquer jogo e adicioná-lo à whitelist
+  na mesma; o jogo fica seleccionado e é guardado ao Guardar definições.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.41`.
+
 ## [2.2.40] - 2026-07-02
 
 ### Fixed

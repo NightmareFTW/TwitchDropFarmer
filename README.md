@@ -4,7 +4,7 @@
 
 Aplicação desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
-Versão actual: `2.2.40`
+Versão actual: `2.2.41`
 
 ## Sobre o projecto
 
@@ -28,6 +28,11 @@ O Twitch Drop Farmer evoluiu para um cliente de farming mais robusto e previsív
 - Suporte a múltiplos temas na interface.
 - Persistência local de sessão e configurações.
 - Modo de sessão duradoura por JSON (importação/exportação de sessão).
+
+## Novidades da 2.2.41
+
+- Corrigida a whitelist dos Filtros que escondia jogos já seleccionados sem campanha activa — passa a mostrar todos os jogos configurados.
+- Novo campo para adicionar jogos manualmente à whitelist, mesmo quando a Twitch limita o catálogo completo.
 
 ## Novidades da 2.2.40
 
@@ -162,7 +167,7 @@ Notas:
 
 - Tags `v*` passam a poder gerar automaticamente um build Windows via GitHub Actions.
 - A release publica o pacote `TwitchDropFarmer-win64.zip` como asset.
-- Notas de release desta versão: `docs/releases/v2.2.40.pt-PT.md` e `docs/releases/v2.2.40.en.md`.
+- Notas de release desta versão: `docs/releases/v2.2.41.pt-PT.md` e `docs/releases/v2.2.41.en.md`.
 
 ## Como autenticar
 

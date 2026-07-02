@@ -730,6 +730,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "channels_whitelist_group": "Whitelist de canais",
         "channels_blacklist_group": "Blacklist de canais",
         "games_whitelist_hint": "✓ Selecciona apenas os jogos que queres farmar. Se nada estiver marcado, todos os jogos activos podem ser farmados.",
+        "games_whitelist_add_placeholder": "Escreve o nome de um jogo e adiciona-o à whitelist...",
+        "games_whitelist_add_btn": "Adicionar",
+        "games_whitelist_add_hint": "A lista mostra os jogos com campanhas conhecidas. Se um jogo não aparecer (a Twitch por vezes limita a lista completa), escreve o nome exacto aqui para o adicionar à whitelist na mesma.",
+        "whitelist_game_added": "Jogo adicionado à whitelist: {game}. Não te esqueças de Guardar definições.",
+        "whitelist_game_add_empty": "Escreve o nome de um jogo antes de adicionar.",
         "games_blacklist_hint": "X Marca os jogos que devem ser ignorados. Se nada estiver marcado, nenhum jogo é excluído.",
         "channels_whitelist_hint": "✓ Estes canais têm prioridade. Se nenhum estiver disponível, a app usa os restantes canais activos.",
         "channels_blacklist_hint": "X Estes canais nunca serão usados. Se nada estiver marcado, nenhum canal é bloqueado.",
@@ -1009,6 +1014,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "channels_whitelist_group": "Channel whitelist",
         "channels_blacklist_group": "Channel blacklist",
         "games_whitelist_hint": "✓ Pick only the games you want to farm. If nothing is selected, every active game can be farmed.",
+        "games_whitelist_add_placeholder": "Type a game name and add it to the whitelist...",
+        "games_whitelist_add_btn": "Add",
+        "games_whitelist_add_hint": "The list shows games with known campaigns. If a game isn't there (Twitch sometimes limits the full list), type its exact name here to whitelist it anyway.",
+        "whitelist_game_added": "Game added to the whitelist: {game}. Remember to Save settings.",
+        "whitelist_game_add_empty": "Type a game name before adding.",
         "games_blacklist_hint": "X Mark games that must be ignored. If nothing is selected, no game is excluded.",
         "channels_whitelist_hint": "✓ These channels get priority. If none of them are available, the app falls back to the other active channels.",
         "channels_blacklist_hint": "X These channels are never used. If nothing is selected, no channel is blocked.",
@@ -1309,6 +1319,14 @@ class MarkerListWidget(QListWidget):
         self._selected_keys.clear()
         self._rebuild_items()
 
+    def add_selected_key(self, key: str) -> None:
+        """Programmatically mark a key as selected (used for manual whitelist adds)."""
+        key = (key or "").strip()
+        if not key:
+            return
+        self._selected_keys.add(key)
+        self._has_state = True
+
     def clear_visible(self) -> None:
         if not self._all_entries:
             return
@@ -1570,16 +1588,14 @@ class MainWindow(QMainWindow):
         self.client = TwitchClient()
         self.engine = FarmEngine(self.client, self.config)
         self.latest_snapshot: FarmSnapshot | None = None
-        # Seed the game list from the disk-persisted campaign cache so the Filters
-        # and Dashboard show the full catalog immediately on launch, instead of
-        # staying empty (or inventory-only) until the first poll / browser fetch.
-        _cached_games = sorted(
-            {c.game_name for c in self.client.cached_campaigns() if c.game_name},
-            key=str.casefold,
+        # Games the user added by hand (Filters tab) that may not be in any current
+        # campaign yet — kept so they stay selectable even when Twitch withholds the
+        # full catalog. Union'd into the game entries alongside the disk cache and
+        # the already-configured whitelist/blacklist (see _compose_game_entries).
+        self._extra_game_names: set[str] = set()
+        self.available_game_entries: list[FilterEntry] = self._compose_game_entries(
+            [c.game_name for c in self.client.cached_campaigns()]
         )
-        self.available_game_entries: list[FilterEntry] = [
-            FilterEntry(key=name, label=name) for name in _cached_games
-        ]
         self.available_channel_entries: list[FilterEntry] = []
         self.decision_by_campaign_id: dict[str, FarmDecision] = {}
         self._thumb_cache: dict[str, QPixmap] = {}
@@ -1948,6 +1964,19 @@ class MainWindow(QMainWindow):
         self.games_whitelist_list.itemClicked.connect(lambda _item: self._with_errors(self._handle_games_whitelist_selection_changed))
         self.games_whitelist_search = QLineEdit()
         self.games_whitelist_search.textChanged.connect(self.games_whitelist_list.set_filter_text)
+        # Manual add: lets the user whitelist any game even when Twitch is
+        # withholding the full campaign catalog (only in-progress games show then).
+        self.games_whitelist_add_input = QLineEdit()
+        self.games_whitelist_add_input.returnPressed.connect(
+            lambda: self._with_errors(self.handle_add_whitelist_game)
+        )
+        self.games_whitelist_add_btn = QPushButton()
+        self.games_whitelist_add_btn.clicked.connect(
+            lambda: self._with_errors(self.handle_add_whitelist_game)
+        )
+        games_whitelist_add_row = QHBoxLayout()
+        games_whitelist_add_row.addWidget(self.games_whitelist_add_input, 1)
+        games_whitelist_add_row.addWidget(self.games_whitelist_add_btn)
         self.games_whitelist_select_all_btn = QPushButton()
         self.games_whitelist_select_all_btn.clicked.connect(self.games_whitelist_list.select_all)
         self.games_whitelist_select_all_btn.clicked.connect(lambda: self._with_errors(self._handle_games_whitelist_selection_changed))
@@ -1967,6 +1996,7 @@ class MainWindow(QMainWindow):
         games_whitelist_actions.addWidget(self.games_whitelist_clear_visible_btn)
         games_whitelist_layout.addWidget(self.games_whitelist_hint)
         games_whitelist_layout.addWidget(self.games_whitelist_search)
+        games_whitelist_layout.addLayout(games_whitelist_add_row)
         games_whitelist_layout.addLayout(games_whitelist_actions)
         games_whitelist_layout.addWidget(self.games_whitelist_list)
 
@@ -2484,6 +2514,22 @@ class MainWindow(QMainWindow):
             self.sort_picker.setCurrentIndex(index)
         self.sort_picker.blockSignals(False)
 
+    def _compose_game_entries(self, catalog_games: list[str]) -> list[FilterEntry]:
+        """Build the game entry list shown in Filters/Dashboard: the union of the
+        current catalog (snapshot or disk cache), the already-configured
+        whitelist/blacklist (so selections stay visible and manageable even when a
+        game has no current campaign), and games the user added by hand. This keeps
+        the picker usable even while Twitch withholds the full catalog."""
+        names: set[str] = set()
+        for source in (catalog_games, self.config.whitelist_games, self.config.blacklist_games, self._extra_game_names):
+            for name in source:
+                if isinstance(name, str) and name.strip():
+                    names.add(name.strip())
+        return [
+            FilterEntry(key=name, label=name)
+            for name in sorted(names, key=str.casefold)
+        ]
+
     def _refresh_filter_lists(self) -> None:
         games_whitelist = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
         games_blacklist = self._selected_values(self.games_blacklist_list, self.config.blacklist_games)
@@ -2533,6 +2579,23 @@ class MainWindow(QMainWindow):
     def _handle_games_whitelist_selection_changed(self) -> None:
         self._refresh_dashboard_games()
         self._refresh_filter_tab_counts()
+
+    def handle_add_whitelist_game(self) -> None:
+        """Add a game typed by the user to the whitelist, even if it has no current
+        campaign (so it survives the Twitch full-catalog limitation). It becomes a
+        selected entry and persists to config on Save settings."""
+        name = self.games_whitelist_add_input.text().strip()
+        if not name:
+            self._log(self._t("whitelist_game_add_empty"))
+            return
+        self._extra_game_names.add(name)
+        self.games_whitelist_list.add_selected_key(name)
+        snapshot_games = self.latest_snapshot.available_games if self.latest_snapshot else []
+        self.available_game_entries = self._compose_game_entries(snapshot_games)
+        self._refresh_filter_lists()
+        self._refresh_dashboard_games()
+        self.games_whitelist_add_input.clear()
+        self._log(self._t("whitelist_game_added", game=name))
 
     def _refresh_dashboard_games(self) -> None:
         # Render dashboard using the original GameCard visual format.
@@ -2639,6 +2702,10 @@ class MainWindow(QMainWindow):
         self.games_whitelist_group.setTitle(self._t("games_whitelist_group"))
         self.games_whitelist_hint.setText(self._normalize_marker_text(self._t("games_whitelist_hint", mark=CHECK_MARK)))
         self.games_whitelist_search.setPlaceholderText(self._t("filters_search_games"))
+        self.games_whitelist_add_input.setPlaceholderText(self._t("games_whitelist_add_placeholder"))
+        self.games_whitelist_add_btn.setText(self._t("games_whitelist_add_btn"))
+        self.games_whitelist_add_input.setToolTip(self._t("games_whitelist_add_hint"))
+        self.games_whitelist_add_btn.setToolTip(self._t("games_whitelist_add_hint"))
         self.games_whitelist_select_all_btn.setText(self._t("filters_select_all"))
         self.games_whitelist_clear_all_btn.setText(self._t("filters_clear_all"))
         self.games_whitelist_select_visible_btn.setText(self._t("filters_select_visible"))
@@ -4620,7 +4687,7 @@ class MainWindow(QMainWindow):
         self._last_refresh_at = datetime.now().strftime("%H:%M:%S")
         self.latest_snapshot = snapshot
         self.engine.config = self.config
-        self.available_game_entries = [FilterEntry(key=game_name, label=game_name) for game_name in snapshot.available_games]
+        self.available_game_entries = self._compose_game_entries(snapshot.available_games)
         self.available_channel_entries = [FilterEntry(key=channel.login, label=channel.label) for channel in snapshot.available_channels]
         self._refresh_filter_lists()
         self._refresh_dashboard_games()
