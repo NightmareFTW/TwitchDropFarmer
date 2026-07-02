@@ -1,4 +1,4 @@
 """Desktop Twitch drop farmer."""
 
 __all__ = ["__version__"]
-__version__ = "2.2.27"
+__version__ = "2.2.39"

@@ -185,7 +185,7 @@ def apply_update_and_restart(
             except Exception as exc:
                 logger.exception(f"Update failed: {exc}")
                 if notification_callback:
-                    notification_callback(f"Erro na atualização: {exc}")
+                    notification_callback(f"Erro na actualização: {exc}")
         
         # Run update in background thread
         update_thread = Thread(target=_do_update, daemon=False)
