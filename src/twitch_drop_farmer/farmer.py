@@ -109,10 +109,12 @@ class FarmEngine:
             phase = 2
         return (phase, self._campaign_sort_key(campaign))
 
-    def poll(self, *, allow_browser_fallback: bool | None = None) -> FarmSnapshot:
+    def poll(self, *, allow_browser_fallback: bool | None = None, full_scan: bool = False) -> FarmSnapshot:
         if allow_browser_fallback is None:
             allow_browser_fallback = threading.current_thread() is threading.main_thread()
-        campaigns = self.client.fetch_campaigns(allow_browser_fallback=allow_browser_fallback)
+        campaigns = self.client.fetch_campaigns(
+            allow_browser_fallback=allow_browser_fallback, full_scan=full_scan
+        )
         messages = self.client.consume_diagnostics()
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
@@ -128,7 +130,7 @@ class FarmEngine:
                     self.watchdog.trigger_recovery("Token refresh + stream switch")
                     # Here you could add recovery logic like token refresh
                     # For now, just mark recovery as attempted
-                    messages.append("Tentando recuperação automática...")
+                    messages.append("A tentar recuperação automática...")
 
         for campaign in campaigns:
             if not self._game_is_allowed(campaign.game_name):

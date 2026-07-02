@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 import base64
 import gzip
@@ -42,12 +42,12 @@ else:
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
-WEB_CLIENT_ID = ""
+WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 WEB_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
-ANDROID_APP_CLIENT_ID = ""
+ANDROID_APP_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 ANDROID_APP_USER_AGENT = (
     "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) "
     "tv.twitch.android.app/25.3.0/2503006"
@@ -60,6 +60,137 @@ CAMPAIGN_UUID_PATTERN = re.compile(
 # Jogos "especiais" cujas campanhas podem ser farmadas em qualquer stream com drops activos.
 # IRL (509672) e Special Events (509663) — correspondem ao mesmo critério do DevilXD/TwitchDropsMiner.
 SPECIAL_GAME_SLUGS: frozenset[str] = frozenset({"irl", "special-events"})
+
+# Injected before any page script runs in the invisible browser fallback profile.
+# Patches window.fetch/XMLHttpRequest to (1) capture GQL /gql campaign responses and
+# (2) harvest the Client-Integrity header Twitch's own JS attaches to its /gql
+# requests, so it can be reused for our direct HTTP requests afterwards instead of
+# needing the browser again for every single call.
+_GQL_INTERCEPT_JS = """(function() {
+    if (window.__tdfGqlInterceptInstalled) return;
+    window.__tdfGqlInterceptInstalled = true;
+    window.__tdfGqlStore = {};
+    window.__tdfIntegrityToken = null;
+    window.__tdfIntegrityTokenAt = 0;
+
+    function _store(c) {
+        if (!c || !c.id) return;
+        var ex = window.__tdfGqlStore[c.id];
+        if (!ex) { window.__tdfGqlStore[c.id] = c; return; }
+        var hasNew = c.timeBasedDrops && c.timeBasedDrops.length > 0;
+        var hasEx  = ex.timeBasedDrops  && ex.timeBasedDrops.length  > 0;
+        if (hasNew && !hasEx) {
+            window.__tdfGqlStore[c.id] = Object.assign({}, ex, c);
+        } else {
+            window.__tdfGqlStore[c.id] = Object.assign({}, c, ex);
+        }
+    }
+
+    function _process(data) {
+        try {
+            var items = Array.isArray(data) ? data : [data];
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                if (!item || !item.data) continue;
+                var d = item.data;
+                var cu = d.currentUser;
+                if (cu) {
+                    if (Array.isArray(cu.dropCampaigns))
+                        cu.dropCampaigns.forEach(_store);
+                    if (cu.inventory && Array.isArray(cu.inventory.dropCampaignsInProgress))
+                        cu.inventory.dropCampaignsInProgress.forEach(_store);
+                }
+                if (d.user && d.user.dropCampaign) _store(d.user.dropCampaign);
+                if (d.dropCampaign) _store(d.dropCampaign);
+            }
+        } catch(e) {}
+    }
+
+    function _extractIntegrity(headers) {
+        try {
+            if (!headers) return null;
+            if (typeof headers.get === 'function') {
+                return headers.get('Client-Integrity') || headers.get('client-integrity') || null;
+            }
+            for (var k in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, k) && k.toLowerCase() === 'client-integrity') {
+                    return headers[k];
+                }
+            }
+        } catch(e) {}
+        return null;
+    }
+
+    function _captureIntegrity(token) {
+        if (token) {
+            window.__tdfIntegrityToken = token;
+            window.__tdfIntegrityTokenAt = Date.now();
+        }
+    }
+
+    var _oFetch = window.fetch;
+    window.fetch = function(input, init) {
+        try {
+            var url = typeof input === 'string' ? input : (input && input.url) || '';
+            if (url.indexOf('/gql') !== -1) {
+                var hdrs = (init && init.headers) || (input && input.headers);
+                _captureIntegrity(_extractIntegrity(hdrs));
+            }
+        } catch(e) {}
+        return _oFetch.call(this, input, init).then(function(r) {
+            try {
+                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                if (url.indexOf('/gql') !== -1)
+                    r.clone().json().then(_process)['catch'](function() {});
+            } catch(e) {}
+            return r;
+        });
+    };
+
+    var _oOpen = XMLHttpRequest.prototype.open;
+    var _oSend = XMLHttpRequest.prototype.send;
+    var _oSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.open = function(m, url) {
+        this.__tdfU = String(url || '');
+        return _oOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+        try {
+            if (this.__tdfU && this.__tdfU.indexOf('/gql') !== -1 && name && name.toLowerCase() === 'client-integrity') {
+                _captureIntegrity(value);
+            }
+        } catch(e) {}
+        return _oSetHeader.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function() {
+        if (this.__tdfU && this.__tdfU.indexOf('/gql') !== -1) {
+            var x = this;
+            this.addEventListener('load', function() {
+                try { _process(JSON.parse(x.responseText)); } catch(e) {}
+            });
+        }
+        return _oSend.apply(this, arguments);
+    };
+})();"""
+
+# Reads back what _GQL_INTERCEPT_JS has captured so far. Returns a JSON object
+# (not a bare array) so the harvested integrity token travels alongside the
+# captured campaign payloads.
+_RETRIEVE_GQL_STORE_JS = """(() => {
+    try {
+        return JSON.stringify({
+            campaigns: Object.values(window.__tdfGqlStore || {}),
+            integrityToken: window.__tdfIntegrityToken || null,
+            integrityTokenAt: window.__tdfIntegrityTokenAt || 0
+        });
+    } catch(e) { return '{}'; }
+})();"""
+
+# How long a harvested Client-Integrity token is trusted for direct HTTP requests
+# before we stop offering it and fall back to the browser to mint a fresh one.
+# Twitch doesn't publish a real TTL; this is a conservative guess -- a request
+# that still fails with the token attached clears it immediately regardless.
+_INTEGRITY_TOKEN_TTL_SECONDS = 240.0
 
 INVENTORY_QUERY = {
     "operationName": "Inventory",
@@ -200,6 +331,30 @@ class TwitchClient:
         self._streamless_media_playlist_cache: dict[str, str] = {}
         # Cache for _stream_info results: {login_lower: (channel_id, broadcast_id, game_id, timestamp)}
         self._streamless_stream_info_cache: dict[str, tuple[str, str, str, float]] = {}
+        # Campaigns known from any past fetch_campaigns() call, keyed by campaign ID.
+        # A single call rarely sees the whole catalog (background-thread calls can't
+        # use the browser fallback, so most cycles only return the 1-2 in-progress
+        # campaigns from Inventory). Merging into this cache instead of replacing it
+        # lets whitelisted games outside the one being actively farmed stay visible
+        # and slowly accumulate real data as richer fetches happen over time.
+        self._campaign_cache: dict[str, DropCampaign] = {}
+        self._campaign_cache_lock = threading.Lock()
+        # Game the UI currently wants real per-drop detail for (the selected or
+        # auto-picked farm target), set via set_priority_game(). Only 8 campaigns
+        # get a detail-page visit per browser cycle out of a whitelist that can
+        # have 100+, so without this the game actually being farmed can go many
+        # cycles with next_drop_name/required_minutes still empty.
+        self._priority_game_name: str = ""
+        # Persistent QWebEngineProfile shared by every browser-fallback call, so
+        # cookies/local storage survive across calls instead of a brand-new
+        # anonymous profile being fingerprinted every single time. Created lazily
+        # by _get_browser_profile() since it needs a live QApplication.
+        self._browser_profile: Any = None
+        # Client-Integrity token harvested from the invisible browser's own GQL
+        # requests (see _GQL_INTERCEPT_JS), reused on direct HTTP requests until
+        # it expires or a request rejects it. See _current_integrity_token().
+        self._harvested_integrity_token: str = ""
+        self._harvested_integrity_token_captured_mono: float = 0.0
         self.device_id = ""
         self.session_id = secrets.token_hex(16)
         self._load_cookies()
@@ -359,7 +514,34 @@ class TwitchClient:
         }
         if self.login_state.oauth_token:
             headers["Authorization"] = f"OAuth {self.login_state.oauth_token}"
+        integrity_token = self._current_integrity_token()
+        if integrity_token:
+            headers["Client-Integrity"] = integrity_token
         return headers
+
+    def _current_integrity_token(self) -> str:
+        """Return the harvested Client-Integrity token if it's still within its
+        trust window, else "" (never expire it destructively here -- callers that
+        get rejected even with a token call _clear_integrity_token())."""
+        if not self._harvested_integrity_token:
+            return ""
+        age = time.monotonic() - self._harvested_integrity_token_captured_mono
+        if age > _INTEGRITY_TOKEN_TTL_SECONDS:
+            return ""
+        return self._harvested_integrity_token
+
+    def _clear_integrity_token(self) -> None:
+        self._harvested_integrity_token = ""
+        self._harvested_integrity_token_captured_mono = 0.0
+
+    def _capture_integrity_from_retrieved(self, parsed: dict[str, Any]) -> None:
+        """Pull an integrityToken out of a decoded _RETRIEVE_GQL_STORE_JS payload
+        and remember it for reuse on direct HTTP requests (see _gql_headers)."""
+        token = parsed.get("integrityToken")
+        if isinstance(token, str) and token and token != self._harvested_integrity_token:
+            self._harvested_integrity_token = token
+            self._harvested_integrity_token_captured_mono = time.monotonic()
+            self._note("Token de integridade capturado do browser invisível para pedidos directos.")
 
     def _stream_headers(self, channel_login: str) -> dict[str, str]:
         return {
@@ -767,6 +949,10 @@ class TwitchClient:
             messages = self._graphql_error_messages(data)
             if not messages:
                 return data
+            if any("failed integrity check" in message for message in messages) and self._harvested_integrity_token:
+                # The token we offered got rejected -- stop sending it until the
+                # browser fallback harvests a fresh one.
+                self._clear_integrity_token()
             if any(any(marker in message for marker in retryable_errors) for message in messages):
                 self._note(f"Retrying GraphQL request using {profile} headers after error: {messages[0]}")
                 continue
@@ -1752,15 +1938,54 @@ class TwitchClient:
             index = schedule_index + 1
         return campaigns
 
-    def _campaigns_via_browser_gql_intercept(self) -> list[DropCampaign]:
+    def _get_browser_profile(self, app: Any) -> Any:
+        """Return the shared QWebEngineProfile used by every browser fallback
+        path (GQL intercept, DOM scrape, drop claim), creating it once per app
+        run instead of a fresh profile every single call.
+
+        This is deliberately off-the-record (in-memory), NOT persisted to disk
+        across app restarts: an on-disk named profile was tried in 2.2.34 and
+        regressed to capturing zero campaigns after accumulating cookies/cache
+        across many restarts over one test session -- plausibly stale/conflicting
+        Twitch session state confusing its own JS. Reusing the same in-memory
+        profile within a single run still avoids the "brand-new anonymous
+        session every poll cycle" cost without that cross-restart staleness risk.
+        It also carries the GQL-intercept script (see _GQL_INTERCEPT_JS), so any
+        page loaded through it -- not just the drops dashboard -- can harvest a
+        fresh Client-Integrity token."""
+        if self._browser_profile is not None:
+            return self._browser_profile
+
+        from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineScript
+
+        profile = QWebEngineProfile(app)
+
+        script = QWebEngineScript()
+        script.setName("tdf_gql_intercept")
+        script.setSourceCode(_GQL_INTERCEPT_JS)
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        profile.scripts().insert(script)
+
+        self._browser_profile = profile
+        return profile
+
+    def _campaigns_via_browser_gql_intercept(self, *, full_scan: bool = False) -> list[DropCampaign]:
         """Intercept the GQL calls the Twitch web app makes when it loads in QWebEngine.
         The web app generates integrity tokens client-side, so its GQL requests succeed
-        where our direct Python requests are blocked."""
+        where our direct Python requests are blocked.
+
+        `full_scan=True` lifts the per-cycle detail-fetch cap so every campaign
+        missing real per-drop data gets a detail-page visit, not just a handful.
+        This is meant for an explicit, user-requested "scan the whole whitelist"
+        action (slow -- can take minutes with 100+ campaigns), not the normal
+        automatic poll cycle."""
         try:
             from PySide6.QtCore import QEventLoop, QTimer, QUrl
             from PySide6.QtNetwork import QNetworkCookie
             from PySide6.QtWidgets import QApplication
-            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
+            from PySide6.QtWebEngineCore import QWebEnginePage
             from shiboken6 import delete as shiboken_delete
         except Exception as exc:
             self._note(f"Browser GQL intercept unavailable: {exc}")
@@ -1776,7 +2001,7 @@ class TwitchClient:
             def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
                 return
 
-        profile = QWebEngineProfile(app)
+        profile = self._get_browser_profile(app)
         page = SilentWebEnginePage(profile, app)
         cookie_store = profile.cookieStore()
 
@@ -1811,82 +2036,8 @@ class TwitchClient:
         push_cookie("persistent", persistent_id)
         push_cookie("unique_id", unique_id)
 
-        # Pre-load script injected before any page JavaScript runs.
-        # Patches window.fetch and XMLHttpRequest to capture GQL /gql responses.
-        INTERCEPT_JS = """(function() {
-    if (window.__tdfGqlInterceptInstalled) return;
-    window.__tdfGqlInterceptInstalled = true;
-    window.__tdfGqlStore = {};
-
-    function _store(c) {
-        if (!c || !c.id) return;
-        var ex = window.__tdfGqlStore[c.id];
-        if (!ex) { window.__tdfGqlStore[c.id] = c; return; }
-        var hasNew = c.timeBasedDrops && c.timeBasedDrops.length > 0;
-        var hasEx  = ex.timeBasedDrops  && ex.timeBasedDrops.length  > 0;
-        if (hasNew && !hasEx) {
-            window.__tdfGqlStore[c.id] = Object.assign({}, ex, c);
-        } else {
-            window.__tdfGqlStore[c.id] = Object.assign({}, c, ex);
-        }
-    }
-
-    function _process(data) {
-        try {
-            var items = Array.isArray(data) ? data : [data];
-            for (var i = 0; i < items.length; i++) {
-                var item = items[i];
-                if (!item || !item.data) continue;
-                var d = item.data;
-                var cu = d.currentUser;
-                if (cu) {
-                    if (Array.isArray(cu.dropCampaigns))
-                        cu.dropCampaigns.forEach(_store);
-                    if (cu.inventory && Array.isArray(cu.inventory.dropCampaignsInProgress))
-                        cu.inventory.dropCampaignsInProgress.forEach(_store);
-                }
-                if (d.user && d.user.dropCampaign) _store(d.user.dropCampaign);
-                if (d.dropCampaign) _store(d.dropCampaign);
-            }
-        } catch(e) {}
-    }
-
-    var _oFetch = window.fetch;
-    window.fetch = function(input, init) {
-        return _oFetch.call(this, input, init).then(function(r) {
-            try {
-                var url = typeof input === 'string' ? input : (input && input.url) || '';
-                if (url.indexOf('/gql') !== -1)
-                    r.clone().json().then(_process)['catch'](function() {});
-            } catch(e) {}
-            return r;
-        });
-    };
-
-    var _oOpen = XMLHttpRequest.prototype.open;
-    var _oSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(m, url) {
-        this.__tdfU = String(url || '');
-        return _oOpen.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function() {
-        if (this.__tdfU && this.__tdfU.indexOf('/gql') !== -1) {
-            var x = this;
-            this.addEventListener('load', function() {
-                try { _process(JSON.parse(x.responseText)); } catch(e) {}
-            });
-        }
-        return _oSend.apply(this, arguments);
-    };
-})();"""
-
-        script = QWebEngineScript()
-        script.setName("tdf_gql_intercept")
-        script.setSourceCode(INTERCEPT_JS)
-        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
-        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        script.setRunsOnSubFrames(False)
-        profile.scripts().insert(script)
+        # The GQL-intercept script (window.fetch/XHR patching) is already
+        # installed on the shared, persistent profile by _get_browser_profile().
 
         loop = QEventLoop()
         captured: dict[str, Any] = {"data": {}, "last_count": -1, "stable": 0}
@@ -1894,12 +2045,6 @@ class TwitchClient:
         poll_timer = QTimer()
         poll_timer.setInterval(1_500)
         poll_timer.setSingleShot(False)
-
-        RETRIEVE_JS = """(() => {
-    try {
-        return JSON.stringify(Object.values(window.__tdfGqlStore || {}));
-    } catch(e) { return '[]'; }
-})();"""
 
         CLICK_TAB_JS = """(() => {
     var labels = ['All Campaigns', 'Todas as campanhas', 'Todas as Campanhas'];
@@ -1913,6 +2058,7 @@ class TwitchClient:
 
         try:
             def finish() -> None:
+                poll_timer.stop()
                 if loop.isRunning():
                     loop.quit()
 
@@ -1923,7 +2069,11 @@ class TwitchClient:
                     if not isinstance(raw, str):
                         return
                     try:
-                        items = json.loads(raw)
+                        parsed = json.loads(raw)
+                        if not isinstance(parsed, dict):
+                            return
+                        self._capture_integrity_from_retrieved(parsed)
+                        items = parsed.get("campaigns")
                         if not isinstance(items, list):
                             return
                         for c in items:
@@ -1943,7 +2093,7 @@ class TwitchClient:
                     except Exception:
                         pass
 
-                page.runJavaScript(RETRIEVE_JS, on_data)
+                page.runJavaScript(_RETRIEVE_GQL_STORE_JS, on_data)
 
             def on_loaded(ok: bool) -> None:
                 if not ok:
@@ -1966,9 +2116,34 @@ class TwitchClient:
             loop.exec()
             poll_timer.stop()
             timeout_timer.stop()
+            page.loadFinished.disconnect(on_loaded)
+
+            # Second phase: the listing page above only yields summary campaign
+            # objects (no timeBasedDrops). Visit each active campaign's own detail
+            # URL, still on the same invisible page/profile, so Twitch's own JS
+            # fires a DropCampaignDetails GQL call that the intercept script above
+            # also captures — giving real per-drop progress without ever showing
+            # a window.
+            detail_limit = len(captured["data"]) if full_scan else None
+            detail_ids = self._select_browser_detail_candidate_ids(captured["data"], limit=detail_limit)
+            if detail_ids:
+                self._note(
+                    f"Browser GQL intercept: a obter detalhe de {len(detail_ids)} "
+                    "campanha(s) activa(s) sem timeBasedDrops"
+                    + (" (scan completo)..." if full_scan else "...")
+                )
+                detail_hits = 0
+                for campaign_id in detail_ids:
+                    if self._fetch_browser_campaign_detail(page, campaign_id, captured["data"]):
+                        detail_hits += 1
+                self._note(
+                    f"Browser GQL intercept: detalhe obtido para {detail_hits}/"
+                    f"{len(detail_ids)} campanha(s)."
+                )
         finally:
+            # profile is shared/persistent (see _get_browser_profile) -- only the
+            # page itself is per-call and gets torn down.
             shiboken_delete(page)
-            shiboken_delete(profile)
             if owned_app:
                 app.quit()
 
@@ -2001,10 +2176,145 @@ class TwitchClient:
             self._note(f"Browser GQL intercept extraiu {len(campaigns)} campanha(s) utilizáveis.")
         return campaigns
 
-    def _campaigns_from_browser_page(self) -> list[DropCampaign]:
+    # Upper bound on how many campaign detail pages the invisible browser will
+    # visit per refresh cycle. Each visit is a real (headless) page navigation,
+    # so this trades refresh speed for per-drop progress accuracy. Kept small
+    # because a slow campaign refresh delays the streamless heartbeat that
+    # actually accrues watch-time (observed: "Heartbeat streamless adiado").
+    _BROWSER_DETAIL_FETCH_LIMIT = 8
+
+    def set_priority_game(self, game_name: str) -> None:
+        """Tell the client which game the UI currently wants real per-drop detail
+        for (the selected or auto-picked farm target), so the limited per-cycle
+        detail-fetch budget goes to it first instead of waiting its turn behind
+        whatever else happens to end soonest."""
+        self._priority_game_name = (game_name or "").strip().casefold()
+
+    def _select_browser_detail_candidate_ids(
+        self, captured: dict[str, Any], *, limit: int | None = None
+    ) -> list[str]:
+        """Pick which campaigns from the summary listing are worth an extra detail
+        page visit: not expired, and missing real timeBasedDrops data. The game
+        set via set_priority_game() goes first; the rest are ordered by soonest-
+        ending so limited time is spent where it matters. `limit` overrides the
+        usual per-cycle cap (pass a large number for an explicit full-whitelist
+        scan); None keeps the default per-cycle budget."""
+        effective_limit = self._BROWSER_DETAIL_FETCH_LIMIT if limit is None else limit
+        now = datetime.now(timezone.utc)
+        priority_ids: list[tuple[datetime, str]] = []
+        other_ids: list[tuple[datetime, str]] = []
+        for cid, payload in captured.items():
+            if not isinstance(payload, dict):
+                continue
+            drops = payload.get("timeBasedDrops")
+            if isinstance(drops, list) and drops:
+                continue
+            status = str(payload.get("status", "") or "").strip().upper()
+            if status == "EXPIRED":
+                continue
+            end_raw = payload.get("endAt") or payload.get("endsAt")
+            end_at = datetime.max.replace(tzinfo=timezone.utc)
+            if end_raw:
+                try:
+                    end_at = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    end_at = datetime.max.replace(tzinfo=timezone.utc)
+                else:
+                    if end_at <= now:
+                        continue
+            game_obj = payload.get("game")
+            game_name = str((game_obj or {}).get("name", "") or "").strip().casefold()
+            bucket = priority_ids if (self._priority_game_name and game_name == self._priority_game_name) else other_ids
+            bucket.append((end_at, cid))
+        priority_ids.sort(key=lambda item: item[0])
+        other_ids.sort(key=lambda item: item[0])
+        ordered = priority_ids + other_ids
+        return [cid for _end_at, cid in ordered[:effective_limit]]
+
+    def _fetch_browser_campaign_detail(
+        self,
+        page: Any,
+        campaign_id: str,
+        captured: dict[str, Any],
+    ) -> bool:
+        """Navigate the already-open invisible page to a single campaign's detail
+        URL so Twitch's own JS issues a DropCampaignDetails GQL call (captured by
+        the intercept script installed on the profile). Merges any campaign
+        payloads found into `captured`, preferring ones that carry timeBasedDrops.
+        Returns True if real per-drop detail was captured for `campaign_id`."""
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+
+        detail_loop = QEventLoop()
+        got_detail = {"value": False}
+
+        def finish() -> None:
+            poll_timer.stop()
+            if detail_loop.isRunning():
+                detail_loop.quit()
+
+        def merge(raw: Any) -> None:
+            if not isinstance(raw, str):
+                return
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return
+            if not isinstance(parsed, dict):
+                return
+            self._capture_integrity_from_retrieved(parsed)
+            items = parsed.get("campaigns")
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                cid = str(item.get("id", "") or "").strip()
+                if not cid or not CAMPAIGN_UUID_PATTERN.fullmatch(cid):
+                    continue
+                existing = captured.get(cid)
+                new_has_drops = bool(item.get("timeBasedDrops"))
+                existing_has_drops = bool(isinstance(existing, dict) and existing.get("timeBasedDrops"))
+                if new_has_drops or not existing_has_drops:
+                    captured[cid] = item
+                if cid == campaign_id and new_has_drops:
+                    got_detail["value"] = True
+            if got_detail["value"]:
+                finish()
+
+        def poll() -> None:
+            page.runJavaScript(_RETRIEVE_GQL_STORE_JS, merge)
+
+        def on_loaded(ok: bool) -> None:
+            if not ok:
+                finish()
+                return
+            poll_timer.start()
+
+        poll_timer = QTimer()
+        poll_timer.setInterval(1_200)
+        poll_timer.setSingleShot(False)
+        poll_timer.timeout.connect(poll)
+
+        timeout_timer = QTimer()
+        timeout_timer.setSingleShot(True)
+        timeout_timer.timeout.connect(finish)
+
+        page.loadFinished.connect(on_loaded)
+        try:
+            timeout_timer.start(6_000)
+            page.load(QUrl(f"{TWITCH_URL}/drops/campaigns?dropID={campaign_id}"))
+            detail_loop.exec()
+        finally:
+            poll_timer.stop()
+            timeout_timer.stop()
+            page.loadFinished.disconnect(on_loaded)
+
+        return got_detail["value"]
+
+    def _campaigns_from_browser_page(self, *, full_scan: bool = False) -> list[DropCampaign]:
         # Primary path: intercept the GQL calls the Twitch web app makes in QWebEngine.
         # The web app generates integrity tokens client-side, bypassing the integrity check.
-        gql_campaigns = self._campaigns_via_browser_gql_intercept()
+        gql_campaigns = self._campaigns_via_browser_gql_intercept(full_scan=full_scan)
         if gql_campaigns:
             return gql_campaigns
         self._note("Browser GQL intercept sem resultados — a tentar análise de HTML renderizado.")
@@ -2013,7 +2323,7 @@ class TwitchClient:
             from PySide6.QtCore import QEventLoop, QTimer, QUrl
             from PySide6.QtNetwork import QNetworkCookie
             from PySide6.QtWidgets import QApplication
-            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+            from PySide6.QtWebEngineCore import QWebEnginePage
             from shiboken6 import delete as shiboken_delete
         except Exception as exc:
             self._note(f"Browser fallback unavailable: {exc}")
@@ -2029,7 +2339,7 @@ class TwitchClient:
             def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
                 return
 
-        profile = QWebEngineProfile(app)
+        profile = self._get_browser_profile(app)
         page = SilentWebEnginePage(profile, app)
         cookie_store = profile.cookieStore()
 
@@ -2070,12 +2380,20 @@ class TwitchClient:
         empty_rounds = {"value": 0}
         stable_rounds = {"value": 0}
         near_bottom_rounds = {"value": 0}
+        finished = {"value": False}
         poll_timer = QTimer()
         poll_timer.setInterval(1_200)
         poll_timer.setSingleShot(False)
 
         try:
             def finish() -> None:
+                # runJavaScript callbacks are async and can overlap poll_timer ticks
+                # when the renderer is busy; without this guard every overlapping
+                # callback that observes the same stop condition re-logs and re-quits.
+                if finished["value"]:
+                    return
+                finished["value"] = True
+                poll_timer.stop()
                 if loop.isRunning():
                     loop.quit()
 
@@ -2348,6 +2666,10 @@ class TwitchClient:
                 """
 
                 def on_result(raw: Any) -> None:
+                    if finished["value"]:
+                        # A previous overlapping runJavaScript call already stopped
+                        # this poll; ignore any late callbacks still in flight.
+                        return
                     if isinstance(raw, dict):
                         body_text = str(raw.get("bodyText", "") or "")
                         card_text = str(raw.get("cardText", "") or "")
@@ -2460,8 +2782,9 @@ class TwitchClient:
             poll_timer.stop()
             timeout.stop()
         finally:
+            # profile is shared/persistent (see _get_browser_profile) -- only the
+            # page itself is per-call and gets torn down.
             shiboken_delete(page)
-            shiboken_delete(profile)
             if owned_app:
                 app.quit()
 
@@ -2510,7 +2833,7 @@ class TwitchClient:
             from PySide6.QtCore import QEventLoop, QTimer, QUrl
             from PySide6.QtNetwork import QNetworkCookie
             from PySide6.QtWidgets import QApplication
-            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+            from PySide6.QtWebEngineCore import QWebEnginePage
             from shiboken6 import delete as shiboken_delete
         except Exception as exc:
             self._note(f"Drop claim is unavailable: {exc}")
@@ -2526,7 +2849,7 @@ class TwitchClient:
             def javaScriptConsoleMessage(self, level: Any, message: str, line_number: int, source_id: str) -> None:
                 return
 
-        profile = QWebEngineProfile(app)
+        profile = self._get_browser_profile(app)
         page = SilentWebEnginePage(profile, app)
         cookie_store = profile.cookieStore()
 
@@ -2629,8 +2952,9 @@ class TwitchClient:
 
         poll_timer.stop()
         timeout.stop()
+        # profile is shared/persistent (see _get_browser_profile) -- only the
+        # page itself is per-call and gets torn down.
         shiboken_delete(page)
-        shiboken_delete(profile)
         if owned_app:
             app.quit()
 
@@ -2825,11 +3149,52 @@ class TwitchClient:
         )
         return progress_by_campaign
 
-    def fetch_campaigns(self, *, allow_browser_fallback: bool = True) -> list[DropCampaign]:
+    def _merge_campaign_cache(self, campaigns: list[DropCampaign]) -> list[DropCampaign]:
+        """Merge a fetch_campaigns() result into the running per-client campaign
+        cache (see self._campaign_cache) and return the full merged view, pruning
+        entries that are now clearly expired. Reuses the same keep-window rules
+        as the in-call expiry filter above."""
+        now = datetime.now(timezone.utc)
+        with self._campaign_cache_lock:
+            for campaign in campaigns:
+                if campaign.id:
+                    self._campaign_cache[campaign.id] = campaign
+            stale_ids = [
+                cid
+                for cid, cached in self._campaign_cache.items()
+                if not (
+                    (cached.ends_at > now and cached.status != "EXPIRED")
+                    or (cached.all_drops_claimed and cached.ends_at > now - timedelta(days=30))
+                    or (cached.remaining_minutes > 0 and cached.ends_at > now - timedelta(days=7))
+                )
+            ]
+            for cid in stale_ids:
+                del self._campaign_cache[cid]
+            # Return copies, not the cached objects themselves: callers (farmer.py)
+            # mutate campaign fields in place while deciding, and fetch_campaigns()
+            # can be invoked concurrently from both the background poll thread and
+            # the main-thread on-demand retry — sharing live objects across those
+            # would let one caller's in-progress mutation bleed into another's.
+            merged = [dataclass_replace(cached) for cached in self._campaign_cache.values()]
+        merged.sort(key=lambda item: item.starts_at)
+        merged.sort(key=lambda item: item.active, reverse=True)
+        return merged
+
+    def fetch_campaigns(
+        self, *, allow_browser_fallback: bool = True, full_scan: bool = False
+    ) -> list[DropCampaign]:
+        """`full_scan=True` is for an explicit, user-requested deep refresh (the
+        dashboard "Actualizar dashboard" button): it lifts the browser fallback's
+        per-cycle detail-fetch cap so every whitelisted campaign missing real
+        per-drop data gets a detail-page visit, not just a handful. Implies
+        allow_browser_fallback (a full scan without it would do nothing extra)."""
         self._diagnostics.clear()
+        if full_scan:
+            allow_browser_fallback = True
         if allow_browser_fallback and threading.current_thread() is not threading.main_thread():
             # QWebEngine fallback must stay on Qt/main thread; worker-thread usage can crash the app.
             allow_browser_fallback = False
+            full_scan = False
             self._note("Browser fallback ignorado fora do thread principal (segurança de estabilidade).")
         if not self.login_state.oauth_token:
             self._note("No auth-token cookie value saved yet.")
@@ -2938,42 +3303,54 @@ class TwitchClient:
             for candidate in (self.login_state.user_id, self.login_state.login_name)
             if candidate
         ]
-        for identity in identity_candidates:
-            details_payload: list[dict[str, Any]] = []
-            for campaign_id in detail_id_candidates:
-                operation = self._clone_query(CAMPAIGN_DETAILS_QUERY)
-                operation["variables"]["channelLogin"] = identity
-                operation["variables"]["dropID"] = campaign_id
-                details_payload.append(operation)
+        # ViewerDropsDashboard just told us the integrity check is blocked this
+        # cycle -- DropCampaignDetails sits behind the same protection, so retrying
+        # it (up to 2 identities x 2 header-profile retries x chunk) is guaranteed
+        # waste unless we have a harvested token that might succeed where the
+        # dashboard call didn't (e.g. it was captured moments after that request).
+        if dashboard_integrity_blocked and not self._current_integrity_token():
+            self._note(
+                "A saltar DropCampaignDetails: ViewerDropsDashboard já confirmou "
+                "a integrity check bloqueada neste ciclo e não há token de "
+                "integridade capturado para tentar."
+            )
+        else:
+            for identity in identity_candidates:
+                details_payload: list[dict[str, Any]] = []
+                for campaign_id in detail_id_candidates:
+                    operation = self._clone_query(CAMPAIGN_DETAILS_QUERY)
+                    operation["variables"]["channelLogin"] = identity
+                    operation["variables"]["dropID"] = campaign_id
+                    details_payload.append(operation)
 
-            attempted_details: dict[str, dict[str, Any]] = {}
-            for start in range(0, len(details_payload), 20):
-                chunk = details_payload[start:start + 20]
-                if not chunk:
-                    continue
-                try:
-                    responses = self._post_gql(chunk, client_profile="android")
-                except requests.RequestException as exc:
-                    self._note(f"DropCampaignDetails query failed: {exc}")
-                    continue
-                if not isinstance(responses, list):
-                    responses = [responses]
-                for response in responses:
-                    campaign_data = response.get("data", {}).get("user", {}).get("dropCampaign")
-                    if campaign_data and campaign_data.get("id"):
-                        attempted_details[campaign_data["id"]] = campaign_data
-                    else:
-                        # Try alternative path for campaign details
-                        alt_data = response.get("data", {}).get("dropCampaign")
-                        if alt_data and alt_data.get("id"):
-                            attempted_details[alt_data["id"]] = alt_data
-            if attempted_details:
-                detailed_campaigns = attempted_details
-                self._note(
-                    f"DropCampaignDetails worked with identity '{identity}' "
-                    f"for {len(detailed_campaigns)} campaign(s)."
-                )
-                break
+                attempted_details: dict[str, dict[str, Any]] = {}
+                for start in range(0, len(details_payload), 20):
+                    chunk = details_payload[start:start + 20]
+                    if not chunk:
+                        continue
+                    try:
+                        responses = self._post_gql(chunk, client_profile="android")
+                    except requests.RequestException as exc:
+                        self._note(f"DropCampaignDetails query failed: {exc}")
+                        continue
+                    if not isinstance(responses, list):
+                        responses = [responses]
+                    for response in responses:
+                        campaign_data = response.get("data", {}).get("user", {}).get("dropCampaign")
+                        if campaign_data and campaign_data.get("id"):
+                            attempted_details[campaign_data["id"]] = campaign_data
+                        else:
+                            # Try alternative path for campaign details
+                            alt_data = response.get("data", {}).get("dropCampaign")
+                            if alt_data and alt_data.get("id"):
+                                attempted_details[alt_data["id"]] = alt_data
+                if attempted_details:
+                    detailed_campaigns = attempted_details
+                    self._note(
+                        f"DropCampaignDetails worked with identity '{identity}' "
+                        f"for {len(detailed_campaigns)} campaign(s)."
+                    )
+                    break
         self._note(f"Fetched detailed info for {len(detailed_campaigns)} campaign(s).")
 
         merged_campaigns: dict[str, dict[str, Any]] = {}
@@ -3042,8 +3419,10 @@ class TwitchClient:
             if not available_campaigns and inventory_only_snapshot:
                 should_try_browser_fallback = True
 
-        if campaigns and should_try_browser_fallback and allow_browser_fallback:
-            if dashboard_integrity_blocked:
+        if campaigns and (should_try_browser_fallback or full_scan) and allow_browser_fallback:
+            if full_scan:
+                self._note("Scan completo pedido pelo utilizador: a obter detalhe de toda a whitelist...")
+            elif dashboard_integrity_blocked:
                 self._note(
                     "Campaign listing is integrity-limited. Trying rendered browser fallback for extra campaigns."
                 )
@@ -3051,7 +3430,7 @@ class TwitchClient:
                 self._note(
                     "Campaign listing appears incomplete. Trying rendered browser fallback for the full list."
                 )
-            browser_campaigns = self._campaigns_from_browser_page()
+            browser_campaigns = self._campaigns_from_browser_page(full_scan=full_scan)
             if browser_campaigns:
                 # Merge only by campaign ID to avoid mixing drop progress across
                 # different campaigns that happen to share the same game name.
@@ -3088,7 +3467,7 @@ class TwitchClient:
                 self._note("ViewerDropsDashboard is empty or integrity-protected. Skipping browser fallback.")
             elif allow_browser_fallback:
                 self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
-                campaigns = self._campaigns_from_browser_page()
+                campaigns = self._campaigns_from_browser_page(full_scan=full_scan)
                 campaigns.sort(key=lambda item: item.starts_at)
                 campaigns.sort(key=lambda item: item.active, reverse=True)
                 if campaigns:
@@ -3100,7 +3479,12 @@ class TwitchClient:
         )
         if not campaigns:
             self._note("No campaigns were available for this account at the moment.")
-        return campaigns
+        merged_campaigns = self._merge_campaign_cache(campaigns)
+        if len(merged_campaigns) > len(campaigns):
+            self._note(
+                f"Combined with {len(merged_campaigns) - len(campaigns)} campaign(s) known from earlier fetches."
+            )
+        return merged_campaigns
 
     def resolve_game_slug(self, game_name: str) -> str:
         cached = self._slug_cache.get(game_name.casefold())

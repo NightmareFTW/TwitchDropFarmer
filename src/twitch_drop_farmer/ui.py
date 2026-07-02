@@ -713,9 +713,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "filters_hint": "Organiza os filtros por sub-aba e usa pesquisa para encontrar jogos/canais rapidamente.",
         "filters_search_games": "Pesquisar jogo...",
         "filters_search_channels": "Pesquisar canal...",
-        "filters_select_all": "Selecionar todos",
+        "filters_select_all": "Seleccionar todos",
         "filters_clear_all": "Limpar todos",
-        "filters_select_visible": "Selecionar visíveis",
+        "filters_select_visible": "Seleccionar visíveis",
         "filters_clear_visible": "Limpar visíveis",
         "filter_tab_games_whitelist": "Jogos whitelist",
         "filter_tab_games_blacklist": "Jogos blacklist",
@@ -743,8 +743,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "farming_next_game": "Próximo jogo",
         "farming_next_game_selected": "Alvo manual alterado para: {game} -> {channel}.",
         "farming_next_game_unavailable": "Não há próximo jogo disponível para alternar.",
-        "campaigns_detected": "Campanhas detetadas",
-        "campaigns_detected_count": "Campanhas detetadas ({count})",
+        "campaigns_detected": "Campanhas detectadas",
+        "campaigns_detected_count": "Campanhas detectadas ({count})",
         "tab_farming_now": "A farmar agora",
         "tab_campaign_explorer": "Campanhas",
         "tab_dashboard": "Dashboard",
@@ -753,45 +753,58 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_settings": "Definições",
         "dashboard_group": "Jogos da whitelist",
         "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
-        "dashboard_refresh": "Atualizar dashboard",
+        "dashboard_refresh": "Actualizar dashboard",
+        "dashboard_full_scan_started": "A fazer scan completo da whitelist (pode demorar alguns minutos)...",
+        "dashboard_full_scan_done": "Scan completo da whitelist concluído.",
         "dashboard_hide_sub_only": "Ocultar jogos com drops de subscrição",
         "dashboard_hide_sub_only_help": "Esconde jogos cujas campanhas disponíveis exigem subscrição para resgatar drops.",
+        "dashboard_drops_notice": (
+            "ℹ Um jogo recém-seleccionado pode mostrar «0/0 min» ou «Sem drops activos» "
+            "durante uns segundos. Se não carregar, clica em «Actualizar dashboard» para "
+            "forçar um scan completo de todos os jogos da whitelist (pode demorar alguns minutos)."
+        ),
+        "dashboard_refresh_tooltip": (
+            "Faz um scan completo da whitelist e obtém os drops reais de todos os jogos, "
+            "não só do que está a ser farmado. Pode demorar alguns minutos."
+        ),
+        "dashboard_count_all": "A mostrar {shown} jogo(s).",
+        "dashboard_count_whitelist": "A mostrar {shown}/{total} jogos da whitelist.",
         "dashboard_empty": "Adiciona jogos na whitelist para aparecerem aqui.",
         "dashboard_selected": "Alvo manual por jogo: {game}.",
         "dashboard_unset": "Sem alvo manual por jogo.",
-        "dashboard_ribbon": "▶ Selecionado",
-        "dashboard_ribbon_completed": "CONCLUIDO",
-        "dashboard_game_unavailable": "O jogo selecionado ({game}) não está farmável agora.",
-        "dashboard_badge_active": "Ativo",
-        "dashboard_badge_upcoming": "Nao iniciada",
+        "dashboard_ribbon": "▶ Seleccionado",
+        "dashboard_ribbon_completed": "CONCLUÍDO",
+        "dashboard_game_unavailable": "O jogo seleccionado ({game}) não está farmável agora.",
+        "dashboard_badge_active": "Activo",
+        "dashboard_badge_upcoming": "Não iniciada",
         "dashboard_badge_offline": "Sem stream",
         "dashboard_badge_no_data": "Sem dados",
         "dashboard_badge_completed": "Completo",
         "dashboard_badge_subscription_required": "Subscrição Requerida",
         "dashboard_badge_lost_full": "Perdida",
         "dashboard_badge_lost_partial": "Parcial perdida",
-        "dashboard_completed_tooltip": "Todos os drops deste jogo ja foram concluidos nesta conta.",
-        "dashboard_completed_tooltip_detail": "Concluidas {completed}/{total} campanhas rastreaveis deste jogo.",
-        "dashboard_subscription_required_tooltip": "Este drop exige subscrição ativa para ser resgatado.",
+        "dashboard_completed_tooltip": "Todos os drops deste jogo já foram concluídos nesta conta.",
+        "dashboard_completed_tooltip_detail": "Concluídas {completed}/{total} campanhas rastreáveis deste jogo.",
+        "dashboard_subscription_required_tooltip": "Este drop exige subscrição activa para ser resgatado.",
         "dashboard_lost_full_tooltip": "Campanha expirada sem progresso: {lost}/{total} campanhas perderam todos os drops.",
         "dashboard_lost_partial_tooltip": "Campanha expirada com progresso parcial: {lost}/{total} campanhas ficaram incompletas.",
-        "dashboard_upcoming_tooltip": "A campanha ainda nao comecou.",
-        "dashboard_offline_tooltip": "Sem stream valida no momento para esta campanha.",
+        "dashboard_upcoming_tooltip": "A campanha ainda não começou.",
+        "dashboard_offline_tooltip": "Sem stream válida no momento para esta campanha.",
         "dashboard_ribbon_lost_full": "PERDIDA",
         "dashboard_ribbon_lost_partial": "PARCIAL",
         "dashboard_ribbon_subscription_required": "SUBSCRIÇÃO",
         "dashboard_ribbon_no_channels": "SEM CANAIS",
-        "dashboard_no_channels_tooltip": "Nenhum canal com drops ativos encontrado para esta campanha neste momento.",
-        "active_drops_group": "Drops ativos",
-        "active_drops_group_game": "Drops ativos de {game}",
-        "active_drops_empty": "Sem drops ativos para mostrar.",
+        "dashboard_no_channels_tooltip": "Nenhum canal com drops activos encontrado para esta campanha neste momento.",
+        "active_drops_group": "Drops activos",
+        "active_drops_group_game": "Drops activos de {game}",
+        "active_drops_empty": "Sem drops activos para mostrar.",
         "active_drops_claimed": "Resgatado",
         "active_drops_progress": "{current}/{required} min",
-        "active_drops_subscription_hint": "Esta campanha exige subscrição ativa para resgatar.",
+        "active_drops_subscription_hint": "Esta campanha exige subscrição activa para resgatar.",
         "farming_now_group": "Estado actual de farming",
         "farming_state_running": "Estado: Em execução",
         "farming_state_stopped": "Estado: Parado",
-        "farming_now_idle": "Nenhuma campanha ativa a ser farmada neste momento.",
+        "farming_now_idle": "Nenhuma campanha activa a ser farmada neste momento.",
         "farming_now_game": "Jogo: {game}",
         "farming_now_campaign": "Campanha: {campaign}",
         "farming_now_channel": "Canal em visualização: {channel}",
@@ -805,7 +818,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "campaign_filter_link": "Ligação:",
         "campaign_sort_label": "Ordenar por:",
         "campaign_status_all": "Todas",
-        "campaign_status_active": "Ativas",
+        "campaign_status_active": "Activas",
         "campaign_status_upcoming": "Futuras",
         "campaign_status_farmable": "Farmáveis agora",
         "campaign_link_all": "Todas",
@@ -837,7 +850,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "link_status_unavailable": "Não necessário ou indisponível",
         "link_account": "Ligar conta desta campanha",
         "open_drops_page": "Abrir página de Drops",
-        "link_button_disabled": "Seleciona uma campanha com conta por ligar.",
+        "link_button_disabled": "Selecciona uma campanha com conta por ligar.",
         "log_label": "Log",
         "error_title": "Erro",
         "oauth_saved": "auth-token guardado e validado.",
@@ -845,8 +858,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_saved": "Definições guardadas.",
         "farming_started": "Farm automático iniciado.",
         "farming_stopped": "Farm parado.",
-        "streamless_running": "Modo streamless ativo para o alvo selecionado.",
-        "streamless_target": "Alvo streamless atual: {channel}.",
+        "streamless_running": "Modo streamless activo para o alvo seleccionado.",
+        "streamless_target": "Alvo streamless actual: {channel}.",
         "streamless_failed": "Falha no heartbeat streamless para {channel}.",
         "streamless_no_target": "Sem alvo streamless válido neste ciclo.",
         "refresh_done": "Actualização concluída: {count} campanhas.",
@@ -856,10 +869,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ends_in_word": "termina em",
         "reason_game_filtered": "Jogo filtrado por whitelist/blacklist.",
         "reason_no_valid_stream": "Sem stream válida depois dos filtros.",
-        "reason_stream_selected": "Melhor stream por drops ativos e viewers.",
+        "reason_stream_selected": "Melhor stream por drops activos e viewers.",
         "reason_channel_priority": "Whitelist de canais aplicada.",
         "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
-        "reason_subscription_required": "Campanha requer subscrição ativa para resgatar.",
+        "reason_subscription_required": "Campanha requer subscrição activa para resgatar.",
         "reason_campaign_upcoming": "Campanha ainda não começou.",
         "reason_campaign_not_active": "Campanha não está activa neste momento.",
         "reason_campaign_expired": "Campanha expirada.",
@@ -888,38 +901,39 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_tab_advanced": "Avançado",
         "settings_tab_alerts": "Alertas",
         "energy_profile_label": "Perfil de energia",
-        "watchdog_enabled": "Ativar monitor de progresso",
+        "watchdog_enabled": "Activar monitor de progresso",
         "watchdog_timeout": "Tempo limite sem progresso",
-        "autoupdate_enabled": "Atualizar automaticamente",
+        "autoupdate_enabled": "Actualizar automaticamente",
         "autoupdate_delay": "Espera antes de reiniciar",
         "btn_diagnostic": "Executar diagnóstico do sistema",
-        "btn_check_updates": "Procurar atualizações",
+        "btn_check_updates": "Procurar actualizações",
         "btn_about": "Sobre",
         "status_diag_running": "A executar diagnóstico do sistema...",
         "status_diag_done": "Diagnóstico concluído.",
         "status_diag_timeout": "O diagnóstico excedeu o tempo de espera. Verifica ligação/token e tenta novamente.",
-        "status_updates_checking": "A procurar atualizações...",
-        "status_updates_failed": "Não foi possível verificar atualizações.",
-        "status_updates_uptodate": "Esta versão já está atualizada.",
-        "status_updates_available": "Há uma atualização disponível: {version}\nTransferência: {url}",
-        "status_updates_timeout": "A procura de atualizações excedeu o tempo de espera. Tenta novamente.",
+        "status_updates_checking": "A procurar actualizações...",
+        "status_updates_failed": "Não foi possível verificar actualizações.",
+        "status_updates_uptodate": "Esta versão já está actualizada.",
+        "status_updates_available": "Há uma actualização disponível: {version}\nTransferência: {url}",
+        "status_updates_timeout": "A procura de actualizações excedeu o tempo de espera. Tenta novamente.",
         "status_operation_error": "Erro: {error}",
         "about_title": "Sobre",
         "about_body": (
-            "Twitch Drop Farmer automatiza o farming de Twitch Drops com foco em estabilidade, "
-            "controlo local e previsibilidade.\\n\\n"
-            "- Descoberta robusta de campanhas e selecao de stream alvo\\n"
-            "- Alvo manual por jogo com comportamento sticky\\n"
-            "- Filtros avancados para manter o farm limpo\\n"
-            "- Diagnostico integrado e sessao duradoura por JSON\\n\\n"
-            "Versao: {version}"
+            "O Twitch Drop Farmer automatiza o farming de Twitch Drops com foco em "
+            "estabilidade, controlo local e previsibilidade.\n\n"
+            "- Descoberta robusta de campanhas e selecção de stream alvo\n"
+            "- Modo streamless: acumula tempo de visualização sem abrir o directo\n"
+            "- Alvo manual por jogo com comportamento persistente\n"
+            "- Actualização do dashboard com scan completo dos drops da whitelist\n"
+            "- Filtros avançados, diagnóstico integrado e sessão duradoura por JSON\n\n"
+            "Versão: {version}"
         ),
         "version_corner": "v{version}",
-        "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reativo (mais pedidos).",
-        "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando deteta bloqueio.",
+        "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reactivo (mais pedidos).",
+        "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando detecta bloqueio.",
         "help_watchdog_timeout": "Minutos sem progresso antes do monitor considerar que a farm ficou bloqueada.",
-        "help_autoupdate": "Quando ativo, a aplicação pode transferir e aplicar automaticamente uma nova versão quando disponível.",
-        "help_autoupdate_delay": "Tempo de espera antes de reiniciar a aplicação para concluir uma atualização automática.",
+        "help_autoupdate": "Quando activo, a aplicação pode transferir e aplicar automaticamente uma nova versão quando disponível.",
+        "help_autoupdate_delay": "Tempo de espera antes de reiniciar a aplicação para concluir uma actualização automática.",
         "alert_type_campaign_expiring_soon": "Campanha a expirar brevemente",
         "alert_type_token_invalid": "Token inválido",
         "alert_type_no_progress": "Sem progresso",
@@ -930,10 +944,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "alert_help_campaign_expiring_soon": "Avisa quando uma campanha está perto do fim para não perderes drops.",
         "alert_help_token_invalid": "Avisa quando o token deixa de ser válido e exige nova autenticação.",
         "alert_help_no_progress": "Avisa quando não há progresso de drops durante um período anormal.",
-        "alert_help_farm_complete": "Avisa quando a farm da campanha ativa foi concluída.",
+        "alert_help_farm_complete": "Avisa quando a farm da campanha activa foi concluída.",
         "alert_help_stream_offline": "Avisa quando o canal alvo fica offline.",
         "alert_help_api_error": "Avisa quando há falhas de comunicação com a API da Twitch.",
-        "alert_help_watchdog_recovered": "Avisa quando o monitor deteta problema e consegue recuperar automaticamente.",
+        "alert_help_watchdog_recovered": "Avisa quando o monitor detecta problema e consegue recuperar automaticamente.",
         "redeem_drops": "Redimir drops",
         "redeem_done": "Drops redimidos: {count}.",
         "redeem_none": "Nenhum drop pronto para redimir.",
@@ -1019,8 +1033,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_group": "Whitelisted games",
         "dashboard_hint": "Click a game to make it your manual farming target.",
         "dashboard_refresh": "Refresh dashboard",
+        "dashboard_full_scan_started": "Running a full whitelist scan (can take a few minutes)...",
+        "dashboard_full_scan_done": "Full whitelist scan complete.",
         "dashboard_hide_sub_only": "Hide games with subscription-only drops",
         "dashboard_hide_sub_only_help": "Hide games whose available campaigns require an active subscription to redeem drops.",
+        "dashboard_drops_notice": (
+            "ℹ A just-selected game may show \"0/0 min\" or \"No active drops\" for a few "
+            "seconds. If it doesn't load, click \"Refresh dashboard\" to force a full scan "
+            "of every whitelisted game (this can take a few minutes)."
+        ),
+        "dashboard_refresh_tooltip": (
+            "Runs a full whitelist scan and fetches real drop data for every game, "
+            "not just the one being farmed. Can take a few minutes."
+        ),
+        "dashboard_count_all": "Showing {shown} game(s).",
+        "dashboard_count_whitelist": "Showing {shown}/{total} whitelisted games.",
         "dashboard_empty": "Add games to your whitelist to show them here.",
         "dashboard_selected": "Manual game target: {game}.",
         "dashboard_unset": "No manual game target.",
@@ -1171,12 +1198,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "status_operation_error": "Error: {error}",
         "about_title": "About",
         "about_body": (
-            "Twitch Drop Farmer automates Twitch Drops farming with a focus on stability, "
-            "local control, and predictable behavior.\\n\\n"
-            "- Robust campaign discovery and target stream selection\\n"
-            "- Per-game manual targeting with sticky behavior\\n"
-            "- Advanced filters for cleaner farming sessions\\n"
-            "- Built-in diagnostics and durable JSON session mode\\n\\n"
+            "Twitch Drop Farmer automates Twitch Drops farming with a focus on "
+            "stability, local control, and predictable behaviour.\n\n"
+            "- Robust campaign discovery and target stream selection\n"
+            "- Streamless mode: accrues watch time without opening the stream\n"
+            "- Per-game manual targeting with sticky behaviour\n"
+            "- Dashboard refresh runs a full whitelist drop scan\n"
+            "- Advanced filters, built-in diagnostics, and durable JSON sessions\n\n"
             "Version: {version}"
         ),
         "version_corner": "v{version}",
@@ -2043,11 +2071,21 @@ class MainWindow(QMainWindow):
             bool(getattr(self.config, "dashboard_hide_subscription_required", False))
         )
         self.dashboard_hide_sub_only_checkbox.toggled.connect(self.handle_dashboard_hide_sub_only_toggle)
+        self.dashboard_count_label = QLabel()
         self.btn_dashboard_refresh = QPushButton()
         self.btn_dashboard_refresh.clicked.connect(self.handle_dashboard_refresh)
+        # Notice explaining what to do when a game's drops don't load (helps new
+        # users understand why a just-selected game can show "0/0 min" at first).
+        self.dashboard_drops_notice = QLabel()
+        self.dashboard_drops_notice.setObjectName("DashboardDropsNotice")
+        self.dashboard_drops_notice.setWordWrap(True)
+        # Muted mid-grey reads acceptably on both the dark and light themes; an
+        # inline stylesheet keeps it as a secondary hint without per-theme QSS.
+        self.dashboard_drops_notice.setStyleSheet("color: #8a8f98; font-size: 11px;")
         dashboard_actions_layout = QHBoxLayout()
         dashboard_actions_layout.addWidget(self.dashboard_hide_sub_only_checkbox)
         dashboard_actions_layout.addStretch(1)
+        dashboard_actions_layout.addWidget(self.dashboard_count_label)
         dashboard_actions_layout.addWidget(self.btn_dashboard_refresh)
         self.dashboard_games_scroll = QScrollArea()
         self.dashboard_games_scroll.setWidgetResizable(True)
@@ -2064,6 +2102,7 @@ class MainWindow(QMainWindow):
         self.dashboard_no_games.setWordWrap(True)
         dashboard_group_layout.addWidget(self.dashboard_hint_label)
         dashboard_group_layout.addLayout(dashboard_actions_layout)
+        dashboard_group_layout.addWidget(self.dashboard_drops_notice)
         dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
         self.dashboard_target_label = QLabel()
         self.dashboard_target_label.setWordWrap(True)
@@ -2536,7 +2575,9 @@ class MainWindow(QMainWindow):
         self._refresh_dashboard_hide_sub_only_label()
         self.dashboard_hide_sub_only_checkbox.setToolTip(self._t("dashboard_hide_sub_only_help"))
         self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
-        
+        self.btn_dashboard_refresh.setToolTip(self._t("dashboard_refresh_tooltip"))
+        self.dashboard_drops_notice.setText(self._t("dashboard_drops_notice"))
+
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
         self.token_input.setPlaceholderText(self._t("oauth_placeholder"))
@@ -2686,7 +2727,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, self._t("error_title"), str(exc))
 
     def _log(self, message: str) -> None:
-        self.log_output.append(message)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_output.append(f"[{timestamp}] {message}")
 
     def _sort_mode_label(self) -> str:
         return self._t(f"sort_{self.config.sort_mode}")
@@ -2810,23 +2852,11 @@ class MainWindow(QMainWindow):
         )
         return any(pattern in combined for pattern in patterns)
 
-    def _campaign_has_actionable_drop_data(self, campaign: DropCampaign) -> bool:
-        if campaign.required_minutes > 0:
-            return True
-        if campaign.next_drop_required_minutes > 0:
-            return True
-        if campaign.next_drop_name.strip():
-            return True
-        if campaign.drops:
-            return True
-        return False
-
     def _campaign_matches_hide_sub_only(self, campaign: DropCampaign) -> bool:
-        if self._campaign_is_known_subscription_locked(campaign):
-            return True
-        # Browser fallback campaigns can be active but lack actionable drop metadata.
-        # In practice these entries behave like non-farmable subscription-only campaigns.
-        return not self._campaign_has_actionable_drop_data(campaign)
+        # Lack of per-drop metadata (common for browser-fallback campaigns, whose
+        # scraper doesn't extract required_minutes/drops) is NOT a subscription
+        # signal — only _campaign_is_known_subscription_locked's explicit checks are.
+        return self._campaign_is_known_subscription_locked(campaign)
 
     def _current_display_decision(self) -> FarmDecision | None:
         active = self._current_farm_decision()
@@ -2863,6 +2893,7 @@ class MainWindow(QMainWindow):
         self._forced_farm_game = game_name
         self._forced_farm_campaign_id = ""
         self._forced_farm_channel = ""
+        self.engine.client.set_priority_game(game_name)
         self._refresh_dashboard_games()
         self._refresh_farming_now()
         if self.timer.isActive():
@@ -3250,6 +3281,7 @@ class MainWindow(QMainWindow):
 
         campaign = active.campaign
         self._last_display_decision = active
+        self.engine.client.set_priority_game(campaign.game_name)
         channel_name = (
             active.stream.display_name or active.stream.login
             if active.stream is not None
@@ -3300,6 +3332,16 @@ class MainWindow(QMainWindow):
             item for item in (active_campaign.drops or [])
             if isinstance(item, dict)
         ]
+        if not drops and (active_campaign.required_minutes > 0 or active_campaign.next_drop_name.strip()):
+            # Twitch's integrity check often blocks per-drop detail queries, leaving
+            # only campaign-level aggregate progress. Show that instead of an empty
+            # list — the campaign can still be actively farmed without itemized drops.
+            drops = [{
+                "name": active_campaign.next_drop_name or active_campaign.title,
+                "required_minutes": active_campaign.required_minutes,
+                "current_minutes": active_campaign.progress_minutes,
+                "claimed": active_campaign.all_drops_claimed,
+            }]
         has_items = False
         for drop in drops:
             name = str(drop.get("name") or self._t("drop_unknown")).strip()
@@ -3497,8 +3539,19 @@ class MainWindow(QMainWindow):
         self.btn_link_account.setEnabled(can_link)
         self.btn_link_account.setToolTip("" if can_link else self._t("link_button_disabled"))
 
+    def _refresh_dashboard_count_label(self, *, shown: int, total_whitelist: int | None) -> None:
+        """Show how many game cards are actually rendered, so the user can tell
+        whether every whitelisted game is showing up or some are missing (never
+        matched to a known campaign, or hidden by the sub-only filter)."""
+        if total_whitelist is None:
+            self.dashboard_count_label.setText(self._t("dashboard_count_all", shown=shown))
+        else:
+            self.dashboard_count_label.setText(
+                self._t("dashboard_count_whitelist", shown=shown, total=total_whitelist)
+            )
+
     def _refresh_dashboard(self) -> None:
-        """Atualiza o dashboard com os jogos da whitelist em grelha."""
+        """Actualiza o dashboard com os jogos da whitelist em grelha."""
         # Limpa a grelha
         while self.dashboard_games_grid.count() > 0:
             item = self.dashboard_games_grid.takeAt(0)
@@ -3527,6 +3580,9 @@ class MainWindow(QMainWindow):
         if not filtered_games:
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
             self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
+            self._refresh_dashboard_count_label(
+                shown=0, total_whitelist=(len(selected_tokens) if selected_tokens else None)
+            )
             return
 
         # Determina o jogo atualmente em farm e os que têm stream farmável.
@@ -3657,6 +3713,9 @@ class MainWindow(QMainWindow):
         if visible_index == 0:
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
             self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
+        self._refresh_dashboard_count_label(
+            shown=visible_index, total_whitelist=(len(selected_tokens) if selected_tokens else None)
+        )
 
     def _force_farm_game(self, game_key: str, game_label: str) -> None:
         """Força o farm de um jogo específico clicado no dashboard."""
@@ -3790,7 +3849,7 @@ class MainWindow(QMainWindow):
             return
         if self._snap_future is not None and not self._snap_future.done():
             self._heartbeat_retry_after_snapshot = True
-            self._log("Heartbeat streamless adiado: atualização de campanhas ainda em curso.")
+            self._log("Heartbeat streamless adiado: actualização de campanhas ainda em curso.")
             return
         if self._heartbeat_future is not None and not self._heartbeat_future.done():
             self._log("Heartbeat streamless adiado: ciclo anterior ainda em execução.")
@@ -4006,7 +4065,7 @@ class MainWindow(QMainWindow):
                                 self._heartbeat_no_progress_cycles = 0
                                 self._log(
                                     "CurrentDrop indica progresso mais recente que o Inventory; "
-                                    "a forçar atualização completa imediata."
+                                    "a forçar actualização completa imediata."
                                 )
                                 self.refresh_snapshot()
                                 return
@@ -4018,7 +4077,7 @@ class MainWindow(QMainWindow):
                 # Fallback: use the pending values if the campaign is no longer in snapshot.
                 if pending_progress_before >= 0 and pending_required_before >= 0:
                     self._log(
-                        f"Sem reconciliação no snapshot atual ({pending_progress_before}/{pending_required_before} min)."
+                        f"Sem reconciliação no snapshot actual ({pending_progress_before}/{pending_required_before} min)."
                     )
         elif ok:
             self._log(
@@ -4037,7 +4096,7 @@ class MainWindow(QMainWindow):
 
         if self._heartbeat_no_progress_cycles >= 3:
             self._heartbeat_no_progress_cycles = 0
-            self._log("Sem avanço em 3 heartbeats seguidos; a forçar atualização completa.")
+            self._log("Sem avanço em 3 heartbeats seguidos; a forçar actualização completa.")
             self.refresh_snapshot()
 
         if not ok and pending_channel and pending_channel.casefold() != self._streamless_failure_channel.casefold():
@@ -4074,7 +4133,7 @@ class MainWindow(QMainWindow):
         """Handle watchdog enable/disable."""
         self.config.watchdog_enabled = checked
         self.watchdog_timeout_spinbox.setEnabled(checked)
-        logger.info(f"Watchdog: {'ativado' if checked else 'desativado'}")
+        logger.info(f"Watchdog: {'activado' if checked else 'desactivado'}")
 
     def handle_alert_toggle(self, alert_type: AlertType, checked: bool) -> None:
         """Handle alert enable/disable."""
@@ -4082,13 +4141,13 @@ class MainWindow(QMainWindow):
         setattr(self.config, config_key, checked)
         alert_manager = get_alert_manager()
         alert_manager.set_alert_enabled(alert_type, checked)
-        logger.info(f"Alerta {alert_type.value}: {'ativado' if checked else 'desativado'}")
+        logger.info(f"Alerta {alert_type.value}: {'activado' if checked else 'desactivado'}")
 
     def handle_autoupdate_toggle(self, checked: bool) -> None:
         """Handle auto-update enable/disable."""
         self.config.auto_update_enabled = checked
         self.autoupdate_delay_spinbox.setEnabled(checked)
-        logger.info(f"Auto-update: {'ativado' if checked else 'desativado'}")
+        logger.info(f"Auto-update: {'activado' if checked else 'desactivado'}")
 
     def handle_dashboard_hide_sub_only_toggle(self, checked: bool) -> None:
         """Handle hide subscription-only games toggle."""
@@ -4100,7 +4159,7 @@ class MainWindow(QMainWindow):
                 for campaign in self.latest_snapshot.campaigns
             )
             if not has_sub_only:
-                self._log("Não há jogos com drops de subs detetados neste ciclo.")
+                self._log("Não há jogos com drops de subs detectados neste ciclo.")
 
     def handle_run_diagnostic(self) -> None:
         """Run diagnostic tests."""
@@ -4212,7 +4271,7 @@ class MainWindow(QMainWindow):
                 latest_info = updater.check_for_updates(current)
                 return latest_info
             except Exception as e:
-                logger.exception("Erro ao verificar atualizações")
+                logger.exception("Erro ao verificar actualizações")
                 return {"error": str(e), "update_available": False}
 
         self._update_future = self.executor.submit(check_updates)
@@ -4254,7 +4313,7 @@ class MainWindow(QMainWindow):
                     status_message = self._t("status_updates_uptodate")
                 self.update_status_label.setText(status_message)
                 self._log(status_message)
-                logger.info("Verificação de atualização concluída")
+                logger.info("Verificação de actualização concluída")
             except Exception as exc:
                 self.update_status_label.setText(self._t("status_operation_error", error=exc))
                 QMessageBox.warning(
@@ -4262,7 +4321,7 @@ class MainWindow(QMainWindow):
                     self._t("btn_check_updates"),
                     self._t("status_operation_error", error=exc),
                 )
-                logger.exception("Erro ao processar resultado de atualização")
+                logger.exception("Erro ao processar resultado de actualização")
             finally:
                 self.btn_check_updates.setEnabled(True)
                 if self._diag_future is None:
@@ -4421,7 +4480,25 @@ class MainWindow(QMainWindow):
         self._thumb_inflight.clear()
         self._generated_thumb_cache.clear()
         self.client.clear_box_art_caches()
-        self.refresh_snapshot()
+        self._do_dashboard_full_scan()
+
+    def _do_dashboard_full_scan(self) -> None:
+        """Explicit, user-requested deep refresh: fetch real per-drop detail for
+        every whitelisted campaign in one go, instead of the usual small
+        per-cycle budget (see set_priority_game/full_scan). This makes every
+        dashboard game show real data once selected, not just the one currently
+        being farmed. Runs synchronously on the main thread (the browser
+        fallback can't run anywhere else) and can take a few minutes with a
+        large whitelist -- the button is disabled meanwhile so it can't be
+        triggered twice at once."""
+        self.btn_dashboard_refresh.setEnabled(False)
+        self._log(self._t("dashboard_full_scan_started"))
+        try:
+            snapshot = self.engine.poll(allow_browser_fallback=True, full_scan=True)
+        finally:
+            self.btn_dashboard_refresh.setEnabled(True)
+        self._apply_snapshot(snapshot, from_browser_enrichment=True)
+        self._log(self._t("dashboard_full_scan_done"))
 
     def _do_redeem_drops(self, *, auto_mode: bool = False) -> int:
         claimed = self.client.claim_available_drops()

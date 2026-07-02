@@ -2,32 +2,85 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-Aplicacao desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
+Aplicação desktop em Python + PySide6 para automatizar Twitch Drops, com controlo local, filtros de campanhas e rotação automática de canais.
 
-Versao atual: `2.2.27`
+Versão actual: `2.2.39`
 
-## Sobre o projeto
+## Sobre o projecto
 
-Twitch Drop Farmer evoluiu para um cliente de farming mais robusto e previsivel:
+O Twitch Drop Farmer evoluiu para um cliente de farming mais robusto e previsível:
 
-- Dashboard com estados reais de campanha (ativa, nao iniciada, sem stream, completa, perdida e subscricao requerida).
-- Selecao manual de alvo por jogo com comportamento sticky e menos trocas inesperadas.
-- Filtros organizados em sub-abas com pesquisa, contadores e acoes em lote.
+- Dashboard com estados reais de campanha (activa, não iniciada, sem stream, completa, perdida e subscrição requerida).
+- Selecção manual de alvo por jogo com comportamento persistente e menos trocas inesperadas.
+- Filtros organizados em sub-abas com pesquisa, contadores e acções em lote.
 - Modo streamless e fallback de campanhas mais tolerantes a respostas parciais da Twitch.
-- Diagnostico e verificacao de atualizacoes mais estaveis, com relatorio resumido por teste.
+- Diagnóstico e verificação de actualizações mais estáveis, com relatório resumido por teste.
 
 ## Funcionalidades
 
-- Descoberta automatica de campanhas ativas e futuras.
-- Selecao automatica do melhor alvo de farm por regras de campanha, elegibilidade e stream disponivel.
-- Troca automatica de jogo/canal com intervalo configuravel.
+- Descoberta automática de campanhas activas e futuras.
+- Selecção automática do melhor alvo de farm por regras de campanha, elegibilidade e stream disponível.
+- Troca automática de jogo/canal com intervalo configurável.
 - Filtros por lista branca e lista negra de jogos e canais.
-- Botao manual para resgatar drops.
-- Opcao de redencao automatica periodica.
+- Botão manual para resgatar drops.
+- Opção de redenção automática periódica.
 - Estado de farming em tempo real (jogo, campanha, canal, progresso e ETA).
-- Suporte a multiplos temas na interface.
-- Persistencia local de sessao e configuracoes.
-- Modo de sessao duradoura por JSON (import/export de sessao).
+- Suporte a múltiplos temas na interface.
+- Persistência local de sessão e configurações.
+- Modo de sessão duradoura por JSON (importação/exportação de sessão).
+
+## Novidades da 2.2.39
+
+- Aviso no dashboard e tooltip no botão «Actualizar dashboard» a explicar o que fazer quando os drops de um jogo não carregam.
+- Revisão completa das traduções PT-PT (acordo ortográfico pré-1990) e EN, com acentuação corrigida.
+- Corrigida a janela «Sobre» que mostrava `\n-` como texto literal; texto reescrito e actualizado.
+
+## Novidades da 2.2.38
+
+- Novo contador "A mostrar X/Y jogos da whitelist" no dashboard.
+
+## Novidades da 2.2.37
+
+- Botão "Atualizar dashboard" passa a fazer um scan completo de detalhe por-drop a toda a whitelist, em vez de só 8 campanhas por ciclo.
+
+## Novidades da 2.2.36
+
+- Obtenção de detalhe por-drop passa a priorizar o jogo seleccionado/a ser farmado, em vez de seguir só a ordem de data de fim mais próxima.
+
+## Novidades da 2.2.35
+
+- Corrigida regressão da 2.2.34: o perfil persistente em disco fazia o fallback do browser deixar de encontrar campanhas após muitos reinícios. Revertido para um perfil em memória (reutilizado dentro da mesma execução).
+
+## Novidades da 2.2.34
+
+- Perfil de browser persistente e partilhado entre chamadas de fallback (em vez de um novo a cada vez).
+- Reaproveitamento do token Client-Integrity capturado do browser em pedidos directos, durante alguns minutos.
+- "Circuit breaker" que evita repetir o `DropCampaignDetails` quando já se sabe, no mesmo ciclo, que a integrity check está bloqueada.
+
+## Novidades da 2.2.33
+
+- Timestamps `[HH:MM:SS]` em cada linha do log.
+- Cache de campanhas com merge em vez de substituição — jogos da whitelist fora do alvo activo passam a preencher-se ao longo do tempo.
+
+## Novidades da 2.2.32
+
+- Corrigida inundação de log no fallback de browser (chamadas assíncronas sobrepostas) e reduzido o custo da obtenção de detalhe por-campanha para deixar de atrasar o heartbeat streamless.
+
+## Novidades da 2.2.31
+
+- O fallback invisível de browser (sem qualquer janela) passa a visitar também a página de detalhe de cada campanha activa, obtendo progresso real por-drop em vez de apenas dados-resumo.
+
+## Novidades da 2.2.30
+
+- **[CRÍTICO]** Corrigido `Client-Id` vazio em todos os pedidos GraphQL directos (Inventory, ViewerDropsDashboard, DropCampaignDetails), que fazia o integrity check da Twitch falhar sempre e forcava o fallback lento por browser. Restaurados os Client-IDs publicos reais da Twitch — a app deve agora funcionar sem precisar de abrir qualquer browser.
+
+## Novidades da 2.2.29
+
+- Corrigido o painel "Drops activos" a mostrar "Sem drops activos" mesmo com uma campanha activamente a ser farmada — passa a mostrar o progresso agregado quando a Twitch nao devolve detalhe por-drop.
+
+## Novidades da 2.2.28
+
+- Corrigido falso positivo generalizado de "exige subscricao" no dashboard, na lista de drops activos e na contagem da checkbox "ocultar sub-only" — campanhas sem metadados por-drop (fallback do browser) deixam de ser confundidas com sub-only.
 
 ## Novidades da 2.2.27
 
@@ -104,7 +157,7 @@ Notas:
 
 - Tags `v*` passam a poder gerar automaticamente um build Windows via GitHub Actions.
 - A release publica o pacote `TwitchDropFarmer-win64.zip` como asset.
-- Notas de release desta versao: `docs/releases/v2.2.27.pt-PT.md` e `docs/releases/v2.2.27.en.md`.
+- Notas de release desta versão: `docs/releases/v2.2.39.pt-PT.md` e `docs/releases/v2.2.39.en.md`.
 
 ## Como autenticar
 
