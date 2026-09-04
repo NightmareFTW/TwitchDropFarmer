@@ -359,6 +359,44 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Maintenance
 
 - **Bump de versão** — atualização para `2.2.28`.
+=======
+## [2.2.29] - 2026-09-04
+
+### Fixed
+
+- **Indicador de carregamento no dashboard** — o utilizador passa a ver um aviso
+  explícito enquanto as campanhas e streams estão a ser actualizadas no arranque,
+  reduzindo a sensação de que a aplicação ficou bloqueada.
+- **Estado de conta não ligada separado do “inativo”** — campanhas com ligação à
+  conta por fazer deixam de ser categorizadas como inactivas gerais; passam a
+  mostrar um ribbon específico e uma causa clara no painel.
+- **Correção de falsos “inativos / sem canais”** — activas sem canais válidos ou
+  com ligação pendente deixam de ser mascaradas por um estado genérico de
+  inactivas quando a causa real é mais específica.
+
+### Maintenance
+
+- **Bump de versão e novo artefacto zip** — atualização para `2.2.29`.
+
+## [2.2.28] - 2026-09-04
+
+### Fixed
+
+- **Deteção de sub-only consolidada** — campanhas com sinal explícito de
+  subscrição continuam a ser escondidas do farming, mas campanhas sem sinal
+  estrutural e sem dados watcháveis permanecem acessíveis.
+- **Heurística conservadora** — o fechar de campanhas como sub-only não usa mais
+  metadados incompletos como prova; só sinaliza quando há evidência explícita ou
+  vários drops conhecidos a zero.
+- **Flag `requires_subscription` propagada no `poll()`** — o estado da campanha
+  é preservado no snapshot e nas decisões para o dashboard/pipeline.
+
+### Maintenance
+
+- **Testes de regressão reforçados** para evitar falsos positivos e falsos
+  negativos na classificação de sub-only.
+- **Bump de versão e novo artefacto zip** — atualização para `2.2.28`.
+>>>>>>> d048d36 (Fix dashboard state classification and campaign deduplication)
 
 ## [2.2.27] - 2026-07-01
 

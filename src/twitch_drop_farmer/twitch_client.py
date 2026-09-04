@@ -43,6 +43,10 @@ else:
 
 GQL_URL = "https://gql.twitch.tv/gql"
 WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+EXTERNAL_CAMPAIGN_REGISTRY_URLS = (
+    "https://twitchdrops.app/",
+    "https://twitchdrops.app/?updated=hourly",
+)
 WEB_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
@@ -364,7 +368,8 @@ class TwitchClient:
         self._load_cookies()
 
     def _note(self, message: str) -> None:
-        self._diagnostics.append(message)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self._diagnostics.append(f"[{timestamp}] {message}")
 
     def _clone_query(self, payload: dict[str, Any]) -> dict[str, Any]:
         return json.loads(json.dumps(payload))
@@ -1160,10 +1165,6 @@ class TwitchClient:
             if isinstance(node, dict):
                 for key, value in node.items():
                     key_norm = str(key).strip().replace("_", "").casefold()
-                    # Only match explicit boolean-flag keys known to mean "subscription required".
-                    # Avoid broad matching on any key that contains "subscription" because
-                    # Twitch returns many non-requirement fields (e.g. subscriptionBenefit) that
-                    # are legitimately present on open campaigns and would cause false positives.
                     if key_norm in subscription_flag_keys and bool(value):
                         return True
                     if key_norm in subscription_value_keys and isinstance(value, str):
@@ -1181,8 +1182,6 @@ class TwitchClient:
             return False
 
         def required_minutes_from_drop(drop: dict[str, Any]) -> int | None:
-            # Some fallback payloads omit requiredMinutesWatched entirely; treat that as
-            # unknown (None), not as 0, to avoid classifying normal campaigns as sub-only.
             for key in ("requiredMinutesWatched", "required_minutes"):
                 if key not in drop:
                     continue
@@ -1196,58 +1195,50 @@ class TwitchClient:
             return None
 
         payload_requires_subscription = walk_struct(payload)
-
         has_drops = False
         has_watchable_drop = False
-        has_drop_struct_subscription = False
-        has_known_required_minutes = False
-        all_known_required_are_zero = True
+        known_requirement_count = 0
+        zero_requirement_count = 0
+
         for drop in drops:
             if not isinstance(drop, dict):
                 continue
             has_drops = True
-            drop_requires_subscription = walk_struct(drop)
-            if drop_requires_subscription:
-                has_drop_struct_subscription = True
+            if walk_struct(drop):
+                if has_watchable_drop:
+                    return False
+                return True
 
             required_minutes = required_minutes_from_drop(drop)
             if required_minutes is None:
-                all_known_required_are_zero = False
                 continue
-
-            has_known_required_minutes = True
-            if required_minutes > 0 and not drop_requires_subscription:
+            known_requirement_count += 1
+            if required_minutes > 0:
                 has_watchable_drop = True
-                all_known_required_are_zero = False
+                continue
+            zero_requirement_count += 1
 
-        # Mixed campaigns (watchable + sub-related benefits) are not subscription-locked.
         if has_watchable_drop:
             return False
-
-        # If campaign-level flags explicitly require a subscription and there are no
-        # watchable drops, classify as subscription-locked.
         if payload_requires_subscription:
             return True
-
-        # Explicit per-drop subscription flags with no watchable drops.
-        if has_drop_struct_subscription:
-            return True
-
-        # Only infer sub-only when ALL known drop requirements are explicit zeros.
-        # If requirement minutes are missing/unknown, do not infer subscription lock.
-        if has_drops and has_known_required_minutes and all_known_required_are_zero:
-            return True
-
+        if has_drops and known_requirement_count > 0:
+            return zero_requirement_count == known_requirement_count
         return False
 
     def _compute_has_watchable_drops(self, drops: list[dict[str, Any]]) -> bool:
-        """Return True if at least one drop can be earned by watching (no subscription required)."""
+        """Return True if any drop is explicitly watchable; missing metadata should not infer sub-only."""
         for drop in drops:
-            required = int(drop.get("requiredMinutesWatched", 0) or 0)
-            if required <= 0:
+            if not isinstance(drop, dict):
                 continue
-            # Re-use subscription check scoped to this single drop (empty campaign payload)
-            if not self._campaign_requires_subscription({}, [drop]):
+            required = drop.get("requiredMinutesWatched")
+            if required is None:
+                return True
+            try:
+                required_value = int(required)
+            except (TypeError, ValueError):
+                return True
+            if required_value > 0:
                 return True
         return False
 
@@ -1778,7 +1769,7 @@ class TwitchClient:
             status = "UPCOMING"
         else:
             status = "ACTIVE"
-        return DropCampaign(
+        campaign = DropCampaign(
             id=self._browser_campaign_id(title, starts_at, ends_at),
             game_name=title,
             title=title,
@@ -1789,6 +1780,8 @@ class TwitchClient:
             status=status,
             requires_subscription=requires_subscription,
         )
+        campaign.source = "browser"
+        return campaign
 
     def _campaign_from_browser_row(
         self,
@@ -1849,7 +1842,7 @@ class TwitchClient:
         if not CAMPAIGN_UUID_PATTERN.fullmatch(explicit_id):
             explicit_id = self._browser_campaign_id(title_clean, starts_at, ends_at)
 
-        return DropCampaign(
+        campaign = DropCampaign(
             id=explicit_id,
             game_name=title_clean,
             title=title_clean,
@@ -1862,6 +1855,80 @@ class TwitchClient:
             timestamps_are_synthetic=(match is None),
             timestamp_source=("synthetic" if match is None else "campaign"),
         )
+        campaign.source = "browser"
+        return campaign
+
+    def _deduplicate_campaigns(self, campaigns: list[DropCampaign]) -> list[DropCampaign]:
+        """Merge same campaigns from different Twitch sources without losing progress details."""
+        merged: dict[str, DropCampaign] = {}
+        for campaign in campaigns:
+            if not campaign or not campaign.game_name or not campaign.id:
+                continue
+
+            fingerprint = (
+                campaign.game_name.casefold().strip(),
+                campaign.title.casefold().strip(),
+                campaign.starts_at.isoformat(),
+                campaign.ends_at.isoformat(),
+                campaign.required_minutes,
+            )
+            key = str(fingerprint)
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = campaign
+                continue
+
+            prefer = campaign if campaign.source == "twitch" else existing
+            if campaign.source == "twitch" and existing.source != "twitch":
+                prefer = campaign
+            elif campaign.source == "browser" and existing.source == "browser":
+                prefer = existing if existing.progress_minutes >= campaign.progress_minutes else campaign
+            elif campaign.source == "external_registry" and existing.source == "browser":
+                prefer = existing
+
+            if prefer is campaign:
+                campaign.progress_minutes = max(existing.progress_minutes, campaign.progress_minutes)
+                campaign.required_minutes = max(existing.required_minutes, campaign.required_minutes)
+                campaign.linked = existing.linked or campaign.linked
+                campaign.allowed_channels = existing.allowed_channels or campaign.allowed_channels
+                campaign.requires_subscription = existing.requires_subscription or campaign.requires_subscription
+                campaign.drops = existing.drops or campaign.drops
+                campaign.next_drop_name = existing.next_drop_name or campaign.next_drop_name
+                campaign.next_drop_remaining_minutes = max(
+                    existing.next_drop_remaining_minutes,
+                    campaign.next_drop_remaining_minutes,
+                )
+                campaign.next_drop_required_minutes = max(
+                    existing.next_drop_required_minutes,
+                    campaign.next_drop_required_minutes,
+                )
+                campaign.all_drops_claimed = existing.all_drops_claimed or campaign.all_drops_claimed
+                campaign.status = existing.status or campaign.status
+                merged[key] = campaign
+            else:
+                existing.progress_minutes = max(existing.progress_minutes, campaign.progress_minutes)
+                existing.required_minutes = max(existing.required_minutes, campaign.required_minutes)
+                existing.linked = existing.linked or campaign.linked
+                existing.allowed_channels = existing.allowed_channels or campaign.allowed_channels
+                existing.requires_subscription = existing.requires_subscription or campaign.requires_subscription
+                existing.drops = existing.drops or campaign.drops
+                existing.next_drop_name = existing.next_drop_name or campaign.next_drop_name
+                existing.next_drop_remaining_minutes = max(
+                    existing.next_drop_remaining_minutes,
+                    campaign.next_drop_remaining_minutes,
+                )
+                existing.next_drop_required_minutes = max(
+                    existing.next_drop_required_minutes,
+                    campaign.next_drop_required_minutes,
+                )
+                existing.all_drops_claimed = existing.all_drops_claimed or campaign.all_drops_claimed
+                existing.status = existing.status or campaign.status
+                merged[key] = existing
+
+        deduped = list(merged.values())
+        deduped.sort(key=lambda item: item.starts_at)
+        deduped.sort(key=lambda item: item.active, reverse=True)
+        return deduped
 
     def _campaigns_from_browser_body_text(self, body_text: str) -> list[DropCampaign]:
         lines = [line.strip() for line in body_text.splitlines() if line.strip()]
@@ -3118,6 +3185,8 @@ class TwitchClient:
             timestamps_are_synthetic=timestamps_are_synthetic,
             timestamp_source=timestamp_source,
         )
+        campaign.source = "twitch"
+        return campaign
         return campaign
 
     def fetch_inventory_progress(self) -> dict[str, DropCampaign]:
@@ -3273,18 +3342,29 @@ class TwitchClient:
             allow_browser_fallback = False
             full_scan = False
             self._note("Browser fallback ignorado fora do thread principal (segurança de estabilidade).")
-        if not self.login_state.oauth_token:
-            self._note("No auth-token cookie value saved yet.")
+
+        def _registry_fallback_or_empty() -> list[DropCampaign]:
+            external_campaigns = self._campaigns_from_external_registry()
+            if external_campaigns:
+                external_campaigns.sort(key=lambda item: item.starts_at)
+                external_campaigns.sort(key=lambda item: item.active, reverse=True)
+                self._note("Usa-se a listagem completa do registry público como fonte de fallback.")
+                return external_campaigns
+            self._note("O fallback público não devolveu campanhas utilizáveis.")
             return []
+
+        if not self.login_state.oauth_token:
+            self._note("No auth-token cookie value saved yet. Trying public registry fallback.")
+            return _registry_fallback_or_empty()
 
         try:
             self.validate_oauth_token()
         except ValueError as exc:
             self._note(str(exc))
-            return []
+            return _registry_fallback_or_empty()
         except requests.RequestException as exc:
             self._note(f"OAuth validation request failed: {exc}")
-            return []
+            return _registry_fallback_or_empty()
 
         try:
             inventory_response = self._post_gql(INVENTORY_QUERY, client_profile="android")
@@ -3318,10 +3398,19 @@ class TwitchClient:
             for message in dashboard_errors
         )
         if not campaigns_response:
-            return []
+            self._note("ViewerDropsDashboard returned no payload; continuing to fallback logic.")
+            campaigns_response = {}
         dashboard_user = campaigns_response.get("data", {}).get("currentUser")
         if dashboard_user is None:
-            self._note("ViewerDropsDashboard returned currentUser=null.")
+            self._note("ViewerDropsDashboard returned currentUser=null. Trying external registry fallback.")
+            external_campaigns = self._campaigns_from_external_registry()
+            if external_campaigns:
+                self._note(
+                    "A dashboard da Twitch não devolveu dados utilizáveis; usa-se a lista completa do registry público."
+                )
+                external_campaigns.sort(key=lambda item: item.starts_at)
+                external_campaigns.sort(key=lambda item: item.active, reverse=True)
+                return external_campaigns
             return []
 
         available_list = dashboard_user.get("dropCampaigns", []) or []
@@ -3338,11 +3427,29 @@ class TwitchClient:
             self._note(
                 "ViewerDropsDashboard bloqueado por integrity check. A usar IDs da página de drops e inventário (sem cache)."
             )
+            if allow_browser_fallback:
+                browser_campaigns = self._campaigns_from_browser_page()
+                if browser_campaigns:
+                    browser_campaigns.sort(key=lambda item: item.starts_at)
+                    browser_campaigns.sort(key=lambda item: item.active, reverse=True)
+                    self._note(
+                        "ViewerDropsDashboard está integrity-protected; browser fallback recuperou a lista completa e interrompe a cadeia de Twitch."
+                    )
+                    return browser_campaigns
+                external_campaigns = self._campaigns_from_external_registry()
+                if external_campaigns:
+                    self._note(
+                        "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
+                    )
+                    external_campaigns.sort(key=lambda item: item.starts_at)
+                    external_campaigns.sort(key=lambda item: item.active, reverse=True)
+                    return external_campaigns
         if available_campaigns and len(available_campaigns) <= minimum_expected:
             self._note(
                 "ViewerDropsDashboard returned a small campaign list. "
                 "Enriching with drops page fallback IDs."
             )
+
         if fallback_campaigns:
             missing_fallback_ids = set(fallback_campaigns) - set(available_campaigns)
             if missing_fallback_ids:
@@ -3430,6 +3537,19 @@ class TwitchClient:
                     break
         self._note(f"Fetched detailed info for {len(detailed_campaigns)} campaign(s).")
 
+        if dashboard_integrity_blocked and not detailed_campaigns:
+            self._note(
+                "Twitch detail queries remain integrity-blocked; switching to the public registry as the definitive fallback."
+            )
+            external_campaigns = self._campaigns_from_external_registry()
+            if external_campaigns:
+                external_campaigns.sort(key=lambda item: item.starts_at)
+                external_campaigns.sort(key=lambda item: item.active, reverse=True)
+                self._note(
+                    "A Twitch não respondeu com detalhes utilizáveis; usa-se a listagem completa do registry público como fonte definitiva."
+                )
+                return external_campaigns
+
         merged_campaigns: dict[str, dict[str, Any]] = {}
         for campaign_id in set(inventory_data) | set(available_campaigns) | set(detailed_campaigns):
             merged = inventory_data.get(campaign_id, {})
@@ -3481,6 +3601,7 @@ class TwitchClient:
                 )
             )
         ]
+        campaigns = self._deduplicate_campaigns(campaigns)
         if len(campaigns) != before_time_filter:
             self._note(
                 f"Dropped {before_time_filter - len(campaigns)} expired campaign(s) from the parsed list."
@@ -3533,24 +3654,43 @@ class TwitchClient:
                         # New campaign from browser
                         merged_by_id[browser_campaign.id] = browser_campaign
                 
-                campaigns = list(merged_by_id.values())
-                campaigns.sort(key=lambda item: item.starts_at)
-                campaigns.sort(key=lambda item: item.active, reverse=True)
+                campaigns = self._deduplicate_campaigns(list(merged_by_id.values()))
                 weak_listing = False
         elif campaigns and should_try_browser_fallback and not allow_browser_fallback:
             self._note("Browser fallback disabled for this campaign fetch call.")
         if not campaigns:
             if inventory_data or dashboard_integrity_blocked:
-                self._note("ViewerDropsDashboard is empty or integrity-protected. Skipping browser fallback.")
+                self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
+                campaigns = self._campaigns_from_browser_page(full_scan=full_scan) if allow_browser_fallback else []
+                campaigns.sort(key=lambda item: item.starts_at)
+                campaigns.sort(key=lambda item: item.active, reverse=True)
+                if campaigns:
+                    campaigns = self._deduplicate_campaigns(campaigns)
+                    weak_listing = False
+                else:
+                    self._note("Browser fallback did not recover any campaigns from the rendered page.")
             elif allow_browser_fallback:
                 self._note("ViewerDropsDashboard is empty or integrity-protected. Trying browser fallback.")
                 campaigns = self._campaigns_from_browser_page(full_scan=full_scan)
                 campaigns.sort(key=lambda item: item.starts_at)
                 campaigns.sort(key=lambda item: item.active, reverse=True)
                 if campaigns:
+                    campaigns = self._deduplicate_campaigns(campaigns)
                     weak_listing = False
             else:
                 self._note("ViewerDropsDashboard is empty or integrity-protected, and browser fallback is disabled.")
+
+        if not campaigns:
+            self._note("No Twitch campaign list survived the integrity/blocking checks. Trying external public registry fallback.")
+            external_campaigns = self._campaigns_from_external_registry()
+            if external_campaigns:
+                campaigns = self._deduplicate_campaigns(external_campaigns)
+                self._note(
+                    "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
+                )
+            elif allow_browser_fallback:
+                self._note("Browser fallback is disabled or no browser results were recovered; external registry fallback also returned no campaigns.")
+
         self._note(
             f"Parsed {len(campaigns)} campaign(s), {sum(campaign.eligible for campaign in campaigns)} eligible for farming."
         )
