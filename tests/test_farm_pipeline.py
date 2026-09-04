@@ -44,7 +44,7 @@ from twitch_drop_farmer.models import DropCampaign, FarmDecision, StreamCandidat
 from twitch_drop_farmer.farmer import FarmEngine
 from twitch_drop_farmer.config import AppConfig
 from twitch_drop_farmer.twitch_client import TwitchClient
-from twitch_drop_farmer.ui import _normalize_dashboard_game_name
+from twitch_drop_farmer.ui import _effective_dashboard_game_names, _normalize_dashboard_game_name
 
 UTC = timezone.utc
 
@@ -277,6 +277,12 @@ class TestFarmEnginePipeline(unittest.TestCase):
         snapshot = engine.poll()
         self.assertEqual(len(snapshot.decisions), 1)
         self.assertEqual(snapshot.decisions[0].reason_code, "stream_selected")
+
+    def test_dashboard_refresh_targets_deduplicate_numeric_suffixes(self):
+        """The dashboard refresh target list should normalize synthetic numeric suffixes."""
+        names = ["Don't Starve Together", "Don't Starve Together 3"]
+        resolved = _effective_dashboard_game_names(names, ["Don't Starve Together", "Don't Starve Together 3"])
+        self.assertEqual(resolved, ["Don't Starve Together"])
 
     def test_external_registry_fallback_parses_game_cards(self):
         """The public external registry should yield active campaign cards when Twitch is empty."""

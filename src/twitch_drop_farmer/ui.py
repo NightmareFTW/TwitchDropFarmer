@@ -761,8 +761,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_group": "Jogos da whitelist",
         "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
         "dashboard_refresh": "Actualizar dashboard",
+        "dashboard_refresh_drops": "Actualizar drops",
+        "dashboard_refresh_drops_tooltip": "Vai percorrer os jogos da whitelist e recarrega os drops activos de cada um usando os dados do site público e o fallback do browser.",
         "dashboard_full_scan_started": "A fazer scan completo da whitelist (pode demorar alguns minutos)...",
         "dashboard_full_scan_done": "Scan completo da whitelist concluído.",
+        "dashboard_drop_refresh_started": "A actualizar drops de {count} jogo(s) da whitelist...",
+        "dashboard_drop_refresh_done": "Actualização de drops concluída para {count} jogo(s).",
+        "dashboard_drop_refresh_empty": "Não há jogos na whitelist para actualizar drops.",
         "dashboard_hide_sub_only": "Ocultar jogos com drops de subscrição",
         "dashboard_hide_sub_only_help": "Esconde jogos cujas campanhas disponíveis exigem subscrição para resgatar drops.",
         "dashboard_drops_notice": (
@@ -1046,8 +1051,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_group": "Whitelisted games",
         "dashboard_hint": "Click a game to make it your manual farming target.",
         "dashboard_refresh": "Refresh dashboard",
+        "dashboard_refresh_drops": "Refresh drops",
+        "dashboard_refresh_drops_tooltip": "Walks the whitelist games and refreshes each game's active drops using the public registry and browser fallback data.",
         "dashboard_full_scan_started": "Running a full whitelist scan (can take a few minutes)...",
         "dashboard_full_scan_done": "Full whitelist scan complete.",
+        "dashboard_drop_refresh_started": "Refreshing drops for {count} whitelist game(s)...",
+        "dashboard_drop_refresh_done": "Drop refresh completed for {count} game(s).",
+        "dashboard_drop_refresh_empty": "There are no games in the whitelist to refresh.",
         "dashboard_hide_sub_only": "Hide games with subscription-only drops",
         "dashboard_hide_sub_only_help": "Hide games whose available campaigns require an active subscription to redeem drops.",
         "dashboard_drops_notice": (
@@ -1282,6 +1292,36 @@ def _normalize_dashboard_game_name(name: str, *, known_names: set[str] | None = 
 
 def _dashboard_game_key(name: str, *, known_names: set[str] | None = None) -> str:
     return _normalize_dashboard_game_name(name, known_names=known_names).casefold()
+
+
+def _effective_dashboard_game_names(
+    names: list[str] | tuple[str, ...] | set[str],
+    known_names: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> list[str]:
+    """Collapse synthetic numeric suffixes like 'Game 3' back to the canonical title."""
+    raw: list[str] = []
+    for source in (names, known_names or ()):
+        if source is None:
+            continue
+        for item in source:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if cleaned:
+                raw.append(cleaned)
+    if not raw:
+        return []
+
+    canonical_by_key: dict[str, str] = {}
+    known = {item.casefold() for item in raw}
+    for raw_name in raw:
+        normalized = _normalize_dashboard_game_name(raw_name, known_names=known)
+        key = normalized.casefold()
+        existing = canonical_by_key.get(key)
+        if existing is None or len(raw_name.strip()) < len(existing.strip()):
+            canonical_by_key[key] = normalized
+
+    return sorted(canonical_by_key.values(), key=lambda item: item.casefold())
 
 
 class MarkerListWidget(QListWidget):
@@ -2150,6 +2190,8 @@ class MainWindow(QMainWindow):
         self.dashboard_count_label = QLabel()
         self.btn_dashboard_refresh = QPushButton()
         self.btn_dashboard_refresh.clicked.connect(self.handle_dashboard_refresh)
+        self.btn_dashboard_refresh_drops = QPushButton()
+        self.btn_dashboard_refresh_drops.clicked.connect(self.handle_dashboard_drop_refresh)
         # Notice explaining what to do when a game's drops don't load (helps new
         # users understand why a just-selected game can show "0/0 min" at first).
         self.dashboard_drops_notice = QLabel()
@@ -2162,6 +2204,7 @@ class MainWindow(QMainWindow):
         dashboard_actions_layout.addWidget(self.dashboard_hide_sub_only_checkbox)
         dashboard_actions_layout.addStretch(1)
         dashboard_actions_layout.addWidget(self.dashboard_count_label)
+        dashboard_actions_layout.addWidget(self.btn_dashboard_refresh_drops)
         dashboard_actions_layout.addWidget(self.btn_dashboard_refresh)
         self.dashboard_games_scroll = QScrollArea()
         self.dashboard_games_scroll.setWidgetResizable(True)
@@ -2415,21 +2458,19 @@ class MainWindow(QMainWindow):
             _dashboard_game_key(entry.label, known_names=known_names): entry.label
             for entry in self.available_game_entries
         }
-        output: list[str] = []
+        output = _effective_dashboard_game_names(raw, known_names={entry.key for entry in self.available_game_entries})
+        resolved: list[str] = []
         seen: set[str] = set()
-        for game in raw:
-            token = (game or "").strip()
-            if not token:
-                continue
-            normalized = _dashboard_game_key(token, known_names=known_names)
-            resolved_label = key_to_label.get(normalized) or label_lookup.get(normalized) or token
+        for game in output:
+            normalized = _dashboard_game_key(game, known_names=known_names)
+            resolved_label = key_to_label.get(normalized) or label_lookup.get(normalized) or game
             marker = _dashboard_game_key(resolved_label, known_names=known_names)
             if marker in seen:
                 continue
             seen.add(marker)
-            output.append(resolved_label)
-        output.sort(key=str.casefold)
-        return output
+            resolved.append(resolved_label)
+        resolved.sort(key=str.casefold)
+        return resolved
 
     def _dashboard_card_title(self, game_name: str) -> str:
         cleaned = " ".join(game_name.split())
@@ -2711,6 +2752,8 @@ class MainWindow(QMainWindow):
         self.dashboard_hide_sub_only_checkbox.setToolTip(self._t("dashboard_hide_sub_only_help"))
         self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
         self.btn_dashboard_refresh.setToolTip(self._t("dashboard_refresh_tooltip"))
+        self.btn_dashboard_refresh_drops.setText(self._t("dashboard_refresh_drops"))
+        self.btn_dashboard_refresh_drops.setToolTip(self._t("dashboard_refresh_drops_tooltip"))
         self.dashboard_drops_notice.setText(self._t("dashboard_drops_notice"))
 
         self.oauth_group.setTitle(self._t("oauth_group"))
@@ -4663,6 +4706,27 @@ class MainWindow(QMainWindow):
             self.btn_dashboard_refresh.setEnabled(True)
         self._apply_snapshot(snapshot, from_browser_enrichment=True)
         self._log(self._t("dashboard_full_scan_done"))
+
+    def handle_dashboard_drop_refresh(self) -> None:
+        self._with_errors(self._do_dashboard_drop_refresh)
+
+    def _do_dashboard_drop_refresh(self) -> None:
+        games = self._dashboard_whitelist_games()
+        if not games:
+            self._log(self._t("dashboard_drop_refresh_empty"))
+            return
+
+        self.btn_dashboard_refresh_drops.setEnabled(False)
+        self._log(self._t("dashboard_drop_refresh_started", count=len(games)))
+        try:
+            for game_name in games:
+                self.engine.client.set_priority_game(game_name)
+                snapshot = self.engine.poll(allow_browser_fallback=True, full_scan=True)
+                self._apply_snapshot(snapshot, from_browser_enrichment=True)
+                self._log(f"Drops de '{game_name}' actualizados.")
+        finally:
+            self.btn_dashboard_refresh_drops.setEnabled(True)
+        self._log(self._t("dashboard_drop_refresh_done", count=len(games)))
 
     def _do_redeem_drops(self, *, auto_mode: bool = False) -> int:
         claimed = self.client.claim_available_drops()
