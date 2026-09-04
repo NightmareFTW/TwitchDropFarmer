@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.43] - 2026-09-04
+
+### Fixed
+
+- **Normalização de nomes de jogo no dashboard** — a lista de jogos da whitelist
+  agora deduplicada de nomes sintéticos com sufixo numérico (ex.: "Game 3").
+- **Botão de refresh de drops por jogo** — adicionado botão ao lado do
+  "Actualizar dashboard" para percorrer os jogos da whitelist e recarregar os
+  drops activos de cada um.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.43`.
+
 ## [2.2.42] - 2026-09-04
 
 ### Fixed
