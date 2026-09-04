@@ -29,6 +29,7 @@ class DropCampaign:
     drops: list[dict[str, object]] = field(default_factory=list)
     timestamps_are_synthetic: bool = False
     timestamp_source: str = ""  # "campaign" | "drop" | "synthetic"
+    source: str = ""  # private diagnostic metadata only; not shown in the UI
 
     @property
     def completion(self) -> float:

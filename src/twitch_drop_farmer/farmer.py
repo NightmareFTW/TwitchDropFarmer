@@ -25,6 +25,73 @@ class FarmSnapshot:
 
 
 class FarmEngine:
+    def _campaign_is_known_subscription_locked(self, campaign: DropCampaign) -> bool:
+        if campaign.all_drops_claimed:
+            return False
+
+        if campaign.requires_subscription and not campaign.has_watchable_drops:
+            return True
+
+        if campaign.has_watchable_drops:
+            return False
+
+        text_chunks: list[str] = [campaign.title, campaign.next_drop_name, campaign.link_url]
+        for drop in campaign.drops or []:
+            if not isinstance(drop, dict):
+                continue
+            text_chunks.append(str(drop.get("name") or ""))
+            metadata_text = str(drop.get("metadata") or "")
+            if metadata_text:
+                text_chunks.append(metadata_text)
+
+        combined = "\n".join(chunk for chunk in text_chunks if chunk).casefold()
+        patterns = (
+            "subscribe to redeem",
+            "subscription required",
+            "subscription-only",
+            "sub-only",
+            "subscription only",
+            "subscriber only",
+            "subscribers only",
+            "sub only",
+            "subs only",
+            "subscrição",
+            "subscricao",
+            "apenas subs",
+            "apenas para subs",
+            "so para subs",
+        )
+        if combined and any(pattern in combined for pattern in patterns):
+            return True
+
+        source_hint = str(getattr(campaign, "source", "") or "").casefold()
+        if source_hint != "twitch":
+            return False
+
+        known_positive = 0
+        known_zero = 0
+        known_total = 0
+        for drop in campaign.drops or []:
+            if not isinstance(drop, dict):
+                continue
+            required = drop.get("requiredMinutesWatched")
+            if required is None:
+                continue
+            try:
+                required_value = int(required)
+            except (TypeError, ValueError):
+                continue
+            known_total += 1
+            if required_value > 0:
+                known_positive += 1
+            elif required_value == 0:
+                known_zero += 1
+
+        if known_total > 0 and known_positive == 0 and known_zero == known_total:
+            return True
+
+        return False
+
     def __init__(self, client: TwitchClient, config: AppConfig) -> None:
         self.client = client
         self.config = config
@@ -144,8 +211,9 @@ class FarmEngine:
                 continue
 
             # Subscription-only campaigns cannot be farmed by watch-time automation.
-            # If the campaign has at least one watchable drop, proceed to farm those instead.
-            if campaign.requires_subscription and not campaign.has_watchable_drops and not campaign.all_drops_claimed:
+            # Only classify as such when the campaign carries explicit subscription evidence.
+            if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
+                campaign.requires_subscription = True
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,
@@ -173,12 +241,7 @@ class FarmEngine:
                 )
                 continue
 
-            subscription_only = (
-                bool(campaign.drops)
-                and not campaign.has_watchable_drops
-                and campaign.required_minutes <= 0
-            )
-            if (campaign.requires_subscription or subscription_only) and not campaign.all_drops_claimed:
+            if self._campaign_is_known_subscription_locked(campaign) and not campaign.all_drops_claimed:
                 campaign.requires_subscription = True
                 decisions.append(
                     FarmDecision(

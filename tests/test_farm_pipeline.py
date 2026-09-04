@@ -29,19 +29,32 @@ TestExpiringAlertTimestampSource verifies the campaign-expiring alert:
 """
 from __future__ import annotations
 
+import importlib.util
 import sys
 import os
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from twitch_drop_farmer.models import DropCampaign, FarmDecision, StreamCandidate
 from twitch_drop_farmer.farmer import FarmEngine
 from twitch_drop_farmer.config import AppConfig
+from twitch_drop_farmer.twitch_client import TwitchClient
 
 UTC = timezone.utc
+
+
+def _load_launcher_module():
+    launcher_path = Path(__file__).resolve().parents[1] / "TwitchDropFarmer.pyw"
+    spec = importlib.util.spec_from_file_location("twitchdropfarmer_launcher", launcher_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def _make_drops(count: int = 5) -> list[dict]:
@@ -118,6 +131,402 @@ def _make_engine(
 
 
 class TestFarmEnginePipeline(unittest.TestCase):
+
+    def test_launcher_prefers_project_venv_python(self):
+        """The .pyw launcher must re-exec the app with the project venv when available."""
+        module = _load_launcher_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            venv_python = root / ".venv" / "Scripts" / "python.exe"
+            venv_python.parent.mkdir(parents=True, exist_ok=True)
+            venv_python.touch()
+
+            self.assertEqual(module._resolve_python_executable(root), venv_python)
+
+    def test_launcher_installs_requirements_when_missing(self):
+        """The .pyw launcher should bootstrap dependencies from requirements.txt when they are absent."""
+        module = _load_launcher_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text("requests\nPySide6\n", encoding="utf-8")
+            python = root / "python.exe"
+            python.write_text("fake", encoding="utf-8")
+
+            real_import = __import__
+
+            def fake_import(name, *args, **kwargs):
+                if name in {"requests", "PySide6"}:
+                    raise ModuleNotFoundError(name)
+                return real_import(name, *args, **kwargs)
+
+            with patch.object(module, "_resolve_python_executable", return_value=python), \
+                 patch.object(module.subprocess, "run") as run_mock, \
+                 patch("builtins.__import__", side_effect=fake_import):
+                self.assertFalse(module._ensure_runtime_dependencies(root))
+                run_mock.assert_called_once()
+                self.assertIn("pip", " ".join(run_mock.call_args[0][0]))
+
+    def test_launcher_dist_exe_is_opt_in(self):
+        """The packaged dist executable must not launch by default because that bypasses the source fix."""
+        module = _load_launcher_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dist_exe = root / "dist" / "TwitchDropFarmer" / "TwitchDropFarmer.exe"
+            dist_exe.parent.mkdir(parents=True, exist_ok=True)
+            dist_exe.write_bytes(b"stub")
+
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertFalse(module._should_launch_packaged_dist(root))
+
+            with patch.dict(os.environ, {"TDF_USE_DIST": "1"}, clear=True):
+                self.assertTrue(module._should_launch_packaged_dist(root))
+
+    def test_launcher_reports_child_process_errors(self):
+        """A failed child Python process must be surfaced to the user instead of exiting silently."""
+        module = _load_launcher_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            python = root / "python.exe"
+            python.write_text("fake", encoding="utf-8")
+
+            with patch.object(module.subprocess, "run", return_value=MagicMock(returncode=1, stderr="No module named twitch_drop_farmer\n")), \
+                 patch.object(module, "_show_error") as show_error:
+                exit_code = module._run_python_module(root, python)
+
+        self.assertEqual(exit_code, 1)
+        show_error.assert_called_once()
+        self.assertIn("No module named twitch_drop_farmer", show_error.call_args[0][1])
+
+    def test_timestamped_diagnostics_include_timestamp(self):
+        """Diagnostics must be stamped with the time they were recorded."""
+        client = TwitchClient()
+        client._note("browser fallback probe")
+
+        messages = client.consume_diagnostics()
+        self.assertEqual(len(messages), 1)
+        self.assertIn("browser fallback probe", messages[0])
+        self.assertRegex(messages[0], r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+
+    def test_campaigns_are_deduplicated_across_sources(self):
+        """The same campaign should not appear twice when Twitch and browser sources overlap."""
+        client = TwitchClient()
+        now = datetime.now(UTC)
+
+        twitch_campaign = DropCampaign(
+            id="campaign-123",
+            game_name="World of Warcraft",
+            title="World of Warcraft",
+            starts_at=now - timedelta(days=1),
+            ends_at=now + timedelta(days=5),
+            status="ACTIVE",
+            required_minutes=120,
+            progress_minutes=30,
+            linked=True,
+            source="twitch",
+        )
+        browser_campaign = DropCampaign(
+            id="browser-abc123",
+            game_name="World of Warcraft",
+            title="World of Warcraft",
+            starts_at=now - timedelta(days=1),
+            ends_at=now + timedelta(days=5),
+            status="ACTIVE",
+            required_minutes=120,
+            progress_minutes=30,
+            linked=True,
+            source="browser",
+        )
+
+        deduped = client._deduplicate_campaigns([twitch_campaign, browser_campaign])
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0].game_name, "World of Warcraft")
+
+    def test_unknown_drop_metadata_is_not_treated_as_subscription_only(self):
+        """Fallback campaigns without explicit sub metadata must remain farmable and not be hidden."""
+        engine = _make_engine()
+        now = datetime.now(UTC)
+        campaign = DropCampaign(
+            id="fallback-unknown-drop",
+            game_name="Example Game",
+            title="Example Game",
+            starts_at=now - timedelta(hours=1),
+            ends_at=now + timedelta(days=5),
+            status="ACTIVE",
+            required_minutes=0,
+            progress_minutes=0,
+            linked=True,
+            drops=[{"name": "Drop 1", "requiredMinutesWatched": 0, "currentMinutesWatched": 0, "claimed": False}],
+            has_watchable_drops=False,
+            requires_subscription=False,
+        )
+        stream = StreamCandidate(
+            login="streamer_1",
+            display_name="Streamer 1",
+            game_name="Example Game",
+            viewer_count=50,
+            drops_enabled=True,
+        )
+        engine.client.fetch_campaigns.return_value = [campaign]
+        engine.client.fetch_streams.return_value = [stream]
+
+        snapshot = engine.poll()
+        self.assertEqual(len(snapshot.decisions), 1)
+        self.assertEqual(snapshot.decisions[0].reason_code, "stream_selected")
+
+    def test_external_registry_fallback_parses_game_cards(self):
+        """The public external registry should yield active campaign cards when Twitch is empty."""
+        client = TwitchClient()
+        fake_html = """
+        <html><body>
+        <div class="sb-name-title">World of Warcraft</div>
+        <div class="card-meta">30m–4h watch · ends today · 3 drops · any channel · 3 campaigns · 12.4K watching</div>
+        <div class="sb-name-title">Elden Ring</div>
+        <div class="card-meta">20m–2h watch · ends today · 2 drops · any channel · 2 campaigns · 9.1K watching</div>
+        </body></html>
+        """
+
+        with patch("twitch_drop_farmer.twitch_client.requests.get") as get_mock:
+            get_mock.return_value = MagicMock(status_code=200, text=fake_html)
+            campaigns = client._campaigns_from_external_registry()
+
+        self.assertEqual(len(campaigns), 2)
+        self.assertEqual(campaigns[0].game_name, "World of Warcraft")
+        self.assertEqual(campaigns[0].status, "ACTIVE")
+        self.assertEqual(campaigns[0].source, "external_registry")
+        self.assertTrue(campaigns[0].link_url.startswith("https://"))
+
+    def test_external_registry_fallback_parses_real_twitchdrops_app_links(self):
+        """The registry parser must work with the real twitchdrops.app card structure."""
+        client = TwitchClient()
+        fake_html = """
+        <html><body>
+        <a href="/game/world-of-warcraft">
+          <span>World of Warcraft</span>
+          World of Warcraft ACTIVE Blizzard 4h watch · ends in 6 days · 1 drop · any channel · 95.6K watching
+        </a>
+        <a href="/game/the-finals">
+          The Finals THE FINALS ENDS TODAY 15h 46m left Embark Studios 1h–4h watch · ends today · 3 drops
+        </a>
+        </body></html>
+        """
+
+        with patch("twitch_drop_farmer.twitch_client.requests.get") as get_mock:
+            get_mock.return_value = MagicMock(status_code=200, text=fake_html)
+            campaigns = client._campaigns_from_external_registry()
+
+        self.assertEqual(len(campaigns), 2)
+        self.assertIn("World of Warcraft", {campaign.game_name for campaign in campaigns})
+        self.assertIn("The Finals", {campaign.game_name for campaign in campaigns})
+        self.assertTrue(all(campaign.link_url.startswith("https://") for campaign in campaigns))
+
+    def test_external_registry_game_page_parses_mixed_watch_and_sub_rewards(self):
+        """A game page with normal watch rewards and sub rewards must keep the game farmable until the normal drops finish."""
+        client = TwitchClient()
+        fake_html = """
+        <html><body>
+        <div class="reward-card">
+          <div class="reward-name">WARDOG</div>
+          <div class="reward-meta">Watch 30m</div>
+        </div>
+        <div class="reward-card">
+          <div class="reward-name">WARLORD</div>
+          <div class="reward-meta">1 sub</div>
+        </div>
+        </body></html>
+        """
+
+        rewards = client._extract_game_rewards_from_page(fake_html)
+
+        self.assertEqual(len(rewards), 2)
+        self.assertIn("WARDOG", {item["name"] for item in rewards})
+        self.assertIn("WARLORD", {item["name"] for item in rewards})
+        self.assertTrue(any(item.get("requires_subscription") for item in rewards if item["name"] == "WARLORD"))
+        self.assertTrue(any(item.get("required_minutes", 0) > 0 for item in rewards if item["name"] == "WARDOG"))
+
+    def test_campaign_source_is_internal_metadata(self):
+        """Campaign source is tracked internally for diagnostics, without being a UI field."""
+        campaign = DropCampaign(
+            id="test-source-001",
+            game_name="Test Game",
+            title="Test Game",
+            ends_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        campaign.source = "twitch"
+        self.assertEqual(campaign.source, "twitch")
+        self.assertIn("source", DropCampaign.__slots__)
+
+    def test_fetch_campaigns_uses_external_registry_when_dashboard_is_integrity_limited(self):
+        """When Twitch is integrity-limited, the external registry must replace the partial source list."""
+        client = TwitchClient()
+
+        inventory_payload = {
+            "data": {
+                "currentUser": {
+                    "inventory": {
+                        "dropCampaignsInProgress": [
+                            {
+                                "id": "partial-123",
+                                "name": "Partial Campaign",
+                                "status": "ACTIVE",
+                                "self": {"currentMinutesWatched": 10},
+                                "timeBasedDrops": [{"name": "Drop", "requiredMinutesWatched": 60, "currentMinutesWatched": 10}],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        dashboard_payload = {
+            "errors": [{"message": "failed integrity check"}],
+            "data": {
+                "currentUser": {
+                    "dropCampaigns": [
+                        {"id": "partial-123", "status": "ACTIVE"}
+                    ]
+                }
+            },
+        }
+        registry_campaign = DropCampaign(
+            id="external-full-001",
+            game_name="Full Registry Campaign",
+            title="Full Registry Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=1),
+            status="ACTIVE",
+            required_minutes=0,
+            progress_minutes=0,
+            linked=True,
+        )
+        registry_campaign.source = "external_registry"
+
+        with patch.object(client, "validate_oauth_token", return_value=None), \
+             patch.object(client, "_post_gql", side_effect=[inventory_payload, dashboard_payload]), \
+             patch.object(client, "_campaigns_from_browser_page", return_value=[]), \
+             patch.object(client, "_campaigns_from_external_registry", return_value=[registry_campaign]):
+            client.login_state.oauth_token = "token"
+            campaigns = client.fetch_campaigns()
+
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0].game_name, "Full Registry Campaign")
+        self.assertEqual(campaigns[0].source, "external_registry")
+
+    def test_fetch_campaigns_uses_external_registry_when_dashboard_user_is_missing(self):
+        """If Twitch returns no dashboard payload, the external registry should still be used."""
+        client = TwitchClient()
+
+        inventory_payload = {
+            "data": {
+                "currentUser": {
+                    "inventory": {"dropCampaignsInProgress": []}
+                }
+            }
+        }
+        dashboard_payload = {"data": {"currentUser": None}}
+        registry_campaign = DropCampaign(
+            id="external-missing-dashboard-001",
+            game_name="Registry Fallback Campaign",
+            title="Registry Fallback Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=1),
+            status="ACTIVE",
+            required_minutes=0,
+            progress_minutes=0,
+            linked=True,
+        )
+        registry_campaign.source = "external_registry"
+
+        with patch.object(client, "validate_oauth_token", return_value=None), \
+             patch.object(client, "_post_gql", side_effect=[inventory_payload, dashboard_payload]), \
+             patch.object(client, "_campaigns_from_browser_page", return_value=[]), \
+             patch.object(client, "_campaigns_from_external_registry", return_value=[registry_campaign]):
+            client.login_state.oauth_token = "token"
+            campaigns = client.fetch_campaigns()
+
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0].source, "external_registry")
+
+    def test_fetch_campaigns_uses_external_registry_when_oauth_token_is_missing(self):
+        """A missing auth token should not block the public registry fallback list."""
+        client = TwitchClient()
+        registry_campaign = DropCampaign(
+            id="external-no-oauth-001",
+            game_name="Registry No Auth Campaign",
+            title="Registry No Auth Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=1),
+            status="ACTIVE",
+            required_minutes=0,
+            progress_minutes=0,
+            linked=True,
+        )
+        registry_campaign.source = "external_registry"
+
+        with patch.object(client, "_campaigns_from_external_registry", return_value=[registry_campaign]):
+            campaigns = client.fetch_campaigns()
+
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0].game_name, "Registry No Auth Campaign")
+        self.assertEqual(campaigns[0].source, "external_registry")
+
+    def test_fetch_campaigns_uses_external_registry_when_browser_fallback_is_disabled(self):
+        """Even when Qt browser fallback is unavailable, the public registry must still be used."""
+        client = TwitchClient()
+
+        inventory_payload = {
+            "data": {
+                "currentUser": {
+                    "inventory": {"dropCampaignsInProgress": []}
+                }
+            }
+        }
+        dashboard_payload = {
+            "errors": [{"message": "failed integrity check"}],
+            "data": {
+                "currentUser": {
+                    "dropCampaigns": [
+                        {"id": "blocked-uuid-001", "status": "ACTIVE", "name": "Blocked Campaign"}
+                    ]
+                }
+            },
+        }
+        registry_campaign = DropCampaign(
+            id="external-worker-001",
+            game_name="Registry Worker Fallback Campaign",
+            title="Registry Worker Fallback Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=1),
+            status="ACTIVE",
+            required_minutes=0,
+            progress_minutes=0,
+            linked=True,
+        )
+        registry_campaign.source = "external_registry"
+
+        def fake_post_gql(payload, client_profile="web"):
+            if isinstance(payload, dict) and payload.get("operationName") == "Inventory":
+                return inventory_payload
+            if isinstance(payload, dict) and payload.get("operationName") == "ViewerDropsDashboard":
+                return dashboard_payload
+            if isinstance(payload, dict) and payload.get("operationName") == "DropCampaignDetails":
+                return {"errors": [{"message": "failed integrity check"}], "data": {"user": {}}}
+            if isinstance(payload, list):
+                return [{"errors": [{"message": "failed integrity check"}], "data": {"user": {}}} for _ in payload]
+            return {"data": {"currentUser": {"dropCampaigns": []}}}
+
+        with patch.object(client, "validate_oauth_token", return_value=None), \
+             patch.object(client, "_post_gql", side_effect=fake_post_gql), \
+             patch.object(client, "_campaigns_from_browser_page", return_value=[]), \
+             patch.object(client, "_campaigns_from_external_registry", return_value=[registry_campaign]):
+            client.login_state.oauth_token = "token"
+            campaigns = client.fetch_campaigns(allow_browser_fallback=False)
+
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0].game_name, "Registry Worker Fallback Campaign")
+        self.assertEqual(campaigns[0].source, "external_registry")
 
     def test_A_inventory_campaigns_reach_fetch_streams(self):
         """
@@ -529,6 +938,60 @@ class TestFarmEnginePipeline(unittest.TestCase):
         )
         self.assertFalse(farmable,
                          "Decision must not be farmable when stream is None")
+
+
+class TestDashboardIntegrityFallback(unittest.TestCase):
+    def test_browser_fallback_is_tried_when_dashboard_integrity_is_blocked(self):
+        """
+        Regression: if Twitch blocks the dashboard with failed integrity check, the app
+        must still try the browser fallback instead of silently giving up with zero campaigns.
+        """
+        from twitch_drop_farmer.twitch_client import TwitchClient
+
+        client = TwitchClient.__new__(TwitchClient)
+        client.session = MagicMock()
+        client.login_state = MagicMock()
+        client.login_state.oauth_token = "dummy-token"
+        client.login_state.user_id = "123456"
+        client.login_state.login_name = "tester"
+        client._diagnostics = []
+        client._note = MagicMock()
+        client.validate_oauth_token = MagicMock()
+        client._campaigns_from_drops_page = MagicMock(return_value={
+            "e16c5850-2c6c-4d4f-9ed0-d5c98ac12df5": {"id": "e16c5850-2c6c-4d4f-9ed0-d5c98ac12df5", "status": "ACTIVE"},
+        })
+
+        browser_campaign = DropCampaign(
+            id="browser-fallback-001",
+            game_name="Dying Light 2",
+            title="Dying Light 2 Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=7),
+            status="ACTIVE",
+            required_minutes=120,
+            progress_minutes=0,
+            drops=_make_drops(3),
+            linked=True,
+        )
+        client._campaigns_from_browser_page = MagicMock(return_value=[browser_campaign])
+        client._parse_campaign = MagicMock(return_value=browser_campaign)
+
+        inventory_response = {"data": {"currentUser": {"inventory": {"dropCampaignsInProgress": []}}}}
+        campaigns_response = {"data": {"currentUser": {"dropCampaigns": [{"id": "e16c5850-2c6c-4d4f-9ed0-d5c98ac12df5", "status": "ACTIVE"}]}}}
+        failed_detail = {"data": {"user": {"dropCampaign": None}}}
+        client._post_gql = MagicMock(side_effect=[
+            inventory_response,
+            campaigns_response,
+            failed_detail,
+            failed_detail,
+        ])
+        client._graphql_error_messages = MagicMock(return_value=["failed integrity check"])
+
+        campaigns = client.fetch_campaigns(allow_browser_fallback=True)
+
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0].id, "browser-fallback-001")
+        client._campaigns_from_browser_page.assert_called_once()
 
 
 class TestFetchStreamsSlugResolution(unittest.TestCase):

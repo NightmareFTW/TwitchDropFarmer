@@ -95,6 +95,7 @@ BOX_ART_FALLBACK_URL = "https://static-cdn.jtvnw.net/ttv-static/404_boxart.jpg"
 # ── Ribbon constants ────────────────────────────────────────────────────────
 RIBBON_FARMING     = ("FARMING",    "#9147ff")  # purple
 RIBBON_LIVE        = ("LIVE",       "#00b167")  # green
+RIBBON_ACCOUNT_LINK = ("LIGAR CONTA", "#f1c40f")  # yellow – conta do jogo ainda não ligada
 RIBBON_NO_CHANNELS = ("SEM CANAIS", "#c0392b")  # red
 RIBBON_SUB         = ("SUBSCRIÇÃO", "#e67e22")  # orange  – campanha apenas para subscritores
 RIBBON_DONE        = ("CONCLUÍDO",  "#2980b9")  # blue    – todos os drops já obtidos
@@ -774,6 +775,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "dashboard_count_all": "A mostrar {shown} jogo(s).",
         "dashboard_count_whitelist": "A mostrar {shown}/{total} jogos da whitelist.",
+        "dashboard_loading": "A carregar campanhas...",
         "dashboard_empty": "Adiciona jogos na whitelist para aparecerem aqui.",
         "dashboard_selected": "Alvo manual por jogo: {game}.",
         "dashboard_unset": "Sem alvo manual por jogo.",
@@ -1058,6 +1060,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "dashboard_count_all": "Showing {shown} game(s).",
         "dashboard_count_whitelist": "Showing {shown}/{total} whitelisted games.",
+        "dashboard_loading": "Loading campaigns...",
         "dashboard_empty": "Add games to your whitelist to show them here.",
         "dashboard_selected": "Manual game target: {game}.",
         "dashboard_unset": "No manual game target.",
@@ -2105,6 +2108,10 @@ class MainWindow(QMainWindow):
         dashboard_group_layout = QVBoxLayout(self.dashboard_group)
         self.dashboard_hint_label = QLabel()
         self.dashboard_hint_label.setWordWrap(True)
+        self.dashboard_loading_label = QLabel()
+        self.dashboard_loading_label.setVisible(False)
+        self.dashboard_loading_label.setWordWrap(True)
+        self.dashboard_loading_label.setStyleSheet("color: #d9b3ff; font-weight: 600;")
         self.dashboard_hide_sub_only_checkbox = QCheckBox()
         self.dashboard_hide_sub_only_checkbox.setChecked(
             bool(getattr(self.config, "dashboard_hide_subscription_required", False))
@@ -2140,6 +2147,7 @@ class MainWindow(QMainWindow):
         self.dashboard_no_games.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dashboard_no_games.setWordWrap(True)
         dashboard_group_layout.addWidget(self.dashboard_hint_label)
+        dashboard_group_layout.addWidget(self.dashboard_loading_label)
         dashboard_group_layout.addLayout(dashboard_actions_layout)
         dashboard_group_layout.addWidget(self.dashboard_drops_notice)
         dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
@@ -2615,10 +2623,14 @@ class MainWindow(QMainWindow):
         base = self._t("dashboard_hide_sub_only")
         count = 0
         if self.latest_snapshot is not None:
+            selected_games = self._dashboard_whitelist_games()
+            selected_tokens = {game.casefold() for game in selected_games}
             count = sum(
                 1
                 for campaign in self.latest_snapshot.campaigns
-                if self._campaign_matches_hide_sub_only(campaign) and not campaign.all_drops_claimed
+                if campaign.game_name.casefold() in selected_tokens
+                and self._campaign_matches_hide_sub_only(campaign)
+                and not campaign.all_drops_claimed
             )
         self.dashboard_hide_sub_only_checkbox.setText(f"{base} ({count})")
 
@@ -2644,6 +2656,7 @@ class MainWindow(QMainWindow):
 
         self.dashboard_group.setTitle(self._t("dashboard_group"))
         self.dashboard_hint_label.setText(self._t("dashboard_hint"))
+        self.dashboard_loading_label.setText(self._t("dashboard_loading"))
         self._refresh_dashboard_hide_sub_only_label()
         self.dashboard_hide_sub_only_checkbox.setToolTip(self._t("dashboard_hide_sub_only_help"))
         self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
@@ -2888,14 +2901,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _campaign_is_known_subscription_locked(self, campaign: DropCampaign) -> bool:
-        # Mixed campaigns (sub drop + watch drop) have watchable drops — not fully locked.
-        subscription_only = (
-            bool(campaign.drops)
-            and not campaign.has_watchable_drops
-            and campaign.required_minutes <= 0
-        )
-        if (campaign.requires_subscription or subscription_only) and not campaign.all_drops_claimed:
+        if campaign.all_drops_claimed:
+            return False
+
+        if campaign.requires_subscription and not campaign.has_watchable_drops:
             return True
+
+        if campaign.has_watchable_drops:
+            return False
 
         text_chunks: list[str] = [campaign.title, campaign.next_drop_name, campaign.link_url]
         for drop in campaign.drops or []:
@@ -2907,14 +2920,11 @@ class MainWindow(QMainWindow):
         if not combined:
             return False
 
-        # If the campaign has watchable drops, don't lock it even if sub text appears.
-        if campaign.has_watchable_drops:
-            return False
-
         patterns = (
             "subscribe to redeem",
             "subscription required",
             "subscription-only",
+            "sub-only",
             "subscription only",
             "subscriber only",
             "subscribers only",
@@ -2926,7 +2936,29 @@ class MainWindow(QMainWindow):
             "apenas para subs",
             "so para subs",
         )
-        return any(pattern in combined for pattern in patterns)
+        if any(pattern in combined for pattern in patterns):
+            return True
+
+        known_positive = 0
+        known_zero = 0
+        known_total = 0
+        for drop in campaign.drops or []:
+            if not isinstance(drop, dict):
+                continue
+            required = drop.get("requiredMinutesWatched")
+            if required is None:
+                continue
+            try:
+                required_value = int(required)
+            except (TypeError, ValueError):
+                continue
+            known_total += 1
+            if required_value > 0:
+                known_positive += 1
+            elif required_value == 0:
+                known_zero += 1
+
+        return known_total > 0 and known_positive == 0 and known_zero == known_total
 
     def _campaign_matches_hide_sub_only(self, campaign: DropCampaign) -> bool:
         # Lack of per-drop metadata (common for browser-fallback campaigns, whose
@@ -3672,11 +3704,12 @@ class MainWindow(QMainWindow):
         farmable_game_keys:     set[str] = set()  # stream_selected
         done_game_keys:         set[str] = set()  # campaign_completed
         no_channels_game_keys:  set[str] = set()  # no_valid_stream
+        account_link_game_keys: set[str] = set()  # account_not_linked
         subscription_game_keys: set[str] = set()  # subscription_required
         inactive_game_keys:     set[str] = set()  # upcoming / expired / not_active / no_data
         _inactive_rc = frozenset({
             "campaign_upcoming", "campaign_expired", "campaign_not_active",
-            "account_not_linked", "no_actionable_drop_data",
+            "no_actionable_drop_data",
         })
         if self.latest_snapshot:
             for decision in self.latest_snapshot.decisions:
@@ -3688,6 +3721,8 @@ class MainWindow(QMainWindow):
                     done_game_keys.add(gk)
                 elif rc == "no_valid_stream":
                     no_channels_game_keys.add(gk)
+                elif rc == "account_not_linked":
+                    account_link_game_keys.add(gk)
                 elif rc == "subscription_required":
                     subscription_game_keys.add(gk)
                 elif rc in _inactive_rc:
@@ -3740,6 +3775,8 @@ class MainWindow(QMainWindow):
                 # Todos os drops do inventário reclamados — DONE tem prioridade sobre sub/no-channels
                 # porque não há nada a fazer neste jogo independentemente de outros estados.
                 ribbon = RIBBON_DONE
+            elif game_key in account_link_game_keys:
+                ribbon = RIBBON_ACCOUNT_LINK
             elif game_key in no_channels_game_keys:
                 ribbon = RIBBON_NO_CHANNELS
             elif game_key in subscription_game_keys:
@@ -4636,6 +4673,7 @@ class MainWindow(QMainWindow):
             return
         if self._heartbeat_future is not None and not self._heartbeat_future.done():
             return
+        self.dashboard_loading_label.setVisible(True)
         self._snap_future = self.executor.submit(self.engine.poll)
         self._snap_poll_timer.start()
 
@@ -4685,6 +4723,7 @@ class MainWindow(QMainWindow):
                     self._log("Fallback do browser não encontrou campanhas adicionais nesta tentativa.")
 
         self._last_refresh_at = datetime.now().strftime("%H:%M:%S")
+        self.dashboard_loading_label.setVisible(False)
         self.latest_snapshot = snapshot
         self.engine.config = self.config
         self.available_game_entries = self._compose_game_entries(snapshot.available_games)
