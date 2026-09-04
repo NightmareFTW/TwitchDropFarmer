@@ -1783,6 +1783,239 @@ class TwitchClient:
         campaign.source = "browser"
         return campaign
 
+    def _clean_external_game_text(self, raw_text: str) -> str:
+        cleaned = html_module.unescape(str(raw_text or "")).replace("&nbsp;", " ")
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return ""
+
+        tokenized = []
+        seen: set[str] = set()
+        for token in re.split(r"\s+", cleaned):
+            compact = token.strip(".,;:()[]{}<>/\"'")
+            if not compact:
+                continue
+            key = compact.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            tokenized.append(compact)
+
+        metadata_tokens = {
+            "active",
+            "upcoming",
+            "ended",
+            "ends",
+            "today",
+            "ago",
+            "watch",
+            "drops",
+            "drop",
+            "any",
+            "channel",
+            "channels",
+            "watching",
+            "sub",
+            "subs",
+            "subscription",
+            "subscriber",
+            "blizzard",
+            "embark",
+            "studios",
+            "left",
+            "reward",
+            "rewards",
+        }
+        for index, token in enumerate(tokenized):
+            if token.casefold() in metadata_tokens:
+                return " ".join(tokenized[:index]).strip()
+        return cleaned
+
+    def _extract_game_rewards_from_page(self, page_html: str) -> list[dict[str, Any]]:
+        html = str(page_html or "")
+        rewards: list[dict[str, Any]] = []
+
+        def strip_tags(value: str) -> str:
+            return html_module.unescape(re.sub(r"<[^>]+>", " ", value)).replace("&nbsp;", " ")
+
+        def clean_text(value: str) -> str:
+            return re.sub(r"\s+", " ", strip_tags(value)).strip()
+
+        card_pattern = r'(?is)<[^>]*class=["\'][^"\']*reward-card[^"\']*["\'][^>]*>(.*?)</[^>]+>'
+        for card_html in re.findall(card_pattern, html):
+            name_matches = re.findall(
+                r'(?is)<[^>]*class=["\'][^"\']*(?:reward-name|reward-title|drop-reward-name)[^"\']*["\'][^>]*>(.*?)</[^>]+>',
+                card_html,
+            )
+            meta_matches = re.findall(
+                r'(?is)<[^>]*class=["\'][^"\']*(?:reward-meta|reward-description|drop-reward-meta)[^"\']*["\'][^>]*>(.*?)</[^>]+>',
+                card_html,
+            )
+            if not name_matches:
+                continue
+            name = clean_text(name_matches[0])
+            meta = clean_text(meta_matches[0]) if meta_matches else ""
+            if not name:
+                continue
+            required_minutes = 0
+            requires_subscription = False
+            lowered = meta.casefold()
+            if "sub" in lowered or "subscriber" in lowered or "subscription" in lowered:
+                requires_subscription = True
+            minutes_match = re.search(r"(\d+)\s*(?:m|min|mins|minute|minutes)", lowered)
+            if minutes_match:
+                required_minutes = int(minutes_match.group(1))
+            hours_match = re.search(r"(\d+)\s*(?:h|hr|hrs|hour|hours)", lowered)
+            if hours_match:
+                required_minutes = int(hours_match.group(1)) * 60
+            rewards.append(
+                {
+                    "name": name,
+                    "metadata": meta,
+                    "required_minutes": required_minutes,
+                    "requires_subscription": requires_subscription,
+                }
+            )
+
+        if rewards:
+            return rewards
+
+        name_matches = re.findall(
+            r'(?is)<[^>]*class=["\'](?:[^"\']*reward-name[^"\']*|[^"\']*reward-title[^"\']*)["\'][^>]*>(.*?)</[^>]+>',
+            html,
+        )
+        meta_matches = re.findall(
+            r'(?is)<[^>]*class=["\'](?:[^"\']*reward-meta[^"\']*|[^"\']*reward-description[^"\']*)["\'][^>]*>(.*?)</[^>]+>',
+            html,
+        )
+        for index, name in enumerate(name_matches):
+            cleaned_name = clean_text(name)
+            if not cleaned_name:
+                continue
+            meta = clean_text(meta_matches[index]) if index < len(meta_matches) else ""
+            lowered = meta.casefold()
+            required_minutes = 0
+            requires_subscription = "sub" in lowered or "subscriber" in lowered or "subscription" in lowered
+            minutes_match = re.search(r"(\d+)\s*(?:m|min|mins|minute|minutes)", lowered)
+            if minutes_match:
+                required_minutes = int(minutes_match.group(1))
+            hours_match = re.search(r"(\d+)\s*(?:h|hr|hrs|hour|hours)", lowered)
+            if hours_match:
+                required_minutes = int(hours_match.group(1)) * 60
+            rewards.append(
+                {
+                    "name": cleaned_name,
+                    "metadata": meta,
+                    "required_minutes": required_minutes,
+                    "requires_subscription": requires_subscription,
+                }
+            )
+        return rewards
+
+    def _apply_game_page_reward_metadata(self, campaigns: list[DropCampaign], page_html: str) -> list[DropCampaign]:
+        rewards = self._extract_game_rewards_from_page(page_html)
+        if not rewards:
+            return campaigns
+
+        for campaign in campaigns:
+            matching_rewards = [reward for reward in rewards if reward.get("name") and campaign.game_name.casefold() in reward.get("name", "").casefold()]
+            if not matching_rewards:
+                continue
+            campaign.required_minutes = max(
+                campaign.required_minutes,
+                max(int(reward.get("required_minutes", 0) or 0) for reward in matching_rewards),
+            )
+            campaign.has_watchable_drops = any(
+                int(reward.get("required_minutes", 0) or 0) > 0 for reward in matching_rewards
+            ) or campaign.has_watchable_drops
+            campaign.requires_subscription = campaign.requires_subscription or any(
+                bool(reward.get("requires_subscription")) for reward in matching_rewards
+            )
+        return campaigns
+
+    def _campaigns_from_external_registry(self) -> list[DropCampaign]:
+        campaigns: list[DropCampaign] = []
+        seen: set[str] = set()
+        now = datetime.now(timezone.utc)
+
+        for registry_url in EXTERNAL_CAMPAIGN_REGISTRY_URLS:
+            try:
+                response = requests.get(
+                    registry_url,
+                    headers={"User-Agent": WEB_USER_AGENT},
+                    timeout=20,
+                )
+            except requests.RequestException:
+                continue
+            if response.status_code != 200:
+                continue
+
+            html = str(response.text or "")
+            link_matches = re.findall(
+                r'(?is)<a\b[^>]*href=["\']([^"\']*?/game/[^"\']*)["\'][^>]*>(.*?)</a>',
+                html,
+            )
+            if link_matches:
+                for href, text_chunk in link_matches:
+                    game_name = self._clean_external_game_text(text_chunk)
+                    if not game_name:
+                        continue
+                    key = game_name.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    href_url = href.strip()
+                    full_url = href_url if href_url.startswith("http") else urljoin("https://twitchdrops.app", href_url)
+                    campaign = DropCampaign(
+                        id=f"external-{hashlib.sha1(game_name.encode('utf-8')).hexdigest()[:12]}",
+                        game_name=game_name,
+                        title=game_name,
+                        starts_at=now - timedelta(hours=1),
+                        ends_at=now + timedelta(days=30),
+                        status="ACTIVE",
+                        linked=True,
+                        link_url=full_url,
+                        source="external_registry",
+                    )
+                    campaign.required_minutes = 0
+                    campaigns.append(campaign)
+
+            if campaigns:
+                return campaigns
+
+            title_matches = re.findall(
+                r'(?is)<[^>]*class=["\'][^"\']*(?:sb-name-title|game-name|card-title)[^"\']*["\'][^>]*>(.*?)</[^>]+>',
+                html,
+            )
+            if not title_matches:
+                continue
+            for title in title_matches:
+                game_name = self._clean_external_game_text(title)
+                if not game_name:
+                    continue
+                key = game_name.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                campaigns.append(
+                    DropCampaign(
+                        id=f"external-{hashlib.sha1(game_name.encode('utf-8')).hexdigest()[:12]}",
+                        game_name=game_name,
+                        title=game_name,
+                        starts_at=now - timedelta(hours=1),
+                        ends_at=now + timedelta(days=30),
+                        status="ACTIVE",
+                        linked=True,
+                        link_url=registry_url,
+                        source="external_registry",
+                    )
+                )
+            if campaigns:
+                return campaigns
+
+        return campaigns
+
     def _campaign_from_browser_row(
         self,
         *,
