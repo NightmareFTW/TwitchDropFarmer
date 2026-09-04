@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import re
 import sys
 import traceback
 import weakref
@@ -1254,6 +1255,35 @@ class FilterEntry:
     label: str
 
 
+def _normalize_dashboard_game_name(name: str, *, known_names: set[str] | None = None) -> str:
+    """Collapse synthetic numeric suffixes like 'Game 3' back to the real title.
+
+    We only strip a trailing numeric suffix when the base name is already present in
+    the same known-name set. This prevents legitimate titles such as 'Half-Life 2'
+    from being rewritten to 'Half-Life'.
+    """
+    if not isinstance(name, str):
+        return ""
+    text = name.strip()
+    if not text:
+        return ""
+
+    known = set()
+    if known_names is not None:
+        known = {item.strip().casefold() for item in known_names if isinstance(item, str) and item.strip()}
+
+    match = re.search(r"^(.*?)(?:\s+(\d+))$", text)
+    if match:
+        base = match.group(1).strip()
+        if base and base.casefold() in known:
+            return base
+    return text
+
+
+def _dashboard_game_key(name: str, *, known_names: set[str] | None = None) -> str:
+    return _normalize_dashboard_game_name(name, known_names=known_names).casefold()
+
+
 class MarkerListWidget(QListWidget):
     def __init__(self, marker: str) -> None:
         super().__init__()
@@ -2376,17 +2406,24 @@ class MainWindow(QMainWindow):
 
     def _dashboard_whitelist_games(self) -> list[str]:
         raw = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
-        key_to_label = {entry.key.casefold(): entry.label for entry in self.available_game_entries}
-        label_lookup = {entry.label.casefold(): entry.label for entry in self.available_game_entries}
+        known_names = {entry.key for entry in self.available_game_entries}
+        key_to_label = {
+            _dashboard_game_key(entry.key, known_names=known_names): entry.label
+            for entry in self.available_game_entries
+        }
+        label_lookup = {
+            _dashboard_game_key(entry.label, known_names=known_names): entry.label
+            for entry in self.available_game_entries
+        }
         output: list[str] = []
         seen: set[str] = set()
         for game in raw:
             token = (game or "").strip()
             if not token:
                 continue
-            normalized = token.casefold()
+            normalized = _dashboard_game_key(token, known_names=known_names)
             resolved_label = key_to_label.get(normalized) or label_lookup.get(normalized) or token
-            marker = resolved_label.casefold()
+            marker = _dashboard_game_key(resolved_label, known_names=known_names)
             if marker in seen:
                 continue
             seen.add(marker)
@@ -2528,15 +2565,28 @@ class MainWindow(QMainWindow):
         whitelist/blacklist (so selections stay visible and manageable even when a
         game has no current campaign), and games the user added by hand. This keeps
         the picker usable even while Twitch withholds the full catalog."""
-        names: set[str] = set()
+        raw_names: list[str] = []
         for source in (catalog_games, self.config.whitelist_games, self.config.blacklist_games, self._extra_game_names):
             for name in source:
-                if isinstance(name, str) and name.strip():
-                    names.add(name.strip())
-        return [
+                if isinstance(name, str):
+                    cleaned = name.strip()
+                    if cleaned:
+                        raw_names.append(cleaned)
+
+        canonical_by_key: dict[str, str] = {}
+        known_names = set(raw_names)
+        for raw_name in raw_names:
+            normalized = _normalize_dashboard_game_name(raw_name, known_names=known_names)
+            key = normalized.casefold()
+            existing = canonical_by_key.get(key)
+            if existing is None or len(raw_name) < len(existing):
+                canonical_by_key[key] = normalized
+
+        entries = [
             FilterEntry(key=name, label=name)
-            for name in sorted(names, key=str.casefold)
+            for name in sorted(canonical_by_key.values(), key=lambda item: item.casefold())
         ]
+        return entries
 
     def _refresh_filter_lists(self) -> None:
         games_whitelist = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
@@ -3693,11 +3743,12 @@ class MainWindow(QMainWindow):
             )
             return
 
+        known_game_names = {entry.key for entry in filtered_games}
         # Determina o jogo atualmente em farm e os que têm stream farmável.
-        # Todas as comparações usam casefold() para evitar erros de capitalização entre o
-        # nome da campanha (API Twitch) e o label da whitelist (introduzido pelo utilizador).
+        # Todas as comparações usam chaves normalizadas para evitar nomes duplicados
+        # artificiais como "Game 3" quando existe a entrada real "Game".
         active_decision = self._current_farm_decision()
-        active_game_key = active_decision.campaign.game_name.casefold() if active_decision else ""
+        active_game_key = _dashboard_game_key(active_decision.campaign.game_name, known_names=known_game_names) if active_decision else ""
 
         # Cada set agrupa jogos cujo melhor reason_code é o respectivo estado.
         # Um jogo pode ter várias campanhas/decisões; o ribbon de prioridade mais alta vence.
@@ -3713,8 +3764,8 @@ class MainWindow(QMainWindow):
         })
         if self.latest_snapshot:
             for decision in self.latest_snapshot.decisions:
-                gk  = decision.campaign.game_name.casefold()
-                rc  = decision.reason_code
+                gk = _dashboard_game_key(decision.campaign.game_name, known_names=known_game_names)
+                rc = decision.reason_code
                 if self._decision_is_farmable_now(decision):
                     farmable_game_keys.add(gk)
                 elif rc == "campaign_completed":
@@ -3731,7 +3782,7 @@ class MainWindow(QMainWindow):
         campaigns_by_game: dict[str, list[DropCampaign]] = {}
         if self.latest_snapshot:
             for campaign in self.latest_snapshot.campaigns:
-                key = campaign.game_name.casefold()
+                key = _dashboard_game_key(campaign.game_name, known_names=known_game_names)
                 campaigns_by_game.setdefault(key, []).append(campaign)
 
         # Popula a grelha (3 colunas)
@@ -3739,7 +3790,8 @@ class MainWindow(QMainWindow):
         visible_index = 0
         for entry in sorted(filtered_games, key=lambda e: e.label.casefold()):
 
-            related_campaigns = campaigns_by_game.get(entry.label.casefold(), [])
+            game_key = _dashboard_game_key(entry.label, known_names=known_game_names)
+            related_campaigns = campaigns_by_game.get(game_key, [])
             actionable_campaigns = [
                 item
                 for item in related_campaigns
@@ -3758,7 +3810,6 @@ class MainWindow(QMainWindow):
             col = visible_index % columns
             visible_index += 1
 
-            game_key = entry.label.casefold()
             is_farming = (game_key == active_game_key and active_decision is not None)
             has_live   = game_key in farmable_game_keys
             # all_done: todas as campanhas do inventário já foram reclamadas (fonte: UI)

@@ -6,6 +6,23 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.42] - 2026-09-04
+
+### Fixed
+
+- **Fallback público do registry restaurado** — o parser do `twitchdrops.app` e a
+  extração de recompensas do site do jogo regressaram a estar disponíveis, para
+  que a aplicação possa recuperar campanhas e metadados quando a Twitch falha a
+  listagem do dashboard ou bloqueia a resposta por `integrity check`.
+- **Metadados mistos de watch/sub restaurados** — campanhas com recompensas de
+  watch e sub continuam a ficar farmáveis enquanto houver drops normais por
+  completar, sem serem tratadas como "sub-only" só porque alguma recompensa do
+  jogo expõe um requisito de subscrição.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.42`.
+
 ## [2.2.41] - 2026-07-02
 
 ### Fixed

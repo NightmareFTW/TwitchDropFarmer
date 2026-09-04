@@ -44,6 +44,7 @@ from twitch_drop_farmer.models import DropCampaign, FarmDecision, StreamCandidat
 from twitch_drop_farmer.farmer import FarmEngine
 from twitch_drop_farmer.config import AppConfig
 from twitch_drop_farmer.twitch_client import TwitchClient
+from twitch_drop_farmer.ui import _normalize_dashboard_game_name
 
 UTC = timezone.utc
 
@@ -346,6 +347,20 @@ class TestFarmEnginePipeline(unittest.TestCase):
         self.assertIn("WARLORD", {item["name"] for item in rewards})
         self.assertTrue(any(item.get("requires_subscription") for item in rewards if item["name"] == "WARLORD"))
         self.assertTrue(any(item.get("required_minutes", 0) > 0 for item in rewards if item["name"] == "WARDOG"))
+
+    def test_dashboard_game_names_ignore_synthetic_numeric_suffixes(self):
+        """Synthetic variants like 'Game 3' should collapse to the real game name when a base entry exists."""
+        duplicates = ["Don't Starve Together", "Don't Starve Together 3", "World of Warcraft"]
+        canonical_values = {
+            _normalize_dashboard_game_name(name, known_names=set(duplicates))
+            for name in duplicates
+        }
+        self.assertEqual(canonical_values, {"Don't Starve Together", "World of Warcraft"})
+        self.assertEqual(
+            _normalize_dashboard_game_name("Don't Starve Together 3", known_names=set(duplicates)),
+            "Don't Starve Together",
+        )
+        self.assertEqual(_normalize_dashboard_game_name("World of Warcraft", known_names=set(duplicates)), "World of Warcraft")
 
     def test_campaign_source_is_internal_metadata(self):
         """Campaign source is tracked internally for diagnostics, without being a UI field."""
