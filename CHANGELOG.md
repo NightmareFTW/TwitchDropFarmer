@@ -6,6 +6,34 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.55] - 2026-11-10
+
+### Fixed
+
+- **O auto-claim disparava dezenas de pedidos de claim falhados por tentativa** — num log
+  de 3 h 25 min (2.2.53) houve **255 cliques em botões «Claim» em 16 tentativas** (até 33
+  numa só). A marca «já cliquei» era posta no elemento, mas a Twitch recria o botão quando
+  o claim falha, por isso cada recriação parecia um botão novo e era clicado outra vez a
+  cada 1,5 s durante até 35 s. Cada clique é um pedido `ClaimDropRewards` que a verificação
+  de integridade rejeita. O script passa a contar em vez de marcar: cada botão é clicado
+  uma vez por abertura da página (desconta os que desaparecem, por terem tido sucesso, e
+  continua a apanhar um que apareça mais tarde), com um máximo de 5 cliques, e a tentativa
+  acaba logo que deixa de haver botões novos (~6 s em vez de 35 s).
+- **As tentativas passam a recuar** — para o mesmo drop: 15 min, 1 h, 4 h e desiste (com um
+  aviso a dizer para reivindicar em twitch.tv/drops/inventory). Antes repetia de 15 em 15
+  minutos para sempre. Quando o drop é reivindicado, o contador é esquecido.
+- **O «Drops page fallback» já não bloqueia a actualização 20 s** — com o dashboard
+  bloqueado por integridade, a página de drops responde com a ligação reposta (12 de 25
+  actualizações no mesmo log, cada uma a adiar o heartbeat) ou com IDs que nunca eram
+  usados, porque as consultas de detalhe são saltadas nesse caso. Deixa de ser pedida nesse
+  caso, e o tempo limite do pedido desce de 20 s para (5 s, 10 s).
+
+### Changed
+
+- A opção «Redimir drops automaticamente» tem agora uma explicação (dica ao passar o rato):
+  a Twitch costuma rejeitar o claim feito pela app e cada tentativa falhada são pedidos
+  suspeitos; o mais fiável é deixá-la desligada e reivindicar no site ou no telemóvel.
+
 ## [2.2.54] - 2026-11-10
 
 ### Fixed

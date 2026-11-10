@@ -110,8 +110,11 @@ RIBBON_INACTIVE    = ("INATIVO",   "#7f8c8d")  # gray    – campanha futura, ex
 RIBBON_UNCHECKED   = ("A VERIFICAR", "#95a5a6")  # grey  – canais ainda não consultados (ver FarmEngine)
 
 # Twitch's integrity check refuses the claim when it comes from this app, so a drop that
-# is ready stays ready. An auto-claim attempt for the same drop is repeated at most this often.
+# is ready stays ready. Each failed attempt is a burst of failing requests, so the retries for
+# the same drop back off (15 min, 1 h, 4 h) and stop after AUTO_CLAIM_MAX_ATTEMPTS.
 AUTO_CLAIM_RETRY_SEC = 900
+AUTO_CLAIM_BACKOFF_FACTOR = 4
+AUTO_CLAIM_MAX_ATTEMPTS = 3
 
 # Forced campaign refreshes (manual button, no-progress recovery...) are spaced at least this far apart.
 FORCED_REFRESH_MIN_SEC = 120.0
@@ -1016,6 +1019,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_done": "Clicados {count} botão(ões) de reivindicar no inventário da Twitch (a Twitch pode rejeitar o pedido; confirma lá).",
         "redeem_none": "Nenhum drop pronto para redimir.",
         "redeem_auto_done": "Auto-redimir: {count} botão(ões) de reivindicar clicado(s) (a Twitch pode rejeitar o pedido; confirma no inventário).",
+        "auto_claim_gave_up": "Auto-redimir desistiu de «{drop}» ({game}) ao fim de {attempts} tentativas: a Twitch rejeita o claim feito pela app. Reivindica em twitch.tv/drops/inventory.",
+        "auto_claim_tooltip": "A Twitch costuma rejeitar o claim feito por esta app (verificação de integridade), e cada tentativa falhada é um conjunto de pedidos suspeitos. O mais fiável é deixar isto desligado e reivindicar no site ou no telemóvel quando o aviso «Drop pronto» aparecer.",
         "watchdog_title": "Farm sem progresso",
         "watchdog_restart": "{game}: {minutes} min sem progresso em {channel}; a reiniciar a vigilância do canal.",
         "watchdog_switch_channel": "{game}: {minutes} min sem progresso em {channel}; a mudar para outro canal (este fica de parte {penalty} min).",
@@ -1324,6 +1329,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_done": "Clicked {count} claim button(s) on the Twitch inventory page (Twitch may reject the request; check there).",
         "redeem_none": "No drops are ready to redeem.",
         "redeem_auto_done": "Auto-redeem: {count} claim button(s) clicked (Twitch may reject the request; check your inventory).",
+        "auto_claim_gave_up": "Auto-redeem gave up on \"{drop}\" ({game}) after {attempts} attempts: Twitch rejects claims made by the app. Claim it at twitch.tv/drops/inventory.",
+        "auto_claim_tooltip": "Twitch usually rejects claims made by this app (integrity check), and every failed attempt is a burst of suspicious requests. The most reliable choice is to leave this off and claim on the website or your phone when the \"Drop ready\" notice appears.",
         "watchdog_title": "Farm not progressing",
         "watchdog_restart": "{game}: {minutes} min without progress on {channel}; restarting the channel watch.",
         "watchdog_switch_channel": "{game}: {minutes} min without progress on {channel}; switching to another channel (this one is skipped for {penalty} min).",
@@ -1811,7 +1818,8 @@ class MainWindow(QMainWindow):
         self._heartbeat_poll_timer.setInterval(250)
         self._heartbeat_poll_timer.timeout.connect(self._poll_heartbeat_future)
         self._last_refresh_at: str = ""
-        self._auto_claim_tried: dict[str, datetime] = {}
+        self._auto_claim_tried: dict[str, tuple[datetime, int]] = {}  # drop key -> (last attempt, attempts)
+        self._auto_claim_gave_up: set[str] = set()
         self._farm_health = FarmHealth(self.config.watchdog_stall_timeout_min)
         self._farm_health.enabled = bool(self.config.watchdog_enabled)
         self._campaign_hold: dict[str, float] = {}
@@ -2894,6 +2902,7 @@ class MainWindow(QMainWindow):
         self.theme_label.setText(self._t("theme_label"))
         self.sort_label.setText(self._t("sort_label"))
         self.auto_claim_checkbox.setText(self._t("auto_claim_checkbox"))
+        self.auto_claim_checkbox.setToolTip(self._t("auto_claim_tooltip"))
         self._repopulate_language_picker()
         self._repopulate_theme_picker()
         self._repopulate_sort_picker()
@@ -5098,32 +5107,39 @@ class MainWindow(QMainWindow):
     def _maybe_auto_claim(self, now: datetime | None = None) -> int:
         """Try the inventory page's claim buttons, only when a drop is really ready.
 
-        Twitch's integrity check usually rejects a claim coming from this app, so the
-        drop stays ready: it is retried at most every ``AUTO_CLAIM_RETRY_SEC`` instead of
-        on every snapshot. The farm target is never changed here: a click does not mean
-        the drop was claimed, and moving to another game after every click used to keep
-        the farm hopping so that no campaign ever finished.
+        Twitch's integrity check usually rejects a claim coming from this app, so the drop
+        stays ready and every attempt is a burst of failing requests. The retries for the
+        same drop therefore back off (AUTO_CLAIM_RETRY_SEC, then x AUTO_CLAIM_BACKOFF_FACTOR
+        each time) and stop after AUTO_CLAIM_MAX_ATTEMPTS, with one notice. The farm target
+        is never changed here: a click does not mean the drop was claimed, and moving to
+        another game after every click used to keep the farm hopping.
         """
         if not self.config.auto_claim_drops or self.latest_snapshot is None:
             return 0
         now = now or datetime.now()
-        ready = {
-            key
-            for campaign in self.latest_snapshot.campaigns
-            for key, _name in ready_drops(campaign)
-        }
-        # Forget drops that are no longer ready (claimed), so the dict cannot grow forever.
-        self._auto_claim_tried = {k: t for k, t in self._auto_claim_tried.items() if k in ready}
-        due = [
-            key
-            for key in ready
-            if key not in self._auto_claim_tried
-            or (now - self._auto_claim_tried[key]).total_seconds() >= AUTO_CLAIM_RETRY_SEC
-        ]
+        ready: dict[str, tuple[str, str]] = {}
+        for campaign in self.latest_snapshot.campaigns:
+            for key, name in ready_drops(campaign):
+                ready[key] = (campaign.game_name, name)
+        # Forget drops that are no longer ready (claimed), so the dicts cannot grow forever.
+        self._auto_claim_tried = {k: v for k, v in self._auto_claim_tried.items() if k in ready}
+        self._auto_claim_gave_up &= set(ready)
+        due: list[str] = []
+        for key, (game, drop) in ready.items():
+            last_time, attempts = self._auto_claim_tried.get(key, (None, 0))
+            if attempts >= AUTO_CLAIM_MAX_ATTEMPTS:
+                if key not in self._auto_claim_gave_up:
+                    self._auto_claim_gave_up.add(key)
+                    self._log(self._t("auto_claim_gave_up", game=game, drop=drop, attempts=attempts))
+                continue
+            wait = AUTO_CLAIM_RETRY_SEC * AUTO_CLAIM_BACKOFF_FACTOR ** max(attempts - 1, 0)
+            if last_time is None or (now - last_time).total_seconds() >= wait:
+                due.append(key)
         if not due:
             return 0
         for key in due:
-            self._auto_claim_tried[key] = now
+            attempts = self._auto_claim_tried.get(key, (None, 0))[1]
+            self._auto_claim_tried[key] = (now, attempts + 1)
         return self._do_redeem_drops(auto_mode=True)
 
     def _show_alert(self, alert) -> None:  # type: ignore[no-untyped-def]

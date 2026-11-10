@@ -338,16 +338,33 @@ def _probe_shows_integrity_block(probe: dict[str, Any] | None) -> bool:
 # clicked labels are returned so a misfire is visible in the log.
 _CLAIM_BUTTONS_JS = """(() => {
     const claimVerb = /^(claim|reivindicar|resgatar)\\b/;
-    const labels = [];
+    const MAX_CLICKS = 5;
+    const buttons = [];
     for (const button of Array.from(document.querySelectorAll("button"))) {
         if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") continue;
-        if (button.dataset && button.dataset.tdfClicked === "1") continue;
         const text = (button.innerText || button.textContent || "").trim().toLowerCase().replace(/\\s+/g, " ");
-        if (!text || !claimVerb.test(text)) continue;
-        if (button.dataset) button.dataset.tdfClicked = "1";
-        button.click();
-        labels.push(text.slice(0, 40));
+        if (text && claimVerb.test(text)) buttons.push({button: button, text: text});
     }
+    // Twitch re-creates a button whose claim failed, so a flag on the element does not hold
+    // (the same drop was clicked again on every scan: 30+ failing claim requests per attempt).
+    // Count instead. "pending" is how many of the buttons now on the page were already
+    // clicked: it drops when buttons disappear (those claims succeeded), so a button that
+    // shows up later is still clicked. MAX_CLICKS caps the clicks of a whole page load.
+    let pending = window.__tdfClaimPending || 0;
+    const seen = window.__tdfClaimSeen || 0;
+    if (buttons.length < seen) pending = Math.max(0, pending - (seen - buttons.length));
+    let total = window.__tdfClaimTotal || 0;
+    const labels = [];
+    for (const item of buttons.slice(pending)) {
+        if (total >= MAX_CLICKS) break;
+        item.button.click();
+        labels.push(item.text.slice(0, 40));
+        total += 1;
+        pending += 1;
+    }
+    window.__tdfClaimPending = pending;
+    window.__tdfClaimSeen = buttons.length;
+    window.__tdfClaimTotal = total;
     return JSON.stringify({clicked: labels.length, labels: labels});
 })();"""
 
@@ -1820,7 +1837,7 @@ class TwitchClient:
             response = self.session.get(
                 f"{TWITCH_URL}/drops/campaigns",
                 headers={"User-Agent": WEB_USER_AGENT},
-                timeout=20,
+                timeout=(5, 10),
             )
             response.raise_for_status()
         except requests.RequestException as exc:
@@ -4119,10 +4136,14 @@ class TwitchClient:
         }
         weak_listing = False
         minimum_expected = max(6, len(inventory_data))
-        fallback_campaigns = self._campaigns_from_drops_page()
+        # When the dashboard is integrity-blocked the drops page is blocked too in practice:
+        # it answers with a reset connection (a 20 s wait that delays the heartbeat) or with
+        # a couple of IDs none of which is active, and those IDs are never used because the
+        # detail queries are skipped. So it is not even asked.
+        fallback_campaigns = {} if dashboard_integrity_blocked else self._campaigns_from_drops_page()
         if dashboard_integrity_blocked:
             self._note(
-                "ViewerDropsDashboard bloqueado por integrity check. A usar IDs da página de drops e inventário (sem cache)."
+                "ViewerDropsDashboard bloqueado por integrity check. A usar o inventário (sem cache)."
             )
             if allow_browser_fallback:
                 browser_campaigns = self._campaigns_from_browser_page()

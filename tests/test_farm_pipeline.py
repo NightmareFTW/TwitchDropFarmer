@@ -1275,9 +1275,10 @@ class TestClaimButtonsScriptResult(unittest.TestCase):
         from twitch_drop_farmer.twitch_client import _CLAIM_BUTTONS_JS
 
         self.assertIn("claim|reivindicar|resgatar", _CLAIM_BUTTONS_JS)
-        # "Claimed" must not match, and each element may only be clicked once.
+        # "Claimed" must not match. (A per-element flag used to be checked here; it did not
+        # hold because Twitch re-creates a failed button: see test_claim_script_behaviour.py.)
         self.assertIn("\\b", _CLAIM_BUTTONS_JS)
-        self.assertIn("tdfClicked", _CLAIM_BUTTONS_JS)
+        self.assertIn("__tdfClaimTotal", _CLAIM_BUTTONS_JS)
         for noisy in ('"redeem"', '"collect"'):
             self.assertNotIn(noisy, _CLAIM_BUTTONS_JS)
 
