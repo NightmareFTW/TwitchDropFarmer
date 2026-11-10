@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.52] - 2026-11-10
+
+### Fixed
+
+- **Já não há uma actualização completa por cada minuto de atraso do Inventory** — o
+  Inventory da Twitch acompanha a sessão de drops com ~1 minuto de atraso, e quando o
+  CurrentDrop estava 1 minuto à frente a app reconstruía tudo, incluindo a chamada ao
+  dashboard que a Twitch rejeita por integridade (duas vezes, uma por perfil). Agora um
+  avanço de 1–2 minutos é tratado como atraso normal (o log diz-o) e só uma diferença de
+  3 minutos ou mais, que indica um Inventory parado, força a actualização.
+- **Nomes de jogos com o texto de estado do cartão do registry** — nomes como «HITMAN
+  World of Assassination 1 drop · in 4 days», «Epic Seven Expired 15» ou «Grand Theft
+  Auto VI Coming Soon Releases Nov 19 2026 ·», guardados por versões antigas, ficavam na
+  whitelist e na cache de campanhas. A Twitch não tem jogos com esses nomes, por isso cada
+  um gastava uma procura de directório e duas procuras de imagem falhadas em todos os
+  arranques, e uma entrada da whitelist com o ruído nunca coincidia com a campanha real.
+  Agora os nomes são limpos ao carregar a configuração (e as duplicações resultantes
+  fundidas), ao ler os cartões do registry e no dashboard, e as entradas sujas da cache em
+  disco são descartadas (o registry traz o mesmo jogo com o nome certo).
+
 ## [2.2.51] - 2026-11-10
 
 ### Added

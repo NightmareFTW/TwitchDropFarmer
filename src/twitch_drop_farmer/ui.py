@@ -83,6 +83,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import CONFIG_DIR, load_config, save_config
+from .game_names import clean_game_name
 from .log_export import save_log
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
@@ -113,6 +114,11 @@ AUTO_CLAIM_RETRY_SEC = 900
 
 # Forced campaign refreshes (manual button, no-progress recovery...) are spaced at least this far apart.
 FORCED_REFRESH_MIN_SEC = 120.0
+
+# Twitch's Inventory trails the live drop session by a minute or so, so the CurrentDrop
+# signal being 1-2 minutes ahead is normal and harmless. Only a bigger gap (the Inventory
+# looks stuck) is worth a full campaign refresh.
+INVENTORY_LAG_FORCE_MINUTES = 3
 
 
 def ready_drops(campaign: DropCampaign) -> list[tuple[str, str]]:
@@ -1326,7 +1332,7 @@ def _normalize_dashboard_game_name(name: str, *, known_names: set[str] | None = 
     """
     if not isinstance(name, str):
         return ""
-    text = name.strip()
+    text = clean_game_name(name)
     if not text:
         return ""
 
@@ -4454,13 +4460,20 @@ class MainWindow(QMainWindow):
                                 f"drop={current_drop_id} | minutos={current_drop_minutes}"
                             )
                             if current_drop_minutes > current:
+                                # Credit is being earned: the Inventory is just behind.
                                 self._heartbeat_no_progress_cycles = 0
+                                gap = current_drop_minutes - current
+                                if gap >= INVENTORY_LAG_FORCE_MINUTES:
+                                    self._log(
+                                        f"CurrentDrop está {gap} min à frente do Inventory (mais do que o atraso "
+                                        "normal); a forçar actualização completa."
+                                    )
+                                    self.refresh_snapshot(force=True)
+                                    return
                                 self._log(
-                                    "CurrentDrop indica progresso mais recente que o Inventory; "
-                                    "a forçar actualização completa imediata."
+                                    f"CurrentDrop está {gap} min à frente do Inventory (atraso normal); "
+                                    "o Inventory acompanha no minuto seguinte."
                                 )
-                                self.refresh_snapshot(force=True)
-                                return
             else:
                 self._log(
                     "Heartbeat sem mapeamento de campanha no snapshot: "
