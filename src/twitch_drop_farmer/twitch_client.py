@@ -3808,6 +3808,37 @@ class TwitchClient:
         merged.sort(key=lambda item: item.active, reverse=True)
         return merged
 
+    def _with_inventory_campaigns(
+        self,
+        registry_campaigns: list[DropCampaign],
+        inventory_data: dict[str, dict[str, Any]],
+    ) -> list[DropCampaign]:
+        """Registry campaigns plus what Twitch's own Inventory says is in progress.
+
+        The public registry only knows a game name, a drop count and a time left; it
+        has no progress, drops or minutes. The Inventory call works even while the
+        dashboard is integrity-blocked, so campaigns already in progress must come
+        from it. When the same game appears in both, the Inventory entry wins. Without
+        this the dashboard showed real progress only for a moment after each heartbeat
+        and fell back to 0/0 on every refresh.
+        """
+        if not inventory_data:
+            return registry_campaigns
+        in_progress: list[DropCampaign] = []
+        for payload in inventory_data.values():
+            campaign = self._parse_campaign(payload)
+            if campaign is not None:
+                in_progress.append(campaign)
+        if not in_progress:
+            return registry_campaigns
+        in_progress_games = {campaign.game_name.casefold() for campaign in in_progress}
+        remaining = [item for item in registry_campaigns if item.game_name.casefold() not in in_progress_games]
+        self._note(
+            f"Inventory: {len(in_progress)} campanha(s) em progresso substituem as do registry "
+            f"({', '.join(sorted({campaign.game_name for campaign in in_progress}))})."
+        )
+        return in_progress + remaining
+
     def _retry_dashboard_with_harvested_integrity(self) -> dict[str, dict[str, Any]] | None:
         """Repeat ViewerDropsDashboard once with the Client-Integrity token the
         invisible browser harvested during this same cycle.
@@ -3932,6 +3963,7 @@ class TwitchClient:
                 self._note(
                     "A dashboard da Twitch não devolveu dados utilizáveis; usa-se a lista completa do registry público."
                 )
+                external_campaigns = self._with_inventory_campaigns(external_campaigns, inventory_data)
                 external_campaigns.sort(key=lambda item: item.starts_at)
                 external_campaigns.sort(key=lambda item: item.active, reverse=True)
                 return external_campaigns
@@ -3973,6 +4005,7 @@ class TwitchClient:
                         self._note(
                             "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
                         )
+                        external_campaigns = self._with_inventory_campaigns(external_campaigns, inventory_data)
                         external_campaigns.sort(key=lambda item: item.starts_at)
                         external_campaigns.sort(key=lambda item: item.active, reverse=True)
                         return external_campaigns
@@ -4075,6 +4108,7 @@ class TwitchClient:
             )
             external_campaigns = self._campaigns_from_external_registry()
             if external_campaigns:
+                external_campaigns = self._with_inventory_campaigns(external_campaigns, inventory_data)
                 external_campaigns.sort(key=lambda item: item.starts_at)
                 external_campaigns.sort(key=lambda item: item.active, reverse=True)
                 self._note(
@@ -4216,7 +4250,9 @@ class TwitchClient:
             self._note("No Twitch campaign list survived the integrity/blocking checks. Trying external public registry fallback.")
             external_campaigns = self._campaigns_from_external_registry()
             if external_campaigns:
-                campaigns = self._deduplicate_campaigns(external_campaigns)
+                campaigns = self._deduplicate_campaigns(
+                    self._with_inventory_campaigns(external_campaigns, inventory_data)
+                )
                 self._note(
                     "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
                 )
