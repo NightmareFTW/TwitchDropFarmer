@@ -4005,14 +4005,27 @@ class MainWindow(QMainWindow):
         if self.latest_snapshot is None:
             return
 
-        # Encontra o melhor stream para este jogo
-        best_decision = None
-        for decision in self.latest_snapshot.decisions:
-            if decision.campaign.game_name == game_label and self._decision_is_farmable_now(decision):
-                if best_decision is None or decision.stream.display_name.casefold() < best_decision.stream.display_name.casefold():
-                    best_decision = decision
+        # Clicking a game is an explicit request, so its channel is looked up now even if
+        # it was never checked (or had none the last time): campaigns with a known live
+        # channel first, then the unchecked ones, then the ones that had none. At most
+        # three lookups per click.
+        candidates = [
+            decision
+            for decision in self.latest_snapshot.decisions
+            if decision.campaign.game_name == game_label and self._decision_is_displayable_active(decision)
+        ]
+        candidates.sort(
+            key=lambda decision: (
+                0 if decision.stream is not None else 1 if decision.reason_code == "stream_unchecked" else 2,
+                decision.stream.display_name.casefold() if decision.stream is not None else "",
+            )
+        )
+        best_decision = next(
+            (decision for decision in candidates[:3] if self._verify_decision_stream(decision)),
+            None,
+        )
 
-        if best_decision is None or best_decision.stream is None or not self._verify_decision_stream(best_decision):
+        if best_decision is None or best_decision.stream is None:
             self._log(self._t("dashboard_game_unavailable", game=game_label))
             return
 

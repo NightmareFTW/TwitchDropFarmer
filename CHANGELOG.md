@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.50] - 2026-11-10
+
+### Fixed
+
+- **Jogos em «A VERIFICAR» que não dava para iniciar** (2.2.49) — o Marvel Snap, com
+  61 % de progresso, ficava por verificar: a lista guardada em disco traz dados de
+  drops de muitas campanhas e ele ficava atrás delas na fila das consultas de canais.
+  A fila passa a ser: o jogo em farm, depois as campanhas **já em progresso**, depois as
+  que têm dados de drops e só então o resto.
+- **Clicar num jogo do dashboard consulta o canal nessa hora**, mesmo que nunca tivesse
+  sido verificado ou não tivesse canal na última vez (até 3 consultas por clique). Antes
+  só se podia escolher jogos que já tivessem um canal conhecido.
+
 ## [2.2.49] - 2026-11-10
 
 ### Changed

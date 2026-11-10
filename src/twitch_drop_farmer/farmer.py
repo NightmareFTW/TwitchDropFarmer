@@ -433,11 +433,13 @@ class FarmEngine:
             streamable.append(campaign)
 
         # Highest priority first, so the request budget below is spent where it matters:
-        # the campaigns being farmed, then the ones with real drop data (progress that can
-        # be followed), then the rest in the user's sort order.
+        # the campaigns being farmed, then the ones already in progress (what the user is
+        # most likely to want to continue), then the ones with real drop data, then the
+        # rest in the user's sort order.
         streamable.sort(
             key=lambda item: (
                 item.id not in self.focus_campaign_ids,
+                item.progress_minutes <= 0,
                 not (item.drops or item.required_minutes > 0),
                 *self._phase_and_sort_key(item),
             )
