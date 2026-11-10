@@ -102,6 +102,26 @@ RIBBON_SUB         = ("SUBSCRIÇÃO", "#e67e22")  # orange  – campanha apenas 
 RIBBON_DONE        = ("CONCLUÍDO",  "#2980b9")  # blue    – todos os drops já obtidos
 RIBBON_INACTIVE    = ("INATIVO",   "#7f8c8d")  # gray    – campanha futura, expirada ou sem dados
 
+# Twitch's integrity check refuses the claim when it comes from this app, so a drop that
+# is ready stays ready. An auto-claim attempt for the same drop is repeated at most this often.
+AUTO_CLAIM_RETRY_SEC = 900
+
+
+def ready_drops(campaign: DropCampaign) -> list[tuple[str, str]]:
+    """``(key, name)`` of every drop of ``campaign`` that is at 100% and still unclaimed."""
+    ready: list[tuple[str, str]] = []
+    for drop in campaign.drops or []:
+        if not isinstance(drop, dict) or drop.get("claimed"):
+            continue
+        required = int(drop.get("required_minutes") or 0)
+        current = int(drop.get("current_minutes") or 0)
+        if required <= 0 or current < required:
+            continue
+        name = str(drop.get("name") or "Drop")
+        key = f"{campaign.game_name.casefold()}|{str(drop.get('id') or name).casefold()}"
+        ready.append((key, name))
+    return ready
+
 
 class GameCard(QWidget):
     """Card moderno para o dashboard: box art com ribbon de estado, hover fade e borda animada."""
@@ -966,9 +986,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "drop_ready_title": "Drop pronto a reivindicar",
         "drop_ready_body": "{game}: «{drop}» está a 100%. Reivindica em twitch.tv/drops/inventory.",
         "redeem_drops": "Redimir drops",
-        "redeem_done": "Drops redimidos: {count}.",
+        "redeem_done": "Clicados {count} botão(ões) de reivindicar no inventário da Twitch (a Twitch pode rejeitar o pedido; confirma lá).",
         "redeem_none": "Nenhum drop pronto para redimir.",
-        "redeem_auto_done": "Auto-redimir executado: {count} drops.",
+        "redeem_auto_done": "Auto-redimir: {count} botão(ões) de reivindicar clicado(s) (a Twitch pode rejeitar o pedido; confirma no inventário).",
+        "target_switch": "Alvo alterado: {previous} -> {game} (motivo: {reason}).",
+        "target_switch_manual": "selecção manual",
+        "target_switch_gone": "a campanha anterior já não está na lista",
+        "target_switch_priority": "o alvo anterior ainda era elegível",
     },
     "en": {
         "window_title": "Twitch Drop Farmer",
@@ -1260,9 +1284,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "drop_ready_title": "Drop ready to claim",
         "drop_ready_body": "{game}: \"{drop}\" is at 100%. Claim it at twitch.tv/drops/inventory.",
         "redeem_drops": "Redeem drops",
-        "redeem_done": "Redeemed drops: {count}.",
+        "redeem_done": "Clicked {count} claim button(s) on the Twitch inventory page (Twitch may reject the request; check there).",
         "redeem_none": "No drops are ready to redeem.",
-        "redeem_auto_done": "Auto-redeem completed: {count} drops.",
+        "redeem_auto_done": "Auto-redeem: {count} claim button(s) clicked (Twitch may reject the request; check your inventory).",
+        "target_switch": "Target changed: {previous} -> {game} (reason: {reason}).",
+        "target_switch_manual": "manual selection",
+        "target_switch_gone": "the previous campaign is no longer listed",
+        "target_switch_priority": "the previous target was still eligible",
     },
 }
 
@@ -1721,7 +1749,10 @@ class MainWindow(QMainWindow):
         self._heartbeat_poll_timer.setInterval(250)
         self._heartbeat_poll_timer.timeout.connect(self._poll_heartbeat_future)
         self._last_refresh_at: str = ""
-        self._last_auto_claim_at: datetime | None = None
+        self._auto_claim_tried: dict[str, datetime] = {}
+        self._sticky_campaign_id: str = ""
+        self._streamless_game: str = ""
+        self._streamless_campaign_id: str = ""
         self._last_display_decision: FarmDecision | None = None
         self._announced_ready_drops: set[str] = set()
         # Nothing used to listen to the alert manager, so no alert was ever shown.
@@ -3971,6 +4002,13 @@ class MainWindow(QMainWindow):
         )
 
     def _current_farm_decision(self) -> FarmDecision | None:
+        decision = self._pick_farm_decision()
+        if decision is not None:
+            # Remembered so the next snapshot keeps farming this campaign (see below).
+            self._sticky_campaign_id = decision.campaign.id
+        return decision
+
+    def _pick_farm_decision(self) -> FarmDecision | None:
         if self.latest_snapshot is None:
             return None
         all_decisions = self.latest_snapshot.decisions
@@ -4029,6 +4067,17 @@ class MainWindow(QMainWindow):
             if forced is not None:
                 return forced
             self._forced_farm_channel = ""
+        # Stay on the campaign already being farmed for as long as it is farmable. Every
+        # snapshot re-sorts the campaigns, so without this any reordering (or one poll
+        # where a stream lookup came back empty) moved the farm to another game and no
+        # campaign ever got the continuous watch time it needs to finish.
+        if self._sticky_campaign_id:
+            current = next(
+                (decision for decision in candidates if decision.campaign.id == self._sticky_campaign_id),
+                None,
+            )
+            if current is not None:
+                return current
         return candidates[0]
 
     def handle_next_game(self) -> None:
@@ -4067,6 +4116,27 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _note_target_switch(self, decision: FarmDecision) -> None:
+        """Log why the farm moved to another campaign, so any hopping can be traced."""
+        campaign = decision.campaign
+        previous_id, previous_game = self._streamless_campaign_id, self._streamless_game
+        self._streamless_campaign_id, self._streamless_game = campaign.id, campaign.game_name
+        if not previous_id or previous_id == campaign.id:
+            return
+        if self._forced_farm_campaign_id == campaign.id or self._forced_farm_game:
+            reason = self._t("target_switch_manual")
+        else:
+            old = None
+            if self.latest_snapshot is not None:
+                old = next((d for d in self.latest_snapshot.decisions if d.campaign.id == previous_id), None)
+            if old is None:
+                reason = self._t("target_switch_gone")
+            elif self._decision_is_farmable_now(old):
+                reason = self._t("target_switch_priority")
+            else:
+                reason = old.reason_code
+        self._log(self._t("target_switch", previous=previous_game, game=campaign.game_name, reason=reason))
+
     def _streamless_heartbeat_tick(self) -> None:
         if not self.timer.isActive():
             return
@@ -4089,6 +4159,7 @@ class MainWindow(QMainWindow):
 
         self._streamless_no_target_logged = False
         channel_login = decision.stream.login
+        self._note_target_switch(decision)
         # Keep requesting the channel's new HLS segments in the background (own
         # thread, so it does not depend on this event loop); a no-op if unchanged.
         self.client.segment_watcher.set_channel(channel_login)
@@ -4767,47 +4838,36 @@ class MainWindow(QMainWindow):
             self._log(self._t("redeem_none"))
         return claimed
 
-    def _auto_advance_after_claim(self) -> None:
-        if not self.timer.isActive() or self.latest_snapshot is None:
-            return
+    def _maybe_auto_claim(self, now: datetime | None = None) -> int:
+        """Try the inventory page's claim buttons, only when a drop is really ready.
 
-        # Do not override manual dashboard selection.
-        if self._forced_farm_game:
-            return
-
-        candidates = [
-            decision
-            for decision in self.latest_snapshot.decisions
-            if self._decision_is_farmable_now(decision)
+        Twitch's integrity check usually rejects a claim coming from this app, so the
+        drop stays ready: it is retried at most every ``AUTO_CLAIM_RETRY_SEC`` instead of
+        on every snapshot. The farm target is never changed here: a click does not mean
+        the drop was claimed, and moving to another game after every click used to keep
+        the farm hopping so that no campaign ever finished.
+        """
+        if not self.config.auto_claim_drops or self.latest_snapshot is None:
+            return 0
+        now = now or datetime.now()
+        ready = {
+            key
+            for campaign in self.latest_snapshot.campaigns
+            for key, _name in ready_drops(campaign)
+        }
+        # Forget drops that are no longer ready (claimed), so the dict cannot grow forever.
+        self._auto_claim_tried = {k: t for k, t in self._auto_claim_tried.items() if k in ready}
+        due = [
+            key
+            for key in ready
+            if key not in self._auto_claim_tried
+            or (now - self._auto_claim_tried[key]).total_seconds() >= AUTO_CLAIM_RETRY_SEC
         ]
-        if len(candidates) <= 1:
-            return
-
-        current = self._current_farm_decision()
-        current_index = -1
-        if current is not None:
-            for index, decision in enumerate(candidates):
-                if decision.campaign.id == current.campaign.id:
-                    current_index = index
-                    break
-
-        next_decision = candidates[(current_index + 1) % len(candidates)]
-        if next_decision.stream is None:
-            return
-
-        self._forced_farm_game = ""
-        self._forced_farm_campaign_id = next_decision.campaign.id
-        self._forced_farm_channel = next_decision.stream.login
-        self._refresh_dashboard_games()
-        self._refresh_farming_now()
-        self._streamless_heartbeat_tick()
-        self._log(
-            self._t(
-                "farming_next_game_selected",
-                game=next_decision.campaign.game_name,
-                channel=next_decision.stream.display_name or next_decision.stream.login,
-            )
-        )
+        if not due:
+            return 0
+        for key in due:
+            self._auto_claim_tried[key] = now
+        return self._do_redeem_drops(auto_mode=True)
 
     def _show_alert(self, alert) -> None:  # type: ignore[no-untyped-def]
         """Show an alert in the log and as a desktop toast (UI thread)."""
@@ -4821,15 +4881,7 @@ class MainWindow(QMainWindow):
         mutation answers "failed integrity check" without a token), so the user has to
         claim in a normal browser: this makes sure they notice.
         """
-        for drop in campaign.drops or []:
-            if not isinstance(drop, dict) or drop.get("claimed"):
-                continue
-            required = int(drop.get("required_minutes") or 0)
-            current = int(drop.get("current_minutes") or 0)
-            if required <= 0 or current < required:
-                continue
-            drop_name = str(drop.get("name") or "Drop")
-            key = f"{campaign.game_name.casefold()}|{str(drop.get('id') or drop_name).casefold()}"
+        for key, drop_name in ready_drops(campaign):
             if key in self._announced_ready_drops:
                 continue
             self._announced_ready_drops.add(key)
@@ -4912,13 +4964,7 @@ class MainWindow(QMainWindow):
         self._refresh_campaign_list()
         self._refresh_campaign_details()
         self._update_auth_status()
-        if self.config.auto_claim_drops:
-            now = datetime.now()
-            if self._last_auto_claim_at is None or (now - self._last_auto_claim_at).total_seconds() >= 120:
-                self._last_auto_claim_at = now
-                claimed = self._do_redeem_drops(auto_mode=True)
-                if claimed > 0:
-                    self._auto_advance_after_claim()
+        self._maybe_auto_claim()
         for message in snapshot.messages:
             self._log(message)
         self._log(self._t("refresh_done", count=len(snapshot.decisions)))
