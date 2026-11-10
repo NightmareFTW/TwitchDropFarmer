@@ -4068,10 +4068,14 @@ class MainWindow(QMainWindow):
                 self._streamless_no_target_logged = True
             self._streamless_channel = ""
             self._streamless_failure_channel = ""
+            self.client.segment_watcher.stop()
             return
 
         self._streamless_no_target_logged = False
         channel_login = decision.stream.login
+        # Keep requesting the channel's new HLS segments in the background (own
+        # thread, so it does not depend on this event loop); a no-op if unchanged.
+        self.client.segment_watcher.set_channel(channel_login)
         if channel_login.casefold() != self._streamless_channel.casefold():
             self._streamless_channel = channel_login
             self._streamless_failure_channel = ""
@@ -4646,6 +4650,7 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.live_refresh_timer.stop()
         self.streamless_timer.stop()
+        self.client.segment_watcher.stop()
         self._set_farming_controls(False)
         self._forced_farm_channel = ""
         self._forced_farm_campaign_id = ""
@@ -4872,6 +4877,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._snap_poll_timer.stop()
         self._heartbeat_poll_timer.stop()
+        self.client.segment_watcher.stop()
         self.executor.shutdown(wait=False)
         self._thumb_executor.shutdown(wait=False)
         super().closeEvent(event)

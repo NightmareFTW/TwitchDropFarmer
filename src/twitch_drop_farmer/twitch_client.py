@@ -36,9 +36,11 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(package_root))
     from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
+    from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
     from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
     from .models import DropCampaign, StreamCandidate
+    from .stream_watcher import SegmentWatcher
 
 
 GQL_URL = "https://gql.twitch.tv/gql"
@@ -493,6 +495,14 @@ class TwitchClient:
         self._game_box_art_cache: dict[str, str] = {}
         self._external_box_art_cache: dict[str, str] = {}
         self._streamless_media_playlist_cache: dict[str, str] = {}
+        # Dedicated HTTP session for video traffic (see _stream_session) and the
+        # background watcher that keeps requesting new HLS segments while farming.
+        self._stream_http: requests.Session | None = None
+        self.segment_watcher = SegmentWatcher(
+            self.hls_playlist_snapshot,
+            self.hls_touch_segment,
+            note=self._note,
+        )
         # Cache for _stream_info results: {login_lower: (channel_id, broadcast_id, game_id, timestamp)}
         self._streamless_stream_info_cache: dict[str, tuple[str, str, str, float]] = {}
         # Campaigns known from any past fetch_campaigns() call, keyed by campaign ID.
@@ -888,6 +898,51 @@ class TwitchClient:
             self._note(f"Streamless HLS HEAD request failed for {channel_login}: {exc}")
             return False
         return True
+
+    def _stream_session(self) -> requests.Session:
+        """HTTP session for video (usher/segment) traffic only.
+
+        ``self.session`` carries the account's ``Authorization: OAuth`` header and
+        cookies on every request; a real player sends neither to the video CDN, so the
+        watcher uses its own bare session.
+        """
+        if self._stream_http is None:
+            self._stream_http = requests.Session()
+        return self._stream_http
+
+    def hls_playlist_snapshot(self, channel_login: str) -> tuple[str, str]:
+        """Fetch the channel's media playlist; returns (playlist text, its URL).
+
+        The playlist URL embeds a playback token that expires, so the cached URL is
+        dropped on any failure and re-resolved on the next call.
+        """
+        playlist_url = self._streamless_media_playlist(channel_login)
+        try:
+            response = self._stream_session().get(
+                playlist_url, headers=self._stream_headers(channel_login), timeout=10
+            )
+            response.raise_for_status()
+        except Exception:
+            self._streamless_media_playlist_cache.pop(channel_login.casefold(), None)
+            raise
+        return response.text, response.url
+
+    def hls_touch_segment(self, channel_login: str, segment_url: str) -> None:
+        """Request a media segment (first 4 KB only), like a player fetching it."""
+        headers = self._stream_headers(channel_login)
+        headers["Range"] = "bytes=0-4095"
+        response = None
+        try:
+            response = self._stream_session().get(segment_url, headers=headers, timeout=10, stream=True)
+            response.raise_for_status()
+            for _chunk in response.iter_content(chunk_size=1024):
+                break
+        except Exception:
+            self._streamless_media_playlist_cache.pop(channel_login.casefold(), None)
+            raise
+        finally:
+            if response is not None:
+                response.close()
 
     def _streamless_watch_hls_range_get(self, channel_login: str) -> bool:
         """Perform a small ranged GET on a media segment to emulate real viewing traffic."""
