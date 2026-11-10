@@ -6,6 +6,37 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.53] - 2026-11-10
+
+### Added
+
+- **Recuperação real quando o progresso pára** (substitui o watchdog que nunca disparava
+  e cuja «recuperação» só escrevia uma mensagem). O monitor recebe, a cada heartbeat, o
+  progresso da campanha que está mesmo a ser farmada e, se deixar de subir, tenta por
+  ordem: **(1)** reiniciar a vigilância do canal (novo token, nova playlist), a 1/5 do
+  tempo limite; **(2)** mudar para outro canal da mesma campanha (o actual fica de parte
+  45 min), a metade; **(3)** desistir da campanha durante 30 min e farmar outra, ao fim do
+  tempo limite. Com o valor por omissão de 30 min são 6, 15 e 30 minutos. Cada passo
+  dispara uma vez por bloqueio; mudar de canal não adia a desistência da campanha. Os
+  passos 2 e 3 geram um aviso «Farm sem progresso» e, quando o progresso volta, «Farm
+  recuperado». O tempo em que a app esteve parada ou sem rede não conta como bloqueio. O
+  «Tempo limite sem progresso» das Definições passa a ter efeito (antes não era guardado).
+- **O log do ecrã tem um limite de 5000 linhas** (antes crescia sem fim numa farm de
+  vários dias).
+
+### Changed
+
+- **O canal em farm mantém-se** enquanto for válido: já não se muda só porque outro canal
+  passou a ter mais espectadores (cada mudança reinicia a sessão de vigilância). Um canal
+  da lista de canais preferidos continua a ter prioridade, e um canal sem drops activos não
+  é mantido.
+
+### Fixed
+
+- **O watchdog antigo era alimentado com o progresso de todas as campanhas com canal**, por
+  isso o relógio de «sem progresso» reiniciava a cada campanha e nunca detectava nada.
+  Removido (`watchdog.py`).
+
 ## [2.2.52] - 2026-11-10
 
 ### Fixed
