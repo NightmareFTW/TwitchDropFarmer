@@ -10,7 +10,6 @@ from typing import Callable
 from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
 from .twitch_client import TwitchClient
-from .watchdog import Watchdog, WatchdogConfig
 from .alerts import get_alert_manager, AlertType, AlertSeverity
 from .energy_profiles import get_profile_by_name
 
@@ -129,17 +128,12 @@ class FarmEngine:
         self._campaigns_fetched_at: float | None = None
         self._stream_cache: dict[str, tuple[float, list[StreamCandidate]]] = {}
         self.focus_campaign_ids: set[str] = set()
+        # The channel being watched right now is kept while it stays valid (see
+        # _channel_priority), and a channel that stopped crediting progress is skipped for a
+        # while (see penalize_channel). Stall detection itself lives in farm_health.py.
+        self.current_channel = ""
+        self._channel_penalty: dict[str, float] = {}
 
-        # Setup watchdog with config-based timeout
-        watchdog_config = WatchdogConfig(
-            stall_timeout_min=config.watchdog_stall_timeout_min,
-            stall_check_interval_sec=60,
-            max_recovery_attempts=3,
-            recovery_cooldown_sec=120,
-        )
-        self.watchdog = Watchdog(watchdog_config)
-        self.watchdog.is_enabled = config.watchdog_enabled
-        
         # Apply energy profile settings if available
         profile = get_profile_by_name(config.energy_profile)
         if profile:
@@ -157,10 +151,43 @@ class FarmEngine:
             return False
         return True
 
-    def _channel_priority(self, stream: StreamCandidate) -> tuple[int, int, int]:
+    def set_current_channel(self, login: str) -> None:
+        """The channel being farmed now: it is kept while it remains a valid choice."""
+        self.current_channel = (login or "").casefold()
+
+    def penalize_channel(self, login: str, seconds: float) -> None:
+        """Skip ``login`` for ``seconds`` (it stopped crediting progress)."""
+        if login:
+            self._channel_penalty[login.casefold()] = self._clock() + seconds
+
+    def _channel_penalized(self, login: str) -> bool:
+        until = self._channel_penalty.get(login.casefold())
+        if until is None:
+            return False
+        if self._clock() >= until:
+            del self._channel_penalty[login.casefold()]
+            return False
+        return True
+
+    def _channel_priority(self, stream: StreamCandidate) -> tuple[int, int, int, int]:
         whitelist = {item.casefold() for item in self.config.whitelist_channels}
         preferred = int(bool(whitelist) and stream.login.casefold() in whitelist)
-        return (preferred, int(stream.drops_enabled), stream.viewer_count)
+        # Staying on the channel already being watched beats a slightly bigger one: moving
+        # restarts the watch session, and viewer counts swap places all the time.
+        current = int(bool(self.current_channel) and stream.login.casefold() == self.current_channel)
+        return (preferred, int(stream.drops_enabled), current, stream.viewer_count)
+
+    def reselect(self, decision: FarmDecision) -> None:
+        """Pick the stream of ``decision`` again from the last lookup (no network).
+
+        Used right after a channel was penalized, so the farm moves at once instead of
+        waiting for the next poll. With no alternative the decision ends up without a stream
+        and the farm falls through to the next campaign.
+        """
+        cached = self._stream_cache.get(decision.campaign.id)
+        streams = cached[1] if cached is not None else []
+        decision.stream = self.choose_stream(decision.campaign, streams)
+        decision.reason_code = "stream_selected" if decision.stream is not None else "no_valid_stream"
 
     def choose_stream(self, campaign: DropCampaign, streams: list[StreamCandidate]) -> StreamCandidate | None:
         blacklist = {item.casefold() for item in self.config.blacklist_channels}
@@ -168,7 +195,7 @@ class FarmEngine:
         base_valid = [
             stream
             for stream in streams
-            if stream.login.casefold() not in blacklist
+            if stream.login.casefold() not in blacklist and not self._channel_penalized(stream.login)
         ]
         if allowed:
             filtered = [
@@ -282,18 +309,6 @@ class FarmEngine:
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
-
-        # Check for stalls and attempt recovery
-        if self.config.watchdog_enabled:
-            is_stalled, stall_reason = self.watchdog.check_stall()
-            if is_stalled:
-                messages.append(f"⚠️ Watchdog: {stall_reason}")
-                # Attempt recovery if configured
-                if self.watchdog.should_attempt_recovery():
-                    self.watchdog.trigger_recovery("Token refresh + stream switch")
-                    # Here you could add recovery logic like token refresh
-                    # For now, just mark recovery as attempted
-                    messages.append("A tentar recuperação automática...")
 
         streamable: list[DropCampaign] = []
         for campaign in campaigns:
@@ -503,15 +518,6 @@ class FarmEngine:
                     ),
                 )
             )
-
-            # Update watchdog with farming progress
-            if selected and self.config.watchdog_enabled:
-                total_minutes = campaign.required_minutes or 0
-                self.watchdog.update_progress(
-                    total_progress_minutes=total_minutes - campaign.remaining_minutes,
-                    campaign_id=campaign.id,
-                    channel=selected.login
-                )
 
         if streamable:
             messages.append(

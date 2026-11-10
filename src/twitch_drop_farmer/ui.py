@@ -83,6 +83,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import CONFIG_DIR, load_config, save_config
+from .farm_health import Action, FarmHealth, LEVEL_CHANNEL
 from .game_names import clean_game_name
 from .log_export import save_log
 from .farmer import FarmEngine, FarmSnapshot
@@ -119,6 +120,14 @@ FORCED_REFRESH_MIN_SEC = 120.0
 # signal being 1-2 minutes ahead is normal and harmless. Only a bigger gap (the Inventory
 # looks stuck) is worth a full campaign refresh.
 INVENTORY_LAG_FORCE_MINUTES = 3
+
+# How long a channel that stopped crediting progress is skipped, and how long a campaign that
+# stopped moving is left alone before the farm tries it again.
+CHANNEL_PENALTY_SEC = 45 * 60.0
+CAMPAIGN_HOLD_SEC = 30 * 60.0
+
+# The on-screen log is capped: a farm can run for days and the widget keeps every line in memory.
+LOG_MAX_LINES = 5000
 
 
 def ready_drops(campaign: DropCampaign) -> list[tuple[str, str]]:
@@ -982,7 +991,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "version_corner": "v{version}",
         "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reactivo (mais pedidos).",
         "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando detecta bloqueio.",
-        "help_watchdog_timeout": "Minutos sem progresso antes do monitor considerar que a farm ficou bloqueada.",
+        "help_watchdog_timeout": "Minutos sem progresso até o monitor desistir da campanha e passar a outra. Antes disso tenta, a 1/5 do tempo, reiniciar a vigilância do canal e, a metade, mudar de canal.",
         "help_autoupdate": "Quando activo, a aplicação pode transferir e aplicar automaticamente uma nova versão quando disponível.",
         "help_autoupdate_delay": "Tempo de espera antes de reiniciar a aplicação para concluir uma actualização automática.",
         "alert_type_campaign_expiring_soon": "Campanha a expirar brevemente",
@@ -1007,6 +1016,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_done": "Clicados {count} botão(ões) de reivindicar no inventário da Twitch (a Twitch pode rejeitar o pedido; confirma lá).",
         "redeem_none": "Nenhum drop pronto para redimir.",
         "redeem_auto_done": "Auto-redimir: {count} botão(ões) de reivindicar clicado(s) (a Twitch pode rejeitar o pedido; confirma no inventário).",
+        "watchdog_title": "Farm sem progresso",
+        "watchdog_restart": "{game}: {minutes} min sem progresso em {channel}; a reiniciar a vigilância do canal.",
+        "watchdog_switch_channel": "{game}: {minutes} min sem progresso em {channel}; a mudar para outro canal (este fica de parte {penalty} min).",
+        "watchdog_switch_campaign": "{game}: {minutes} min sem progresso; a passar a outra campanha durante {hold} min.",
+        "watchdog_recovered_title": "Farm recuperado",
+        "watchdog_recovered": "{game}: o progresso voltou a subir depois da recuperação automática.",
         "target_switch": "Alvo alterado: {previous} -> {game} (motivo: {reason}).",
         "target_switch_manual": "selecção manual",
         "target_switch_gone": "a campanha anterior já não está na lista",
@@ -1284,7 +1299,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "version_corner": "v{version}",
         "help_energy_profile": "Defines app behavior: more economical (fewer requests) or more responsive (more requests).",
         "help_watchdog": "Monitors lack of progress and tries automatic recovery when farming gets stuck.",
-        "help_watchdog_timeout": "Minutes without progress before watchdog considers farming stalled.",
+        "help_watchdog_timeout": "Minutes without progress before the monitor gives up on the campaign and moves to another one. Before that it restarts the channel watch (at 1/5 of the time) and switches channel (at half).",
         "help_autoupdate": "When enabled, the app can automatically download and apply a new version when available.",
         "help_autoupdate_delay": "Wait time before restarting the app to finish an automatic update.",
         "alert_type_campaign_expiring_soon": "Campaign expiring soon",
@@ -1309,6 +1324,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_done": "Clicked {count} claim button(s) on the Twitch inventory page (Twitch may reject the request; check there).",
         "redeem_none": "No drops are ready to redeem.",
         "redeem_auto_done": "Auto-redeem: {count} claim button(s) clicked (Twitch may reject the request; check your inventory).",
+        "watchdog_title": "Farm not progressing",
+        "watchdog_restart": "{game}: {minutes} min without progress on {channel}; restarting the channel watch.",
+        "watchdog_switch_channel": "{game}: {minutes} min without progress on {channel}; switching to another channel (this one is skipped for {penalty} min).",
+        "watchdog_switch_campaign": "{game}: {minutes} min without progress; moving to another campaign for {hold} min.",
+        "watchdog_recovered_title": "Farm recovered",
+        "watchdog_recovered": "{game}: progress is moving again after the automatic recovery.",
         "target_switch": "Target changed: {previous} -> {game} (reason: {reason}).",
         "target_switch_manual": "manual selection",
         "target_switch_gone": "the previous campaign is no longer listed",
@@ -1772,6 +1793,9 @@ class MainWindow(QMainWindow):
         self._heartbeat_poll_timer.timeout.connect(self._poll_heartbeat_future)
         self._last_refresh_at: str = ""
         self._auto_claim_tried: dict[str, datetime] = {}
+        self._farm_health = FarmHealth(self.config.watchdog_stall_timeout_min)
+        self._farm_health.enabled = bool(self.config.watchdog_enabled)
+        self._campaign_hold: dict[str, float] = {}
         self._last_forced_refresh_at: float | None = None
         self._sticky_campaign_id: str = ""
         self._streamless_game: str = ""
@@ -1957,6 +1981,7 @@ class MainWindow(QMainWindow):
         self.watchdog_timeout_spinbox.setMaximum(120)
         self.watchdog_timeout_spinbox.setValue(self.config.watchdog_stall_timeout_min)
         self.watchdog_timeout_spinbox.setSuffix(" min")
+        self.watchdog_timeout_spinbox.valueChanged.connect(self.handle_watchdog_timeout_change)
         watchdog_timeout_layout.addWidget(self.watchdog_timeout_label)
         watchdog_timeout_layout.addWidget(self.watchdog_timeout_help_icon)
         watchdog_timeout_layout.addWidget(self.watchdog_timeout_spinbox)
@@ -2471,6 +2496,7 @@ class MainWindow(QMainWindow):
         self.btn_save_log.clicked.connect(self.handle_save_log)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.document().setMaximumBlockCount(LOG_MAX_LINES)
 
         campaigns_layout.addWidget(self.best_target_label)
         campaigns_layout.addLayout(filter_row)
@@ -4097,6 +4123,99 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _watch_farm_health(self, campaign_id: str, game: str, channel: str, progress: int) -> None:
+        """Feed the stall monitor with the campaign being farmed and act on what it answers."""
+        if not campaign_id or not channel:
+            return
+        health = self._farm_health
+        health.observe(campaign_id, channel, progress)
+        recovered = health.take_recovered()
+        if recovered:
+            self._announce_recovered(game, recovered)
+        action = health.check()
+        if action is not Action.NONE:
+            self._run_recovery(action, campaign_id, game, channel)
+
+    def _announce_recovered(self, game: str, level: int) -> None:
+        if level >= LEVEL_CHANNEL:  # a channel or campaign switch deserves a notice
+            get_alert_manager().raise_alert(
+                AlertType.WATCHDOG_RECOVERED,
+                AlertSeverity.INFO,
+                self._t("watchdog_recovered_title"),
+                self._t("watchdog_recovered", game=game),
+                auto_dismiss_sec=15,
+            )
+        else:
+            self._log(self._t("watchdog_recovered", game=game))
+
+    def _watchdog_alert(self, key: str, **kwargs: object) -> None:
+        get_alert_manager().raise_alert(
+            AlertType.NO_PROGRESS,
+            AlertSeverity.WARNING,
+            self._t("watchdog_title"),
+            self._t(key, **kwargs),
+            auto_dismiss_sec=20,
+        )
+
+    def _run_recovery(self, action: Action, campaign_id: str, game: str, channel: str) -> None:
+        """Carry out one recovery step for a campaign whose progress stopped moving."""
+        health = self._farm_health
+        if action is Action.RESTART_WATCH:
+            # Cheapest fix: a fresh playback token, playlist and broadcast for the same channel.
+            self._log(self._t("watchdog_restart", game=game, channel=channel, minutes=int(health.stalled_minutes())))
+            self.client.reset_watch_session(channel)
+            self.client.segment_watcher.stop()
+            self.client.segment_watcher.set_channel(channel)
+        elif action is Action.SWITCH_CHANNEL:
+            self._watchdog_alert(
+                "watchdog_switch_channel",
+                game=game,
+                channel=channel,
+                minutes=int(health.stalled_minutes()),
+                penalty=int(CHANNEL_PENALTY_SEC // 60),
+            )
+            self.engine.penalize_channel(channel, CHANNEL_PENALTY_SEC)
+            self.client.reset_watch_session(channel)
+            self._forced_farm_channel = ""
+            decision = self._decision_for_campaign(campaign_id)
+            if decision is not None:
+                self.engine.reselect(decision)  # moves at once, from the last lookup
+            self._refresh_farming_now()
+            self._streamless_heartbeat_tick()
+            self.refresh_snapshot()  # renews the lookups in the background
+        elif action is Action.SWITCH_CAMPAIGN:
+            self._watchdog_alert(
+                "watchdog_switch_campaign",
+                game=game,
+                minutes=int(health.campaign_stalled_minutes()),
+                hold=int(CAMPAIGN_HOLD_SEC // 60),
+            )
+            self._campaign_hold[campaign_id] = time.monotonic() + CAMPAIGN_HOLD_SEC
+            if self._sticky_campaign_id == campaign_id:
+                self._sticky_campaign_id = ""
+            if self._forced_farm_campaign_id == campaign_id:
+                # The user's manual pick is not moving either: stop insisting on it.
+                self._forced_farm_campaign_id = ""
+                self._forced_farm_channel = ""
+                self._forced_farm_game = ""
+            self._refresh_farming_now()
+            self._streamless_heartbeat_tick()
+
+    def _decision_for_campaign(self, campaign_id: str) -> FarmDecision | None:
+        if self.latest_snapshot is None:
+            return None
+        return next((d for d in self.latest_snapshot.decisions if d.campaign.id == campaign_id), None)
+
+    def _campaign_on_hold(self, campaign_id: str) -> bool:
+        """True while a campaign that stopped moving is being left alone."""
+        until = self._campaign_hold.get(campaign_id)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            del self._campaign_hold[campaign_id]
+            return False
+        return True
+
     def _current_farm_decision(self) -> FarmDecision | None:
         decision = self._pick_farm_decision()
         if decision is not None:
@@ -4111,7 +4230,7 @@ class MainWindow(QMainWindow):
         candidates = [
             decision
             for decision in all_decisions
-            if self._decision_is_farmable_now(decision)
+            if self._decision_is_farmable_now(decision) and not self._campaign_on_hold(decision.campaign.id)
         ]
         if self._forced_farm_game:
             forced_key = self._forced_farm_game.casefold()
@@ -4123,7 +4242,7 @@ class MainWindow(QMainWindow):
             forced_candidates = [
                 decision
                 for decision in forced_decisions
-                if self._decision_is_farmable_now(decision)
+                if self._decision_is_farmable_now(decision) and not self._campaign_on_hold(decision.campaign.id)
             ]
             if forced_candidates:
                 candidates = forced_candidates
@@ -4435,6 +4554,7 @@ class MainWindow(QMainWindow):
             if previous is not None:
                 current = int(reconciled_campaign.progress_minutes)
                 required = int(reconciled_campaign.required_minutes)
+                self._watch_farm_health(pending_campaign_id, pending_game_name, pending_channel, current)
                 self._refresh_priority_label()
                 self._refresh_farming_now()
                 self._refresh_campaign_list()
@@ -4534,9 +4654,14 @@ class MainWindow(QMainWindow):
             if hasattr(self, "watchdog_timeout_spinbox"):
                 self.watchdog_timeout_spinbox.setValue(profile.watchdog_stall_timeout_min)
 
+    def handle_watchdog_timeout_change(self, minutes: int) -> None:
+        self.config.watchdog_stall_timeout_min = int(minutes)
+        self._farm_health.set_timeout(int(minutes))
+
     def handle_watchdog_toggle(self, checked: bool) -> None:
         """Handle watchdog enable/disable."""
         self.config.watchdog_enabled = checked
+        self._farm_health.enabled = checked
         self.watchdog_timeout_spinbox.setEnabled(checked)
         logger.info(f"Watchdog: {'activado' if checked else 'desactivado'}")
 
@@ -4834,6 +4959,7 @@ class MainWindow(QMainWindow):
         self._streamless_failure_channel = ""
         self._streamless_no_target_logged = False
         self._heartbeat_no_progress_cycles = 0
+        self._farm_health.reset()
         self.refresh_snapshot()
         self._streamless_heartbeat_tick()
         self._log(self._t("farming_started"))
@@ -5016,6 +5142,7 @@ class MainWindow(QMainWindow):
             self._last_forced_refresh_at = now
         # The campaign being farmed is the one whose channel is re-checked on every poll.
         self.engine.set_focus(self._sticky_campaign_id, self._forced_farm_campaign_id)
+        self.engine.set_current_channel(self._streamless_channel)
         self.dashboard_loading_label.setVisible(True)
         self._snap_future = self.executor.submit(self.engine.poll, force_campaigns=force)
         self._snap_poll_timer.start()

@@ -1054,6 +1054,16 @@ class TwitchClient:
         watching = self.segment_watcher.channel
         return bool(watching) and watching.casefold() == channel_login.casefold()
 
+    def reset_watch_session(self, channel_login: str) -> None:
+        """Forget everything cached for watching ``channel_login``.
+
+        The next heartbeat then asks Twitch for a new playback token, a new playlist and the
+        channel's current broadcast, which is the cheapest recovery when progress stalls.
+        """
+        key = channel_login.casefold()
+        self._streamless_media_playlist_cache.pop(key, None)
+        self._streamless_stream_info_cache.pop(key, None)
+
     def _stream_info_cached(self, channel_login: str) -> dict[str, str]:
         """Return stream info with a 90-second TTL cache to minimise GQL chatter."""
         cache_key = channel_login.casefold()
