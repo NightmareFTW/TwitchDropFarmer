@@ -23,6 +23,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   era tentado no ciclo seguinte. Agora o `ViewerDropsDashboard` é repetido uma
   vez, por pedido directo, com esse token antes de desistir para o registry.
 
+- **`CurrentDrop` falhava sempre a validação** — a query declarava `$channelID`
+  como `String!` e o schema da Twitch espera `ID`, pelo que cada pedido devolvia
+  `Variable "$channelID" of type "String!" used in position expecting type "ID"`
+  e o progresso da sessão de drop actual nunca chegava à app (o log mostrava
+  `Heartbeat sem campanha reconciliada`). Corrigido para `ID!`, validado contra a
+  API real.
+
 ### Changed
 
 - **O browser invisível deixa de esperar por um resultado impossível** — quando a

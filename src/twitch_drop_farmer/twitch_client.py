@@ -401,7 +401,9 @@ STREAM_INFO_QUERY = {
 CURRENT_DROP_QUERY = {
     "operationName": "CurrentDrop",
     "query": (
-        "query CurrentDrop($channelID: String!) { "
+        # Twitch's schema types this argument as ID; declaring it String! makes the
+        # whole query fail validation ("used in position expecting type ID").
+        "query CurrentDrop($channelID: ID!) { "
         "currentUser { "
         "dropCurrentSession(channelID: $channelID) { "
         "dropID currentMinutesWatched "

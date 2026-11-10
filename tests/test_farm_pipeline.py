@@ -1183,6 +1183,45 @@ class TestDashboardIntegrityFallback(unittest.TestCase):
         self.assertIn("a página não respondeu", _describe_browser_probe({}))
 
 
+class TestCurrentDropQuery(unittest.TestCase):
+    """Regression: the app logged `CurrentDrop: Variable "$channelID" of type
+    "String!" used in position expecting type "ID"`, so the drop-session progress
+    signal never worked. Verified against the live API: `String!` fails GraphQL
+    validation, `ID!` is accepted."""
+
+    def test_channel_variable_is_declared_as_id(self):
+        from twitch_drop_farmer.twitch_client import CURRENT_DROP_QUERY
+
+        query = CURRENT_DROP_QUERY["query"]
+        self.assertIn("$channelID: ID!", query)
+        self.assertNotIn("String", query)
+
+    def test_fetch_current_drop_progress_parses_the_session(self):
+        client = TwitchClient.__new__(TwitchClient)
+        client.login_state = MagicMock()
+        client.login_state.oauth_token = "dummy-token"
+        client._note = MagicMock()
+        client._post_gql = MagicMock(return_value={"data": {"currentUser": {"dropCurrentSession": {
+            "dropID": "drop-1",
+            "currentMinutesWatched": 7,
+        }}}})
+
+        result = client.fetch_current_drop_progress("785812993")
+
+        self.assertEqual(result, {"drop_id": "drop-1", "current_minutes": 7, "channel_id": "785812993"})
+        sent = client._post_gql.call_args.args[0]
+        self.assertEqual(sent["variables"]["channelID"], "785812993")
+
+    def test_fetch_current_drop_progress_returns_none_without_a_session(self):
+        client = TwitchClient.__new__(TwitchClient)
+        client.login_state = MagicMock()
+        client.login_state.oauth_token = "dummy-token"
+        client._note = MagicMock()
+        client._post_gql = MagicMock(return_value={"data": {"currentUser": {"dropCurrentSession": None}}})
+
+        self.assertIsNone(client.fetch_current_drop_progress("785812993"))
+
+
 class TestBrowserIntegrityCircuitBreaker(unittest.TestCase):
     """When the page's own ViewerDropsDashboard request is rejected by the integrity
     check, the invisible browser is the thing being refused: waiting longer or
