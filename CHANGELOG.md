@@ -6,6 +6,33 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.54] - 2026-11-10
+
+### Fixed
+
+- **Imagens erradas ou em falta nos cartões** — o Black Desert mostrava a capa da
+  biblioteca da Steam e o Chaos Zero Nightmare o ícone genérico de comando. Nenhuma das
+  consultas que a app faz à Twitch (directório, redirecionamento) devolve o URL da imagem,
+  só o ID da categoria, por isso a imagem oficial nunca era obtida e a app caía na Steam,
+  no Google ou em adivinhações. A imagem oficial é determinística a partir do ID
+  (`ttv-boxart/<id>_IGDB-144x192.jpg`) e passa a ser a primeira escolha, sem pedidos
+  extra. A Steam só é usada se a entrada da loja tiver o mesmo nome (antes aceitava o
+  primeiro resultado, que podia ser outro jogo ou um DLC), e as imagens genéricas «sem
+  capa» que a CDN da Twitch devolve com HTTP 200 são reconhecidas e deixam de ser
+  mostradas como se fossem a capa (o cartão fica com o placeholder com o nome do jogo).
+- **Cartões duplicados («Blue Protocol Star Resonance» INATIVO ao lado de «Blue Protocol:
+  Star Resonance» LIVE)** — a Twitch só reconhece o nome exacto, e o registry escreve-o
+  sem a pontuação, por isso a procura do jogo falhava («Could not resolve a Twitch
+  directory slug…») e a app tratava-o como um segundo jogo. Agora, se o nome exacto falha,
+  usa-se a procura de categorias da própria Twitch (só se aceita um resultado com o mesmo
+  nome, ignorando maiúsculas, acentos e pontuação). Resolveu «Honkai Star Rail»,
+  «GODDESS OF VICTORY NIKKE» e «Blue Protocol Star Resonance» que antes ficavam sem
+  canais. As duas grafias passam a ser um só cartão, com a grafia da Twitch, e a whitelist
+  e a blacklist comparam os nomes sem pontuação. Ao carregar a configuração as grafias
+  duplicadas da whitelist fundem-se numa só.
+- Os jogos que não existem como categoria na Twitch («Legion TD», «LEGO Batman…») continuam
+  sem canais; ficam com o cartão com o nome.
+
 ## [2.2.53] - 2026-11-10
 
 ### Added

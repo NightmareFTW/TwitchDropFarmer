@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import base64
 import gzip
 import hashlib
+import uuid
 import html as html_module
 import json
 import os
@@ -35,12 +36,12 @@ if __package__ in {None, ""}:
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
     from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
-    from twitch_drop_farmer.game_names import clean_game_name
+    from twitch_drop_farmer.game_names import clean_game_name, loose_game_key
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
     from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
     from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
-    from .game_names import clean_game_name
+    from .game_names import clean_game_name, loose_game_key
     from .models import DropCampaign, StreamCandidate
     from .stream_watcher import SegmentWatcher
 
@@ -267,6 +268,43 @@ _BROWSER_INTEGRITY_BLOCK_SECONDS = 900.0
 # (and retried on the next 2 s cycle) instead of stalling the watcher for 10+ s.
 _HLS_WATCH_TIMEOUT = (4.0, 8.0)
 
+# Twitch serves a box art for every category from its numeric ID. The data the app gets
+# (directory query, redirect query, search) carries the ID but never a ready-made image URL.
+_BOX_ART_URL = "https://static-cdn.jtvnw.net/ttv-boxart/{id}_IGDB-{width}x{height}.jpg"
+
+# md5 of the generic "no image" pictures Twitch's CDN answers with (HTTP 200!) when a box art
+# does not exist: they must never be shown as if they were the game's cover.
+PLACEHOLDER_BOX_ART_MD5 = frozenset(
+    {
+        "899abf4f2e69769a8e05471c62dae9fa",  # ttv-static/404_boxart.jpg
+        "2aff40fa482c1bfe769264d010733467",  # missing ttv-boxart, 144x192
+        "8eccc5e97ef5b60faac32b771f234205",  # missing ttv-boxart, 285x380
+        "507180435699681e2d6879be5f50ccd5",  # missing ttv-boxart, 60x80
+    }
+)
+
+
+def official_box_art_url(game_id: str, width: int = 144, height: int = 192) -> str:
+    """Twitch's box art URL for a category ID, or "" if ``game_id`` is not a numeric ID."""
+    game_id = str(game_id or "").strip()
+    if not game_id.isdigit():
+        return ""
+    return _BOX_ART_URL.format(id=game_id, width=width, height=height)
+
+
+def is_placeholder_box_art(image_bytes: bytes) -> bool:
+    """True for the generic image Twitch's CDN returns when a category has no box art."""
+    return bool(image_bytes) and hashlib.md5(image_bytes).hexdigest() in PLACEHOLDER_BOX_ART_MD5
+
+
+@dataclass(frozen=True, slots=True)
+class GameRef:
+    """A Twitch category: its real name, numeric ID and directory slug."""
+
+    name: str
+    id: str
+    slug: str
+
 # Global GraphQL pacing. Requests are spaced at least this far apart (across threads), so
 # a burst (e.g. a full scan) cannot hit Twitch dozens of times per second, and a 429 pauses
 # every GraphQL request for the time Twitch asks for instead of being retried at once.
@@ -410,6 +448,18 @@ GAME_REDIRECT_QUERY = {
         }
     },
 }
+# Twitch's own category search. Unlike DirectoryGameRedirect (exact name only) it finds
+# "Honkai: Star Rail" for "Honkai Star Rail", which is how the public registry spells it.
+SEARCH_SUGGESTIONS_QUERY = {
+    "operationName": "SearchTray_SearchSuggestions",
+    "variables": {"queryFragment": "", "requestID": ""},
+    "extensions": {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": "1d2cd6ae289d7baa682ef4437ab010c8ea42749ebb81c052f87a8a857ea93378",
+        }
+    },
+}
 GAME_DIRECTORY_QUERY = {
     "operationName": "DirectoryPage_Game",
     "variables": {
@@ -505,7 +555,7 @@ class TwitchClient:
         )
         self.login_state = LoginState()
         self._diagnostics: list[str] = []
-        self._slug_cache: dict[str, str] = {}
+        self._game_ref_cache: dict[str, GameRef | None] = {}
         self._game_box_art_cache: dict[str, str] = {}
         self._external_box_art_cache: dict[str, str] = {}
         self._streamless_media_playlist_cache: dict[str, str] = {}
@@ -1695,7 +1745,8 @@ class TwitchClient:
     def _game_box_art_url(self, game: dict[str, Any]) -> str:
         raw = (game.get("boxArtURL") or game.get("boxArtUrl") or "").strip()
         if not raw:
-            return ""
+            # The directory/redirect queries return the category ID but no image URL.
+            return official_box_art_url(str(game.get("id") or ""))
         return raw.replace("{width}", "144").replace("{height}", "192")
 
     def _next_drop_info(self, drops: list[dict[str, Any]]) -> tuple[str, int, int]:
@@ -4362,18 +4413,61 @@ class TwitchClient:
         return merged_campaigns
 
     def resolve_game_slug(self, game_name: str) -> str:
-        cached = self._slug_cache.get(game_name.casefold())
-        if cached is not None:
-            return cached
+        ref = self.resolve_game(game_name)
+        return ref.slug if ref is not None else ""
 
+    def resolve_game(self, game_name: str) -> GameRef | None:
+        """The Twitch category for ``game_name`` (ID, slug and real name), or None.
+
+        Tries the exact name first (one request), then Twitch's own category search, so a
+        registry name without punctuation still finds its category. Answers are cached by a
+        punctuation-insensitive key, including "not found". A network error is not cached.
+        """
+        key = loose_game_key(game_name)
+        if not key:
+            return None
+        if key in self._game_ref_cache:
+            return self._game_ref_cache[key]
+        ref = self._game_ref_from_redirect(game_name) or self._game_ref_from_search(game_name)
+        self._game_ref_cache[key] = ref
+        if ref is None:
+            self._note(f"Could not resolve a Twitch directory slug for {game_name}.")
+        return ref
+
+    def _game_ref_from_redirect(self, game_name: str) -> GameRef | None:
         payload = self._clone_query(GAME_REDIRECT_QUERY)
         payload["variables"]["name"] = game_name
         response = self._post_gql(payload)
-        slug = ((response.get("data") or {}).get("game") or {}).get("slug", "") or ""
-        self._slug_cache[game_name.casefold()] = slug
+        game = (response.get("data") or {}).get("game") or {}
+        slug = str(game.get("slug") or "")
         if not slug:
-            self._note(f"Could not resolve a Twitch directory slug for {game_name}.")
-        return slug
+            return None
+        return GameRef(name=game_name, id=str(game.get("id") or ""), slug=slug)
+
+    def _game_ref_from_search(self, game_name: str) -> GameRef | None:
+        """Look the name up in Twitch's category search; only a same-name match is accepted
+        (ignoring case and punctuation), never a merely similar game."""
+        payload = self._clone_query(SEARCH_SUGGESTIONS_QUERY)
+        payload["variables"]["queryFragment"] = game_name
+        payload["variables"]["requestID"] = str(uuid.uuid4())
+        response = self._post_gql(payload)
+        data = (response.get("data") or {}) if isinstance(response, dict) else {}
+        edges = (data.get("searchSuggestions") or {}).get("edges") or []
+        wanted = loose_game_key(game_name)
+        for edge in edges:
+            node = (edge or {}).get("node") or {}
+            content = node.get("content") or {}
+            if content.get("__typename") != "SearchSuggestionCategory":
+                continue
+            text = str(node.get("text") or "")
+            if loose_game_key(text) != wanted:
+                continue
+            game = content.get("game") or {}
+            slug = str(game.get("slug") or "")
+            game_id = str(game.get("id") or content.get("id") or "")
+            if slug:
+                return GameRef(name=text, id=game_id, slug=slug)
+        return None
 
     def resolve_game_box_art_url(self, game_name: str, *, game_slug: str = "") -> str:
         cache_key = game_name.casefold()
@@ -4381,7 +4475,17 @@ class TwitchClient:
         if cached is not None:
             return cached
 
-        slug = (game_slug or "").strip() or self.resolve_game_slug(game_name)
+        try:
+            ref = self.resolve_game(game_name)
+        except requests.RequestException as exc:
+            self._note(f"Could not look up {game_name} on Twitch while resolving its box art: {exc}")
+            ref = None
+        official = official_box_art_url(ref.id) if ref is not None else ""
+        if official:
+            self._game_box_art_cache[cache_key] = official
+            return official
+
+        slug = (game_slug or "").strip() or (ref.slug if ref is not None else "")
         if slug:
             try:
                 payload = self._clone_query(GAME_DIRECTORY_QUERY)
@@ -4445,16 +4549,15 @@ class TwitchClient:
             return fallback
 
         items = payload.get("items", []) or []
-        normalized = game_name.casefold().strip()
+        wanted = loose_game_key(game_name)
 
+        # Only a store entry with the same name counts. Taking the first search result
+        # showed some other game's (or a DLC's) cover on the card.
         best_item: dict[str, Any] | None = None
         for item in items:
-            name = str(item.get("name", "") or "").casefold().strip()
-            if name and name == normalized:
+            if loose_game_key(str(item.get("name", "") or "")) == wanted:
                 best_item = item
                 break
-        if best_item is None and items:
-            best_item = items[0]
         if best_item is None:
             fallback = self._resolve_google_game_box_art_url(game_name)
             if fallback:

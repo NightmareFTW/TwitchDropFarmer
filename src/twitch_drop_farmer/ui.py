@@ -84,11 +84,11 @@ from PySide6.QtWidgets import (
 
 from .config import CONFIG_DIR, load_config, save_config
 from .farm_health import Action, FarmHealth, LEVEL_CHANNEL
-from .game_names import clean_game_name
+from .game_names import clean_game_name, loose_game_key, preferred_game_name
 from .log_export import save_log
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
-from .twitch_client import TwitchClient
+from .twitch_client import TwitchClient, is_placeholder_box_art
 from .energy_profiles import AVAILABLE_PROFILES, get_profile_by_name
 from .alerts import AlertManager, AlertSeverity, AlertType, get_alert_manager
 from . import __version__, updater
@@ -1365,8 +1365,27 @@ def _normalize_dashboard_game_name(name: str, *, known_names: set[str] | None = 
     if match:
         base = match.group(1).strip()
         if base and base.casefold() in known:
-            return base
-    return text
+            text = base
+    return _canonical_game_spelling(text, known_names)
+
+
+def _canonical_game_spelling(text: str, known_names: set[str] | None) -> str:
+    """The spelling of ``text`` to show and key by when the same game is known under
+    several: the registry says "Blue Protocol Star Resonance", Twitch "Blue Protocol: Star
+    Resonance", and they must be one card, not an INATIVO one beside a LIVE one."""
+    if not known_names:
+        return text
+    key = loose_game_key(text)
+    # Compared cleaned: a polluted spelling ("... 1 drop · in 4 days") has punctuation too,
+    # and must not win over the real name because of it.
+    variants = [
+        clean_game_name(item)
+        for item in known_names
+        if isinstance(item, str) and loose_game_key(item) == key
+    ]
+    if not variants:
+        return text
+    return preferred_game_name([*variants, text])
 
 
 def _dashboard_game_key(name: str, *, known_names: set[str] | None = None) -> str:
@@ -1392,7 +1411,7 @@ def _effective_dashboard_game_names(
         return []
 
     canonical_by_key: dict[str, str] = {}
-    known = {item.casefold() for item in raw}
+    known = set(raw)
     for raw_name in raw:
         normalized = _normalize_dashboard_game_name(raw_name, known_names=known)
         key = normalized.casefold()
@@ -3349,7 +3368,10 @@ class MainWindow(QMainWindow):
             if not u or u in tried or u == BOX_ART_FALLBACK_URL:
                 return b""
             tried.add(u)
-            return self._download_url_bytes(u)
+            data = self._download_url_bytes(u)
+            # Twitch's CDN answers 200 with a generic picture for a box art that does not
+            # exist: that is "no image", not the game's cover.
+            return b"" if is_placeholder_box_art(data) else data
 
         if prefer_direct_url:
             result = _try(target_url)
@@ -3463,7 +3485,10 @@ class MainWindow(QMainWindow):
         self._thumb_inflight.add(target_url)
 
         def worker(image_url: str, requested_game: str, requested_slug: str) -> None:
-            image_bytes = self._resolve_and_download_box_art_bytes(image_url, requested_game, requested_slug)
+            # An ID-based Twitch URL needs no lookup: fetch it directly (no GraphQL calls).
+            image_bytes = self._resolve_and_download_box_art_bytes(
+                image_url, requested_game, requested_slug, prefer_direct_url="_IGDB-" in image_url
+            )
             if image_bytes:
                 self._thumb_fetch_bridge.loaded.emit(image_url, image_bytes)
             else:
@@ -4030,13 +4055,15 @@ class MainWindow(QMainWindow):
                     if decision.campaign.game_name.casefold() == game_key and self._decision_is_farmable_now(decision):
                         best_decision = decision
                         break
-            if best_decision:
-                box_art_url = best_decision.campaign.game_box_art_url or self._guess_box_art_url(
-                    entry.label,
-                    best_decision.campaign.game_slug,
+            # Twitch's own URL (from the campaign data) beats a guess, and any campaign of the
+            # game has it, not only the one that can be farmed right now.
+            box_art_url = (best_decision.campaign.game_box_art_url if best_decision else "") or next(
+                (item.game_box_art_url for item in related_campaigns if item.game_box_art_url), ""
+            )
+            if not box_art_url:
+                box_art_url = self._guess_box_art_url(
+                    entry.label, best_decision.campaign.game_slug if best_decision else ""
                 )
-            else:
-                box_art_url = self._guess_box_art_url(entry.label)
             pixmap = self._load_box_art_pixmap(box_art_url)
 
             card = GameCard(

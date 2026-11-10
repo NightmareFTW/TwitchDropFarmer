@@ -12,6 +12,7 @@ from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
 from .twitch_client import TwitchClient
 from .alerts import get_alert_manager, AlertType, AlertSeverity
 from .energy_profiles import get_profile_by_name
+from .game_names import loose_game_key
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +143,11 @@ class FarmEngine:
             logger.info(f"FarmEngine iniciado com perfil: {config.energy_profile}")
 
     def _game_is_allowed(self, game: str) -> bool:
-        game_key = game.casefold()
-        blacklist = {item.casefold() for item in self.config.blacklist_games}
-        whitelist = {item.casefold() for item in self.config.whitelist_games}
+        # Compared without punctuation, so the registry's "Honkai Star Rail" matches a
+        # whitelist that says "Honkai: Star Rail".
+        game_key = loose_game_key(game)
+        blacklist = {loose_game_key(item) for item in self.config.blacklist_games}
+        whitelist = {loose_game_key(item) for item in self.config.whitelist_games}
         if game_key in blacklist:
             return False
         if whitelist and game_key not in whitelist:
