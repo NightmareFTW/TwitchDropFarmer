@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.44] - 2026-11-10
+
 ### Fixed
 
 - **Nomes de jogo errados no fallback do registry público** — quando a Twitch
@@ -71,6 +73,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   login, se existe o cookie `twilight-user`, as operações GraphQL pedidas pela
   página e os erros recebidos. Só nomes e contagens: nunca tokens nem valores de
   cookies.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.44`. A partir daqui cada alteração
+  publicada sobe o número da versão (rodapé da app: `v2.2.44`), para se saber
+  sempre que build está em uso; um teste obriga o topo deste ficheiro e
+  `__version__` a coincidirem.
 
 ## [2.2.43] - 2026-09-04
 
