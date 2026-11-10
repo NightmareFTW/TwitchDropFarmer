@@ -6,6 +6,39 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.49] - 2026-11-10
+
+### Changed
+
+- **A app passa a pedir muito menos à Twitch** — o `fetch_streams` perguntava ao
+  directório por *todos* os jogos da whitelist (~100 pedidos seguidos) em cada volta, e
+  havia duas voltas por minuto (temporizadores de 90 s e de 120 s), além de refazer a
+  lista de campanhas (Inventory, dashboard, página de drops, registry) de cada vez.
+  Numa simulação de 2 h com 100 jogos: **7000 → ~140 consultas ao directório por hora**
+  e **70 → 6 buscas da lista de campanhas por hora**.
+  - A lista de campanhas é reutilizada durante 10 minutos (o botão «Actualizar», a
+    recuperação sem progresso, um claim e a validação da sessão forçam uma busca nova,
+    no máximo de 2 em 2 minutos). Se a busca falhar, mantém-se a lista anterior em vez
+    de esvaziar o dashboard. Isto inclui a chamada ao dashboard que a Twitch rejeita
+    por integridade, que antes era repetida a cada volta.
+  - Os canais são consultados só onde faz falta: o jogo em farm em cada volta; os dois
+    primeiros candidatos com canal (que são as próximas escolhas) de 5 em 5 minutos; os
+    restantes de hora a hora, 8 por volta. As campanhas com dados reais de drops são
+    consultadas antes das que só vêm do registry. O resto mantém a última resposta.
+  - Um só temporizador de actualização (era dois).
+  - Limitador global de pedidos GraphQL (≥ 0,3 s entre pedidos, em todas as threads).
+    Um HTTP 429 pausa todos os pedidos durante o `Retry-After` pedido (por omissão 60 s,
+    máximo 15 min) e já não é repetido com o outro perfil de cliente.
+  - Ao escolher um jogo no dashboard (ou «próximo jogo») o canal é consultado de novo,
+    porque a resposta guardada pode ser antiga.
+
+### Added
+
+- Estado **A VERIFICAR** (cinzento) no dashboard para jogos cujos canais ainda não foram
+  consultados; passam a LIVE ou SEM CANAIS à medida que são verificados (cerca de 25
+  minutos depois de iniciar, para 100 jogos). O log mostra em cada volta quantas
+  consultas foram feitas.
+
 ## [2.2.48] - 2026-11-10
 
 ### Fixed

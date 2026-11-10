@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import logging
 import threading
+import time
+from typing import Callable
 
 from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
@@ -25,6 +27,24 @@ class FarmSnapshot:
 
 
 class FarmEngine:
+    # Request budget. Every poll used to refresh the whole campaign list and then ask the
+    # game directory about EVERY whitelisted game (~100 sequential requests, about once a
+    # minute): far more than a person watching Twitch, and the sort of volume that gets an
+    # address distrusted. Now the campaign list is reused for CAMPAIGN_REFRESH_SEC, and a
+    # poll only asks about the games it needs:
+    #   * the campaign being farmed: every poll (its channel may have gone offline);
+    #   * the first FRONT_LIVE_WANTED campaigns with a live channel (the farm's next
+    #     choices): re-checked after FRONT_TTL_SEC, at most MAX_FRONT_LOOKUPS per poll;
+    #   * everything else (it only feeds the dashboard ribbons): after BACKGROUND_TTL_SEC,
+    #     at most MAX_BACKGROUND_LOOKUPS per poll.
+    # What was not looked up keeps its last answer (or "stream_unchecked" if there is none).
+    CAMPAIGN_REFRESH_SEC = 600.0
+    FRONT_TTL_SEC = 300.0
+    FRONT_LIVE_WANTED = 2
+    MAX_FRONT_LOOKUPS = 6
+    BACKGROUND_TTL_SEC = 3600.0
+    MAX_BACKGROUND_LOOKUPS = 8
+
     def _campaign_is_known_subscription_locked(self, campaign: DropCampaign) -> bool:
         if campaign.all_drops_claimed:
             return False
@@ -92,11 +112,24 @@ class FarmEngine:
 
         return False
 
-    def __init__(self, client: TwitchClient, config: AppConfig) -> None:
+    def __init__(
+        self,
+        client: TwitchClient,
+        config: AppConfig,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.client = client
         self.config = config
         self.alert_manager = get_alert_manager()
-        
+        self._clock = clock
+        # Campaigns are shared with the UI on purpose: it merges live progress into these
+        # objects, so reusing them keeps that progress between full refreshes.
+        self._campaign_cache: list[DropCampaign] = []
+        self._campaigns_fetched_at: float | None = None
+        self._stream_cache: dict[str, tuple[float, list[StreamCandidate]]] = {}
+        self.focus_campaign_ids: set[str] = set()
+
         # Setup watchdog with config-based timeout
         watchdog_config = WatchdogConfig(
             stall_timeout_min=config.watchdog_stall_timeout_min,
@@ -166,8 +199,7 @@ class FarmEngine:
             return (-remaining, seconds_until_end, -required)
         return (seconds_until_end, remaining, required)
 
-    def _decision_sort_key(self, decision: FarmDecision) -> tuple[int, tuple[float, ...]]:
-        campaign = decision.campaign
+    def _phase_and_sort_key(self, campaign: DropCampaign) -> tuple[int, tuple[float, ...]]:
         if campaign.active:
             phase = 0
         elif campaign.upcoming:
@@ -176,13 +208,77 @@ class FarmEngine:
             phase = 2
         return (phase, self._campaign_sort_key(campaign))
 
-    def poll(self, *, allow_browser_fallback: bool | None = None, full_scan: bool = False) -> FarmSnapshot:
-        if allow_browser_fallback is None:
-            allow_browser_fallback = threading.current_thread() is threading.main_thread()
+    def _decision_sort_key(self, decision: FarmDecision) -> tuple[int, tuple[float, ...]]:
+        return self._phase_and_sort_key(decision.campaign)
+
+    def _lookup_streams(self, campaign: DropCampaign, messages: list[str]) -> list[StreamCandidate] | None:
+        """Ask Twitch for the live channels of ``campaign``; ``None`` if the request failed."""
+        try:
+            streams = self.client.fetch_streams(campaign)
+        except Exception as exc:
+            messages.append(f"Failed to fetch streams for {campaign.game_name}: {exc}")
+            # Raise token alert if appropriate
+            if "token" in str(exc).lower() and self.config.alert_token_invalid:
+                self.alert_manager.raise_alert(
+                    AlertType.TOKEN_INVALID,
+                    AlertSeverity.ERROR,
+                    "Token Inválido",
+                    f"Erro ao buscar streams: {exc}"
+                )
+            streams = None
+        messages.extend(self.client.consume_diagnostics())
+        return streams
+
+    def set_focus(self, *campaign_ids: str) -> None:
+        """Campaigns whose channel must be re-checked on every poll (the farmed one)."""
+        self.focus_campaign_ids = {cid for cid in campaign_ids if cid}
+
+    def remember_streams(self, campaign: DropCampaign, streams: list[StreamCandidate]) -> None:
+        """Store a stream lookup made outside ``poll`` (e.g. when the user picks a game)."""
+        self._stream_cache[campaign.id] = (self._clock(), list(streams))
+
+    def _load_campaigns(
+        self, *, allow_browser_fallback: bool, full_scan: bool, force: bool
+    ) -> tuple[list[DropCampaign], list[str]]:
+        """The campaign list, from Twitch at most every CAMPAIGN_REFRESH_SEC."""
+        now = self._clock()
+        cached_age = None if self._campaigns_fetched_at is None else now - self._campaigns_fetched_at
+        if (
+            not force
+            and not full_scan
+            and self._campaign_cache
+            and cached_age is not None
+            and cached_age < self.CAMPAIGN_REFRESH_SEC
+        ):
+            return self._campaign_cache, list(self.client.consume_diagnostics())
+
         campaigns = self.client.fetch_campaigns(
             allow_browser_fallback=allow_browser_fallback, full_scan=full_scan
         )
-        messages = self.client.consume_diagnostics()
+        messages = list(self.client.consume_diagnostics())
+        if campaigns:
+            self._campaign_cache = campaigns
+            self._campaigns_fetched_at = now
+        elif self._campaign_cache:
+            # A failed refresh must not empty the dashboard: keep the last list.
+            messages.append("A actualização das campanhas falhou; mantém-se a lista anterior.")
+            return self._campaign_cache, messages
+        return campaigns, messages
+
+    def poll(
+        self,
+        *,
+        allow_browser_fallback: bool | None = None,
+        full_scan: bool = False,
+        force_campaigns: bool = False,
+    ) -> FarmSnapshot:
+        if allow_browser_fallback is None:
+            allow_browser_fallback = threading.current_thread() is threading.main_thread()
+        campaigns, messages = self._load_campaigns(
+            allow_browser_fallback=allow_browser_fallback,
+            full_scan=full_scan,
+            force=force_campaigns,
+        )
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
@@ -199,6 +295,7 @@ class FarmEngine:
                     # For now, just mark recovery as attempted
                     messages.append("A tentar recuperação automática...")
 
+        streamable: list[DropCampaign] = []
         for campaign in campaigns:
             if not self._game_is_allowed(campaign.game_name):
                 decisions.append(
@@ -333,20 +430,55 @@ class FarmEngine:
                 )
                 continue
 
-            try:
-                streams = self.client.fetch_streams(campaign)
-            except Exception as exc:
-                messages.append(f"Failed to fetch streams for {campaign.game_name}: {exc}")
-                # Raise token alert if appropriate
-                if "token" in str(exc).lower() and self.config.alert_token_invalid:
-                    self.alert_manager.raise_alert(
-                        AlertType.TOKEN_INVALID,
-                        AlertSeverity.ERROR,
-                        "Token Inválido",
-                        f"Erro ao buscar streams: {exc}"
-                    )
-                streams = []
-            messages.extend(self.client.consume_diagnostics())
+            streamable.append(campaign)
+
+        # Highest priority first, so the request budget below is spent where it matters:
+        # the campaigns being farmed, then the ones with real drop data (progress that can
+        # be followed), then the rest in the user's sort order.
+        streamable.sort(
+            key=lambda item: (
+                item.id not in self.focus_campaign_ids,
+                not (item.drops or item.required_minutes > 0),
+                *self._phase_and_sort_key(item),
+            )
+        )
+        now = self._clock()
+        front_live = 0
+        front_lookups = 0
+        background_lookups = 0
+        looked_up = 0
+        unchecked = 0
+        for campaign in streamable:
+            cached = self._stream_cache.get(campaign.id)
+            age = float("inf") if cached is None else now - cached[0]
+            focus = campaign.id in self.focus_campaign_ids
+            in_front = front_live < self.FRONT_LIVE_WANTED and front_lookups < self.MAX_FRONT_LOOKUPS
+            if focus:
+                refresh = True
+            elif in_front:
+                refresh = age >= self.FRONT_TTL_SEC
+                front_lookups += int(refresh)
+            else:
+                refresh = age >= self.BACKGROUND_TTL_SEC and background_lookups < self.MAX_BACKGROUND_LOOKUPS
+                background_lookups += int(refresh)
+
+            streams: list[StreamCandidate] | None = cached[1] if cached is not None else None
+            if refresh:
+                looked_up += 1
+                fetched = self._lookup_streams(campaign, messages)
+                if fetched is not None:
+                    streams = fetched
+                    self._stream_cache[campaign.id] = (now, fetched)
+                elif streams is None:
+                    streams = []  # first lookup failed: report it as "no stream", as before
+
+            if streams is None:
+                unchecked += 1
+                decisions.append(
+                    FarmDecision(campaign=campaign, stream=None, reason_code="stream_unchecked")
+                )
+                continue
+
             for stream in streams:
                 available_channels[stream.login.casefold()] = ChannelOption(
                     login=stream.login,
@@ -354,6 +486,8 @@ class FarmEngine:
                 )
 
             selected = self.choose_stream(campaign, streams)
+            if selected is not None and (focus or in_front):
+                front_live += 1
             decisions.append(
                 FarmDecision(
                     campaign=campaign,
@@ -367,7 +501,7 @@ class FarmEngine:
                     ),
                 )
             )
-            
+
             # Update watchdog with farming progress
             if selected and self.config.watchdog_enabled:
                 total_minutes = campaign.required_minutes or 0
@@ -377,9 +511,15 @@ class FarmEngine:
                     channel=selected.login
                 )
 
+        if streamable:
+            messages.append(
+                f"Canais: {looked_up} consulta(s) nesta volta, {len(streamable) - looked_up - unchecked} "
+                f"jogo(s) com a última resposta guardada, {unchecked} por verificar."
+            )
+
         decisions.sort(key=self._decision_sort_key)
         return FarmSnapshot(
-            campaigns=campaigns,
+            campaigns=list(campaigns),
             decisions=decisions,
             available_games=available_games,
             available_channels=sorted(available_channels.values(), key=lambda item: item.label.casefold()),

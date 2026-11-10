@@ -15,7 +15,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urljoin
 
 try:
@@ -265,6 +265,13 @@ _BROWSER_INTEGRITY_BLOCK_SECONDS = 900.0
 # (and retried on the next 2 s cycle) instead of stalling the watcher for 10+ s.
 _HLS_WATCH_TIMEOUT = (4.0, 8.0)
 
+# Global GraphQL pacing. Requests are spaced at least this far apart (across threads), so
+# a burst (e.g. a full scan) cannot hit Twitch dozens of times per second, and a 429 pauses
+# every GraphQL request for the time Twitch asks for instead of being retried at once.
+_GQL_MIN_INTERVAL_SEC = 0.3
+_RATE_LIMIT_DEFAULT_PAUSE_SEC = 60.0
+_RATE_LIMIT_MAX_PAUSE_SEC = 900.0
+
 
 def _probe_shows_integrity_block(probe: dict[str, Any] | None) -> bool:
     """True when the page itself asked for ViewerDropsDashboard (at least twice,
@@ -500,6 +507,12 @@ class TwitchClient:
         self._game_box_art_cache: dict[str, str] = {}
         self._external_box_art_cache: dict[str, str] = {}
         self._streamless_media_playlist_cache: dict[str, str] = {}
+        # GraphQL pacing state (see _gql_wait_turn); the clock and sleep are injectable.
+        self._gql_lock = threading.Lock()
+        self._gql_next_slot = 0.0
+        self._gql_paused_until = 0.0
+        self._clock: Callable[[], float] = time.monotonic
+        self._sleep: Callable[[float], None] = time.sleep
         # Dedicated HTTP session for video traffic (see _stream_session) and the
         # background watcher that keeps requesting new HLS segments while farming.
         self._stream_http: requests.Session | None = None
@@ -740,14 +753,47 @@ class TwitchClient:
             "User-Agent": WEB_USER_AGENT,
         }
 
+    def _gql_wait_turn(self) -> None:
+        """Space GraphQL requests out and refuse to send while a 429 pause is running."""
+        now = self._clock()
+        if now < self._gql_paused_until:
+            raise requests.RequestException(
+                f"Pausa de {int(self._gql_paused_until - now) + 1} s depois de a Twitch responder 429."
+            )
+        with self._gql_lock:
+            slot = max(now, self._gql_next_slot)
+            self._gql_next_slot = slot + _GQL_MIN_INTERVAL_SEC
+        delay = slot - now
+        if delay > 0:
+            self._sleep(delay)
+
+    def _pause_if_rate_limited(self, exc: requests.RequestException) -> bool:
+        """On HTTP 429, pause every GraphQL request for Retry-After; True if it was a 429."""
+        response = getattr(exc, "response", None)
+        if response is None or response.status_code != 429:
+            return False
+        try:
+            wait = float(response.headers.get("Retry-After", ""))
+        except (TypeError, ValueError):
+            wait = _RATE_LIMIT_DEFAULT_PAUSE_SEC
+        wait = min(max(wait, 1.0), _RATE_LIMIT_MAX_PAUSE_SEC)
+        self._gql_paused_until = self._clock() + wait
+        self._note(f"A Twitch respondeu 429 (demasiados pedidos): pausa de {int(wait)} s nos pedidos GraphQL.")
+        return True
+
     def _post_gql_web(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._gql_wait_turn()
         response = self.session.post(
             GQL_URL,
             json=payload,
             headers=self._gql_headers("web"),
             timeout=20,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            self._pause_if_rate_limited(exc)
+            raise
         data = response.json()
         self._note_graphql_errors(payload, data)
         return data
@@ -1168,6 +1214,7 @@ class TwitchClient:
                 break
 
             request_timeout = max(5.0, min(20.0, remaining))
+            self._gql_wait_turn()
             try:
                 response = self.session.post(
                     GQL_URL,
@@ -1178,6 +1225,9 @@ class TwitchClient:
                 response.raise_for_status()
                 data = response.json()
             except requests.RequestException as exc:
+                if self._pause_if_rate_limited(exc):
+                    # Asked to slow down: trying the other profile would only be a second request.
+                    raise
                 last_exception = exc
                 self._note(f"GraphQL request failed with {profile} profile: {exc}")
                 continue

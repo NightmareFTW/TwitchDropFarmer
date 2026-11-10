@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 import re
 import sys
+import time
 import traceback
 import weakref
 from typing import Callable
@@ -101,10 +102,14 @@ RIBBON_NO_CHANNELS = ("SEM CANAIS", "#c0392b")  # red
 RIBBON_SUB         = ("SUBSCRIÇÃO", "#e67e22")  # orange  – campanha apenas para subscritores
 RIBBON_DONE        = ("CONCLUÍDO",  "#2980b9")  # blue    – todos os drops já obtidos
 RIBBON_INACTIVE    = ("INATIVO",   "#7f8c8d")  # gray    – campanha futura, expirada ou sem dados
+RIBBON_UNCHECKED   = ("A VERIFICAR", "#95a5a6")  # grey  – canais ainda não consultados (ver FarmEngine)
 
 # Twitch's integrity check refuses the claim when it comes from this app, so a drop that
 # is ready stays ready. An auto-claim attempt for the same drop is repeated at most this often.
 AUTO_CLAIM_RETRY_SEC = 900
+
+# Forced campaign refreshes (manual button, no-progress recovery...) are spaced at least this far apart.
+FORCED_REFRESH_MIN_SEC = 120.0
 
 
 def ready_drops(campaign: DropCampaign) -> list[tuple[str, str]]:
@@ -902,6 +907,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ends_in_word": "termina em",
         "reason_game_filtered": "Jogo filtrado por whitelist/blacklist.",
         "reason_no_valid_stream": "Sem stream válida depois dos filtros.",
+        "reason_stream_unchecked": "Canais ainda não consultados (a app verifica poucos jogos de cada vez, para não sobrecarregar a Twitch).",
         "reason_stream_selected": "Melhor stream por drops activos e viewers.",
         "reason_channel_priority": "Whitelist de canais aplicada.",
         "reason_account_not_linked": "Conta do jogo ainda não ligada a esta campanha.",
@@ -1200,6 +1206,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ends_in_word": "ends in",
         "reason_game_filtered": "Game filtered by whitelist/blacklist.",
         "reason_no_valid_stream": "No valid stream after filters.",
+        "reason_stream_unchecked": "Channels not looked up yet (the app checks only a few games at a time, to go easy on Twitch).",
         "reason_stream_selected": "Best stream by drops enabled and viewers.",
         "reason_channel_priority": "Channel whitelist priority applied.",
         "reason_account_not_linked": "Game account is not linked for this campaign yet.",
@@ -1750,6 +1757,7 @@ class MainWindow(QMainWindow):
         self._heartbeat_poll_timer.timeout.connect(self._poll_heartbeat_future)
         self._last_refresh_at: str = ""
         self._auto_claim_tried: dict[str, datetime] = {}
+        self._last_forced_refresh_at: float | None = None
         self._sticky_campaign_id: str = ""
         self._streamless_game: str = ""
         self._streamless_campaign_id: str = ""
@@ -1779,9 +1787,6 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_snapshot)
-        self.live_refresh_timer = QTimer(self)
-        self.live_refresh_timer.setInterval(90_000)
-        self.live_refresh_timer.timeout.connect(self.refresh_snapshot)
         self.streamless_timer = QTimer(self)
         # Keep heartbeat cadence close to Twitch's expected minute-watch rhythm.
         self.streamless_timer.setInterval(59_000)
@@ -2072,7 +2077,7 @@ class MainWindow(QMainWindow):
         self.active_lists_note = QLabel()
         self.active_lists_note.setWordWrap(True)
         self.btn_refresh = QPushButton()
-        self.btn_refresh.clicked.connect(self.refresh_snapshot)
+        self.btn_refresh.clicked.connect(lambda: self.refresh_snapshot(force=True))
         self.filters_hint = QLabel()
         self.filters_hint.setWordWrap(True)
 
@@ -3685,6 +3690,8 @@ class MainWindow(QMainWindow):
             return self._t("reason_campaign_completed")
         if decision.reason_code == "no_valid_stream":
             return self._t("reason_no_valid_stream")
+        if decision.reason_code == "stream_unchecked":
+            return self._t("reason_stream_unchecked")
         if decision.reason_code == "account_not_linked":
             return self._t("reason_account_not_linked")
         if decision.reason_code == "subscription_required":
@@ -3847,6 +3854,7 @@ class MainWindow(QMainWindow):
         no_channels_game_keys:  set[str] = set()  # no_valid_stream
         account_link_game_keys: set[str] = set()  # account_not_linked
         subscription_game_keys: set[str] = set()  # subscription_required
+        unchecked_game_keys:    set[str] = set()  # stream_unchecked (channels not looked up yet)
         inactive_game_keys:     set[str] = set()  # upcoming / expired / not_active / no_data
         _inactive_rc = frozenset({
             "campaign_upcoming", "campaign_expired", "campaign_not_active",
@@ -3866,6 +3874,8 @@ class MainWindow(QMainWindow):
                     account_link_game_keys.add(gk)
                 elif rc == "subscription_required":
                     subscription_game_keys.add(gk)
+                elif rc == "stream_unchecked":
+                    unchecked_game_keys.add(gk)
                 elif rc in _inactive_rc:
                     inactive_game_keys.add(gk)
 
@@ -3925,6 +3935,8 @@ class MainWindow(QMainWindow):
             elif game_key in done_game_keys:
                 # Motor reportou campanha concluída (tempo esgotado) mas inventário ainda não confirmou
                 ribbon = RIBBON_DONE
+            elif game_key in unchecked_game_keys:
+                ribbon = RIBBON_UNCHECKED
             elif game_key in inactive_game_keys:
                 ribbon = RIBBON_INACTIVE
             else:
@@ -3971,6 +3983,23 @@ class MainWindow(QMainWindow):
             shown=visible_index, total_whitelist=(len(selected_tokens) if selected_tokens else None)
         )
 
+    def _verify_decision_stream(self, decision: FarmDecision) -> bool:
+        """Look the channel up again for a game the user just picked.
+
+        Channels of games other than the one being farmed are only re-checked now and then,
+        so the saved answer can be old. One request on a user's click is fine.
+        """
+        campaign = decision.campaign
+        try:
+            streams = self.client.fetch_streams(campaign)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Falha ao verificar os canais de {campaign.game_name}: {exc}")
+            return decision.stream is not None
+        self.engine.remember_streams(campaign, streams)
+        decision.stream = self.engine.choose_stream(campaign, streams)
+        decision.reason_code = "stream_selected" if decision.stream is not None else "no_valid_stream"
+        return decision.stream is not None
+
     def _force_farm_game(self, game_key: str, game_label: str) -> None:
         """Força o farm de um jogo específico clicado no dashboard."""
         if self.latest_snapshot is None:
@@ -3983,7 +4012,7 @@ class MainWindow(QMainWindow):
                 if best_decision is None or decision.stream.display_name.casefold() < best_decision.stream.display_name.casefold():
                     best_decision = decision
 
-        if best_decision is None or best_decision.stream is None:
+        if best_decision is None or best_decision.stream is None or not self._verify_decision_stream(best_decision):
             self._log(self._t("dashboard_game_unavailable", game=game_label))
             return
 
@@ -4101,6 +4130,9 @@ class MainWindow(QMainWindow):
                     break
 
         next_decision = candidates[(current_index + 1) % len(candidates)]
+        if not self._verify_decision_stream(next_decision):
+            self._log(self._t("dashboard_game_unavailable", game=next_decision.campaign.game_name))
+            return
         assert next_decision.stream is not None
         self._forced_farm_game = ""
         self._forced_farm_campaign_id = next_decision.campaign.id
@@ -4366,7 +4398,7 @@ class MainWindow(QMainWindow):
                                     "CurrentDrop indica progresso mais recente que o Inventory; "
                                     "a forçar actualização completa imediata."
                                 )
-                                self.refresh_snapshot()
+                                self.refresh_snapshot(force=True)
                                 return
             else:
                 self._log(
@@ -4396,7 +4428,7 @@ class MainWindow(QMainWindow):
         if self._heartbeat_no_progress_cycles >= 3:
             self._heartbeat_no_progress_cycles = 0
             self._log("Sem avanço em 3 heartbeats seguidos; a forçar actualização completa.")
-            self.refresh_snapshot()
+            self.refresh_snapshot(force=True)
 
         if not ok and pending_channel and pending_channel.casefold() != self._streamless_failure_channel.casefold():
             self._streamless_failure_channel = pending_channel
@@ -4659,7 +4691,7 @@ class MainWindow(QMainWindow):
         self._update_auth_status()
         self._log(self._t("oauth_saved"))
         self._log(self._t("oauth_refreshing"))
-        self.refresh_snapshot()
+        self.refresh_snapshot(force=True)
 
     def handle_edit_oauth(self) -> None:
         self._set_oauth_hidden(False)
@@ -4694,7 +4726,7 @@ class MainWindow(QMainWindow):
         self.client.validate_oauth_token()
         self._update_auth_status()
         self._log(self._t("oauth_refreshing"))
-        self.refresh_snapshot()
+        self.refresh_snapshot(force=True)
 
     def handle_save_config(self) -> None:
         self._with_errors(self._do_save_config)
@@ -4720,7 +4752,6 @@ class MainWindow(QMainWindow):
 
     def _do_start(self) -> None:
         self.timer.start(self.config.auto_switch_interval_sec * 1000)
-        self.live_refresh_timer.start()
         self.streamless_timer.start()
         self._set_farming_controls(True)
         self._forced_farm_channel = ""
@@ -4736,7 +4767,6 @@ class MainWindow(QMainWindow):
 
     def handle_stop(self) -> None:
         self.timer.stop()
-        self.live_refresh_timer.stop()
         self.streamless_timer.stop()
         self.client.segment_watcher.stop()
         self._set_farming_controls(False)
@@ -4831,7 +4861,7 @@ class MainWindow(QMainWindow):
         for message in self.client.consume_diagnostics():
             self._log(message)
         if claimed > 0:
-            self.refresh_snapshot()
+            self.refresh_snapshot(force=True)
             self._log(self._t("redeem_auto_done", count=claimed) if auto_mode else self._t("redeem_done", count=claimed))
             return claimed
         if not auto_mode:
@@ -4893,14 +4923,27 @@ class MainWindow(QMainWindow):
                 auto_dismiss_sec=15,
             )
 
-    def refresh_snapshot(self) -> None:
-        """Lança engine.poll() em background. Ignorado se já estiver em curso."""
+    def refresh_snapshot(self, *, force: bool = False) -> None:
+        """Lança engine.poll() em background. Ignorado se já estiver em curso.
+
+        A normal poll is light: the engine reuses its campaign list for a few minutes and
+        only re-checks the channels it needs. ``force`` makes it fetch the campaign list
+        from Twitch now, but never more often than FORCED_REFRESH_MIN_SEC.
+        """
         if self._snap_future is not None and not self._snap_future.done():
             return
         if self._heartbeat_future is not None and not self._heartbeat_future.done():
             return
+        now = time.monotonic()
+        if force and self._last_forced_refresh_at is not None:
+            if now - self._last_forced_refresh_at < FORCED_REFRESH_MIN_SEC:
+                force = False
+        if force:
+            self._last_forced_refresh_at = now
+        # The campaign being farmed is the one whose channel is re-checked on every poll.
+        self.engine.set_focus(self._sticky_campaign_id, self._forced_farm_campaign_id)
         self.dashboard_loading_label.setVisible(True)
-        self._snap_future = self.executor.submit(self.engine.poll)
+        self._snap_future = self.executor.submit(self.engine.poll, force_campaigns=force)
         self._snap_poll_timer.start()
 
     def _poll_snap_future(self) -> None:
@@ -4935,7 +4978,7 @@ class MainWindow(QMainWindow):
             if integrity_limited:
                 self._log("Listagem limitada pela integridade da Twitch; a tentar fallback do browser no thread principal...")
                 try:
-                    enriched_snapshot = self.engine.poll(allow_browser_fallback=True)
+                    enriched_snapshot = self.engine.poll(allow_browser_fallback=True, force_campaigns=True)
                 except Exception as exc:
                     self._log(f"Falha no fallback do browser: {exc}")
                 else:
