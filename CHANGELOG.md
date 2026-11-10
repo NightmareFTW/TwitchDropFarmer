@@ -55,6 +55,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **Vigilância contínua de segmentos HLS (a testar)** — num teste real o
+  heartbeat `sendSpadeEvents` era aceite (`204`) durante 8 minutos e o Inventory
+  da Twitch continuava sem progresso, enquanto ver o mesmo jogo no browser
+  creditava minutos. A app só tocava **um** segmento por minuto; um player pede
+  **todos** os segmentos novos. Passa a existir uma thread própria
+  (`stream_watcher.py`) que, enquanto há um canal alvo, lê a playlist a cada ~2 s e
+  pede só os segmentos novos (primeiros 4 KB, uns poucos KB/s). Usa uma sessão HTTP
+  dedicada ao vídeo, sem o cabeçalho `Authorization` da conta (antes seguia também
+  para os servidores de vídeo). Ainda **não** está confirmado que isto faça a
+  Twitch creditar os minutos: é a hipótese a validar pelo Inventory.
+
 - **Diagnóstico do browser invisível** — quando não captura campanhas, o log
   inclui uma linha `Browser probe:` com o URL final, o título, se há botão de
   login, se existe o cookie `twilight-user`, as operações GraphQL pedidas pela
