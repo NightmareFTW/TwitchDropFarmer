@@ -1890,6 +1890,69 @@ class TestStreamlessHlsFallback(unittest.TestCase):
         )
 
 
+class TestHeartbeatHlsReinforcement(unittest.TestCase):
+    """The heartbeat's own HLS ping is redundant while the segment watcher covers the channel."""
+
+    @staticmethod
+    def _client() -> "TwitchClient":
+        from twitch_drop_farmer.twitch_client import TwitchClient
+
+        client = TwitchClient()
+        client.login_state.oauth_token = "token"
+        client.login_state.user_id = "42"
+        client._stream_info_cached = MagicMock(
+            return_value={"channel_id": "1", "broadcast_id": "2", "game_id": "3"}
+        )
+        client._post_gql_web = MagicMock(
+            return_value={"data": {"sendSpadeEvents": {"statusCode": 204}}}
+        )
+        client._streamless_watch_hls_range_get = MagicMock(return_value=True)
+        client._streamless_watch_hls_head = MagicMock(return_value=True)
+        return client
+
+    def test_the_hls_ping_is_skipped_while_the_watcher_covers_the_channel(self):
+        client = self._client()
+        client.segment_watcher = MagicMock(channel="SomeChannel")
+
+        self.assertTrue(client.streamless_watch_heartbeat("somechannel"))
+
+        client._streamless_watch_hls_range_get.assert_not_called()
+        client._streamless_watch_hls_head.assert_not_called()
+
+    def test_the_hls_ping_still_runs_when_the_watcher_is_idle(self):
+        client = self._client()
+        client.segment_watcher = MagicMock(channel="")
+
+        self.assertTrue(client.streamless_watch_heartbeat("somechannel"))
+
+        client._streamless_watch_hls_range_get.assert_called_once_with("somechannel")
+
+    def test_the_hls_ping_still_runs_when_the_watcher_follows_another_channel(self):
+        client = self._client()
+        client.segment_watcher = MagicMock(channel="otherchannel")
+
+        self.assertTrue(client.streamless_watch_heartbeat("somechannel"))
+
+        client._streamless_watch_hls_range_get.assert_called_once_with("somechannel")
+
+    def test_the_watcher_requests_use_short_timeouts(self):
+        from twitch_drop_farmer.twitch_client import _HLS_WATCH_TIMEOUT
+
+        client = self._client()
+        client._streamless_media_playlist = MagicMock(return_value="https://edge.example/p.m3u8")
+        response = MagicMock(text="#EXTM3U\nseg.ts\n", url="https://edge.example/p.m3u8")
+        response.iter_content.return_value = iter([b"x"])
+        client._stream_http = MagicMock()
+        client._stream_http.get.return_value = response
+
+        client.hls_playlist_snapshot("somechannel")
+        client.hls_touch_segment("somechannel", "https://edge.example/seg.ts")
+
+        timeouts = [call.kwargs["timeout"] for call in client._stream_http.get.call_args_list]
+        self.assertEqual(timeouts, [_HLS_WATCH_TIMEOUT, _HLS_WATCH_TIMEOUT])
+        self.assertLessEqual(max(_HLS_WATCH_TIMEOUT), 10)
+
+
 def _make_parse_campaign_client():
     """Mock TwitchClient suitable for calling _parse_campaign() without network or Qt."""
     client = MagicMock()

@@ -260,6 +260,11 @@ _RETRIEVE_GQL_STORE_JS = """(() => {
 # full scan requested by the user still bypasses this.
 _BROWSER_INTEGRITY_BLOCK_SECONDS = 900.0
 
+# (connect, read) timeouts in seconds for the background HLS watcher's requests. A
+# healthy edge answers in well under a second, so a request that hangs is cut short
+# (and retried on the next 2 s cycle) instead of stalling the watcher for 10+ s.
+_HLS_WATCH_TIMEOUT = (4.0, 8.0)
+
 
 def _probe_shows_integrity_block(probe: dict[str, Any] | None) -> bool:
     """True when the page itself asked for ViewerDropsDashboard (at least twice,
@@ -919,7 +924,7 @@ class TwitchClient:
         playlist_url = self._streamless_media_playlist(channel_login)
         try:
             response = self._stream_session().get(
-                playlist_url, headers=self._stream_headers(channel_login), timeout=10
+                playlist_url, headers=self._stream_headers(channel_login), timeout=_HLS_WATCH_TIMEOUT
             )
             response.raise_for_status()
         except Exception:
@@ -933,7 +938,9 @@ class TwitchClient:
         headers["Range"] = "bytes=0-4095"
         response = None
         try:
-            response = self._stream_session().get(segment_url, headers=headers, timeout=10, stream=True)
+            response = self._stream_session().get(
+                segment_url, headers=headers, timeout=_HLS_WATCH_TIMEOUT, stream=True
+            )
             response.raise_for_status()
             for _chunk in response.iter_content(chunk_size=1024):
                 break
@@ -993,6 +1000,11 @@ class TwitchClient:
             except Exception:
                 pass
         return True
+
+    def _hls_watcher_covers(self, channel_login: str) -> bool:
+        """True while the background segment watcher is requesting this channel's segments."""
+        watching = self.segment_watcher.channel
+        return bool(watching) and watching.casefold() == channel_login.casefold()
 
     def _stream_info_cached(self, channel_login: str) -> dict[str, str]:
         """Return stream info with a 90-second TTL cache to minimise GQL chatter."""
@@ -1071,9 +1083,12 @@ class TwitchClient:
                     f"sendSpadeEvents OK | canal={login} | uid={uid}"
                     f" | broadcast={bcast} | canal_id={ids.get('channel_id', '?')}"
                 )
-                # Reinforce watch attribution with a lightweight media segment touch.
-                # Some sessions acknowledge sendSpadeEvents (204) but only advance
-                # drop minutes once HLS media endpoints are touched periodically.
+                # Some sessions acknowledge sendSpadeEvents (204) but only advance drop
+                # minutes once HLS media endpoints are touched. The background segment
+                # watcher already requests every new segment of this channel, so the
+                # extra (blocking, up to 20 s per call) ping is only needed without it.
+                if self._hls_watcher_covers(login):
+                    return True
                 if not self._streamless_watch_hls_range_get(login):
                     if not self._streamless_watch_hls_head(login):
                         self._note(f"HLS reinforcement ping falhou para {login} (GQL já OK).")

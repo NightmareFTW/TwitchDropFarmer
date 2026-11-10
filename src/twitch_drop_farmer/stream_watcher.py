@@ -62,6 +62,9 @@ class SegmentWatcher:
         error_backoff_sec: float = 10.0,
         max_backoff_sec: float = 60.0,
         summary_every_sec: float = 60.0,
+        slow_cycle_sec: float = 8.0,
+        slow_note_every_sec: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fetch_playlist = fetch_playlist
         self._touch_segment = touch_segment
@@ -70,6 +73,18 @@ class SegmentWatcher:
         self._error_backoff = error_backoff_sec
         self._max_backoff = max_backoff_sec
         self._summary_every = summary_every_sec
+        # Timing diagnostics: a normal cycle takes well under a second. A cycle that
+        # takes ``slow_cycle_sec`` or more is reported (at most once per
+        # ``slow_note_every_sec``) with the split between playlist and segment time,
+        # so a stall can be pinned on the exact call that blocked.
+        self._slow_cycle = slow_cycle_sec
+        self._slow_note_every = slow_note_every_sec
+        self._clock = clock
+        self._last_slow_note: float | None = None
+        self.last_fetch_sec = 0.0
+        self.last_touch_sec = 0.0
+        self._window_slowest = 0.0
+        self._window_slow_cycles = 0
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -129,7 +144,13 @@ class SegmentWatcher:
         when every segment request failed, so the caller backs off (and the client
         re-resolves the expiring playback token).
         """
-        text, base_url = self._fetch_playlist(login)
+        self.last_fetch_sec = 0.0
+        self.last_touch_sec = 0.0
+        started = self._clock()
+        try:
+            text, base_url = self._fetch_playlist(login)
+        finally:
+            self.last_fetch_sec = self._clock() - started
         urls = playlist_segment_urls(text, base_url)
         if first_pass:
             fresh = urls[-1:]
@@ -139,28 +160,50 @@ class SegmentWatcher:
             fresh = [url for url in urls if url not in seen]
         touched = 0
         last_error: Exception | None = None
-        for url in fresh:
-            seen.add(url)
-            try:
-                self._touch_segment(login, url)
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                self.errors += 1
-                continue
-            touched += 1
-            self.segments_touched += 1
+        touch_started = self._clock()
+        try:
+            for url in fresh:
+                seen.add(url)
+                try:
+                    self._touch_segment(login, url)
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    self.errors += 1
+                    continue
+                touched += 1
+                self.segments_touched += 1
+        finally:
+            self.last_touch_sec = self._clock() - touch_started
         if fresh and touched == 0 and last_error is not None:
             raise last_error
         return touched
+
+    def _record_cycle(self, login: str, elapsed: float) -> None:
+        """Track how long one poll cycle took; report the slow ones (rate limited)."""
+        self._window_slowest = max(self._window_slowest, elapsed)
+        if elapsed < self._slow_cycle:
+            return
+        self._window_slow_cycles += 1
+        now = self._clock()
+        if self._last_slow_note is not None and now - self._last_slow_note < self._slow_note_every:
+            return
+        self._last_slow_note = now
+        self._note(
+            f"Vigilância HLS de {login}: ciclo lento de {elapsed:.1f} s "
+            f"(playlist {self.last_fetch_sec:.1f} s, segmentos {self.last_touch_sec:.1f} s)."
+        )
 
     def _run(self, login: str, stop_event: threading.Event) -> None:
         seen = _RecentSet()
         first_pass = True
         failures = 0
-        window_started = time.monotonic()
+        window_started = self._clock()
         window_segments = self.segments_touched
         window_errors = self.errors
+        self._window_slowest = 0.0
+        self._window_slow_cycles = 0
         while not stop_event.is_set():
+            cycle_started = self._clock()
             try:
                 self._iteration(login, seen, first_pass)
                 first_pass = False
@@ -174,13 +217,17 @@ class SegmentWatcher:
                 # The playlist (or its token) may have expired: start from the live edge again.
                 first_pass = True
                 wait = min(self._error_backoff * failures, self._max_backoff)
-            now = time.monotonic()
+            now = self._clock()
+            self._record_cycle(login, now - cycle_started)
             if now - window_started >= self._summary_every:
                 self._note(
                     f"Vigilância HLS de {login}: {self.segments_touched - window_segments} segmento(s) "
-                    f"pedidos e {self.errors - window_errors} erro(s) em {int(now - window_started)} s."
+                    f"pedidos e {self.errors - window_errors} erro(s) em {int(now - window_started)} s "
+                    f"(ciclo mais lento {self._window_slowest:.1f} s, {self._window_slow_cycles} lento(s))."
                 )
                 window_started = now
                 window_segments = self.segments_touched
                 window_errors = self.errors
+                self._window_slowest = 0.0
+                self._window_slow_cycles = 0
             stop_event.wait(wait)
