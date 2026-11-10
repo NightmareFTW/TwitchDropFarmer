@@ -6,6 +6,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **Nomes de jogo errados no fallback do registry público** — quando a Twitch
+  bloqueia a listagem por `integrity check`, a app usa o `twitchdrops.app`, mas o
+  nome do jogo era extraído achatando o cartão inteiro em texto e cortando na
+  primeira palavra "drop(s)", pelo que a contagem de drops ficava colada ao nome
+  (ex.: "Planet Zoo 2 1", "VAIL 4"). A Twitch não resolve esses nomes para nenhum
+  jogo, por isso nunca se encontrava nenhum stream e nada era farmável. O nome é
+  agora lido do elemento próprio do cartão (com o `alt` da imagem como segunda
+  opção); a heurística antiga fica só como último recurso. A lista passa de ~199
+  entradas duplicadas para um registo por jogo.
+
 ## [2.2.43] - 2026-09-04
 
 ### Fixed

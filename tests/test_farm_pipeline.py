@@ -335,6 +335,62 @@ class TestFarmEnginePipeline(unittest.TestCase):
         self.assertIn("The Finals", {campaign.game_name for campaign in campaigns})
         self.assertTrue(all(campaign.link_url.startswith("https://") for campaign in campaigns))
 
+    def test_external_registry_names_do_not_absorb_the_drop_count(self):
+        """Regression: twitchdrops.app cards put the drop count right after the name.
+
+        Flattening the card to text produced names like "Planet Zoo 2 1" / "VAIL 4";
+        Twitch resolves no game slug for those, so no stream was ever found and
+        every registry campaign ended up unfarmable. The exact name must come from
+        the dedicated title element (captured from the live site layout).
+        """
+        client = TwitchClient()
+        fake_html = """
+        <html><body>
+        <a href="/game/crystal-of-atlan" class="sb-card">
+          <img src="https://static-cdn.jtvnw.net/x/a.png" alt="Crystal of Atlan" class="sb-art" loading="lazy">
+          <div class="sb-name"><div class="sb-name-title">Crystal of Atlan</div>
+            <div class="sb-name-sub">5 drops · in 58m</div></div>
+          <span class="sb-urgency ending-urgent"></span>
+        </a>
+        <a href="/game/planet-zoo-2" class="sb-card">
+          <img src="https://static-cdn.jtvnw.net/x/b.png" alt="Planet Zoo 2" class="sb-art" loading="lazy">
+          <div class="sb-name"><div class="sb-name-title">Planet Zoo 2</div>
+            <div class="sb-name-sub">1 drop · in 2h 57m</div></div>
+        </a>
+        <a href="/game/vail-vr" class="sb-card">
+          <img src="https://static-cdn.jtvnw.net/x/c.png" alt="VAIL" class="sb-art" loading="lazy">
+          <div class="sb-name"><div class="sb-name-title">VAIL</div>
+            <div class="sb-name-sub">4 drops · in 3h 58m</div></div>
+        </a>
+        <a href="/game/eso" class="sb-card">
+          <div class="sb-name"><div class="sb-name-title">The Elder Scrolls Online: The Gold Road</div>
+            <div class="sb-name-sub">2 drops · in 1d 2h</div></div>
+        </a>
+        <a href="/game/no-title-element">
+          <img src="https://static-cdn.jtvnw.net/x/d.png" alt="Alt Only Game" loading="lazy">
+          <span>3 drops · in 5h</span>
+        </a>
+        </body></html>
+        """
+
+        with patch("twitch_drop_farmer.twitch_client.requests.get") as get_mock:
+            get_mock.return_value = MagicMock(status_code=200, text=fake_html)
+            campaigns = client._campaigns_from_external_registry()
+
+        self.assertEqual(
+            [campaign.game_name for campaign in campaigns],
+            [
+                "Crystal of Atlan",
+                "Planet Zoo 2",
+                "VAIL",
+                # Repeated words ("The ... The") must survive untouched.
+                "The Elder Scrolls Online: The Gold Road",
+                # No title element: fall back to the cover image alt text.
+                "Alt Only Game",
+            ],
+        )
+        self.assertEqual(len({campaign.id for campaign in campaigns}), len(campaigns))
+
     def test_external_registry_game_page_parses_mixed_watch_and_sub_rewards(self):
         """A game page with normal watch rewards and sub rewards must keep the game farmable until the normal drops finish."""
         client = TwitchClient()
