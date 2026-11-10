@@ -275,6 +275,56 @@ def _probe_shows_integrity_block(probe: dict[str, Any] | None) -> bool:
     return asked_dashboard and integrity_error
 
 
+# Clicks the "claim" buttons on the drops inventory page, each element at most once.
+# The previous version matched any button whose text merely *contained* claim /
+# redeem / collect and re-clicked the same persistent buttons every 1.5 s, so the
+# loop never saw an "empty" round, always ran into the 35 s timeout (blocking the
+# UI thread) and reported ~20 "claimed drops" per run. Now: only text that STARTS
+# with a claim verb (so "Claimed" is ignored), one click per element, and the
+# clicked labels are returned so a misfire is visible in the log.
+_CLAIM_BUTTONS_JS = """(() => {
+    const claimVerb = /^(claim|reivindicar|resgatar)\\b/;
+    const labels = [];
+    for (const button of Array.from(document.querySelectorAll("button"))) {
+        if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") continue;
+        if (button.dataset && button.dataset.tdfClicked === "1") continue;
+        const text = (button.innerText || button.textContent || "").trim().toLowerCase().replace(/\\s+/g, " ");
+        if (!text || !claimVerb.test(text)) continue;
+        if (button.dataset) button.dataset.tdfClicked = "1";
+        button.click();
+        labels.push(text.slice(0, 40));
+    }
+    return JSON.stringify({clicked: labels.length, labels: labels});
+})();"""
+
+
+def _parse_claim_result(raw: Any) -> tuple[int, list[str]]:
+    """Decode what _CLAIM_BUTTONS_JS returned: (buttons clicked, their labels).
+
+    Also accepts a bare number (the older script's return value). Anything else is
+    treated as "nothing clicked" so a malformed result can never inflate the count.
+    """
+    if isinstance(raw, bool):
+        return 0, []
+    if isinstance(raw, (int, float)):
+        return max(0, int(raw)), []
+    if not isinstance(raw, str):
+        return 0, []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return 0, []
+    if not isinstance(data, dict):
+        return 0, []
+    try:
+        clicked = max(0, int(data.get("clicked") or 0))
+    except (TypeError, ValueError):
+        clicked = 0
+    labels = data.get("labels")
+    clean = [str(item) for item in labels] if isinstance(labels, list) else []
+    return clicked, clean
+
+
 def _describe_browser_probe(probe: dict[str, Any] | None) -> str:
     """One-line, secret-free summary of what the invisible browser page did.
 
@@ -3355,6 +3405,7 @@ class TwitchClient:
             "empty_rounds": 0,
             "timed_out": False,
             "loaded": False,
+            "labels": [],
         }
 
         def finish() -> None:
@@ -3362,44 +3413,18 @@ class TwitchClient:
                 loop.quit()
 
         def scan_and_claim() -> None:
-            script = """
-                (() => {
-                    const labels = ["claim", "redeem", "resgatar", "reivindicar", "collect"];
-                    const buttons = Array.from(document.querySelectorAll("button"));
-                    let clicked = 0;
-                    for (const button of buttons) {
-                        if (!button || button.disabled) {
-                            continue;
-                        }
-                        const text = (button.innerText || button.textContent || "").trim().toLowerCase();
-                        if (!text) {
-                            continue;
-                        }
-                        if (!labels.some((label) => text.includes(label))) {
-                            continue;
-                        }
-                        button.click();
-                        clicked += 1;
-                    }
-                    return clicked;
-                })();
-            """
-
             def on_result(raw: Any) -> None:
-                clicked = 0
-                if isinstance(raw, int):
-                    clicked = raw
-                elif isinstance(raw, float):
-                    clicked = int(raw)
+                clicked, labels = _parse_claim_result(raw)
                 if clicked > 0:
                     state["clicked_total"] += clicked
+                    state["labels"].extend(labels)
                     state["empty_rounds"] = 0
                     return
                 state["empty_rounds"] += 1
                 if state["loaded"] and state["empty_rounds"] >= 3:
                     finish()
 
-            page.runJavaScript(script, on_result)
+            page.runJavaScript(_CLAIM_BUTTONS_JS, on_result)
 
         def on_loaded(ok: bool) -> None:
             state["loaded"] = True
@@ -3435,7 +3460,8 @@ class TwitchClient:
 
         clicked_total = int(state["clicked_total"])
         if clicked_total > 0:
-            self._note(f"Claimed {clicked_total} drop reward button(s) from inventory page.")
+            shown = ", ".join(sorted({str(label) for label in state["labels"]}))
+            self._note(f"Claimed {clicked_total} drop reward button(s) from inventory page: {shown}")
         return clicked_total
 
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:

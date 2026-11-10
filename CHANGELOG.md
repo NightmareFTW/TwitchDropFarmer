@@ -30,6 +30,19 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   `Heartbeat sem campanha reconciliada`). Corrigido para `ID!`, validado contra a
   API real.
 
+- **«Actualizar drops» fazia uma sondagem completa por cada jogo** — com 98 jogos
+  na whitelist eram 98 × `poll(full_scan=True)` seguidos, na thread da interface
+  (~13 s cada, 20+ minutos): a janela ficava «Não responde» e o temporizador do
+  heartbeat quase não corria (16 heartbeats em 22 min, com ~2 min de intervalo em
+  vez de 1). Uma única sondagem completa já percorre toda a whitelist; passa a
+  fazer-se só uma, com o jogo em farming à frente.
+- **O auto-claim nunca terminava e contava drops que não existiam** — o script
+  clicava de 1,5 em 1,5 s nos mesmos botões cujo texto *continha* claim/redeem/
+  collect, nunca via uma ronda «vazia», batia sempre no timeout de 35 s (bloqueando
+  a interface) e reportava ~20 «drops» por execução. Agora só conta texto que
+  *começa* por um verbo de claim (não «Claimed»), clica uma vez por elemento, pára
+  ao fim de 3 rondas sem botões novos e regista os botões clicados no log.
+
 ### Changed
 
 - **O browser invisível deixa de esperar por um resultado impossível** — quando a
