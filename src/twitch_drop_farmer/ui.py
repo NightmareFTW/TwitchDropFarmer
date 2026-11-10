@@ -4719,11 +4719,16 @@ class MainWindow(QMainWindow):
         self.btn_dashboard_refresh_drops.setEnabled(False)
         self._log(self._t("dashboard_drop_refresh_started", count=len(games)))
         try:
-            for game_name in games:
-                self.engine.client.set_priority_game(game_name)
-                snapshot = self.engine.poll(allow_browser_fallback=True, full_scan=True)
-                self._apply_snapshot(snapshot, from_browser_enrichment=True)
-                self._log(f"Drops de '{game_name}' actualizados.")
+            # One full-scan poll already visits EVERY whitelisted campaign (it lifts
+            # the per-cycle detail cap). Repeating it once per game, as this loop
+            # used to, re-scanned the whole whitelist N times: ~13 s each on the UI
+            # thread, i.e. 20+ minutes frozen with ~100 games, starving the
+            # heartbeat timer. The currently farmed game goes first so its drop
+            # detail is fetched with priority.
+            decision = self._current_farm_decision()
+            self.engine.client.set_priority_game(decision.campaign.game_name if decision is not None else games[0])
+            snapshot = self.engine.poll(allow_browser_fallback=True, full_scan=True)
+            self._apply_snapshot(snapshot, from_browser_enrichment=True)
         finally:
             self.btn_dashboard_refresh_drops.setEnabled(True)
         self._log(self._t("dashboard_drop_refresh_done", count=len(games)))

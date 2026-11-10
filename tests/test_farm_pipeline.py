@@ -1183,6 +1183,74 @@ class TestDashboardIntegrityFallback(unittest.TestCase):
         self.assertIn("a página não respondeu", _describe_browser_probe({}))
 
 
+class TestClaimButtonsScriptResult(unittest.TestCase):
+    """The old claim script re-clicked the same persistent buttons every 1.5 s, so
+    it never saw an empty round, always hit the 35 s timeout on the UI thread and
+    reported ~20 "claimed drops" per run (seen in the user's log)."""
+
+    def test_parses_the_json_result_with_labels(self):
+        from twitch_drop_farmer.twitch_client import _parse_claim_result
+
+        self.assertEqual(
+            _parse_claim_result('{"clicked": 2, "labels": ["claim now", "claim"]}'),
+            (2, ["claim now", "claim"]),
+        )
+
+    def test_accepts_a_bare_number_and_rejects_garbage_safely(self):
+        from twitch_drop_farmer.twitch_client import _parse_claim_result
+
+        self.assertEqual(_parse_claim_result(3), (3, []))
+        self.assertEqual(_parse_claim_result(2.0), (2, []))
+        self.assertEqual(_parse_claim_result(-5), (0, []))
+        self.assertEqual(_parse_claim_result(True), (0, []))
+        self.assertEqual(_parse_claim_result(None), (0, []))
+        self.assertEqual(_parse_claim_result("not json"), (0, []))
+        self.assertEqual(_parse_claim_result("[1, 2]"), (0, []))
+        self.assertEqual(_parse_claim_result('{"clicked": "x"}'), (0, []))
+
+    def test_script_only_matches_text_that_starts_with_a_claim_verb(self):
+        from twitch_drop_farmer.twitch_client import _CLAIM_BUTTONS_JS
+
+        self.assertIn("claim|reivindicar|resgatar", _CLAIM_BUTTONS_JS)
+        # "Claimed" must not match, and each element may only be clicked once.
+        self.assertIn("\\b", _CLAIM_BUTTONS_JS)
+        self.assertIn("tdfClicked", _CLAIM_BUTTONS_JS)
+        for noisy in ('"redeem"', '"collect"'):
+            self.assertNotIn(noisy, _CLAIM_BUTTONS_JS)
+
+
+class TestDashboardDropRefresh(unittest.TestCase):
+    def test_refresh_does_one_full_scan_poll_not_one_per_game(self):
+        """Regression: it polled once per whitelisted game (98x in the user's log),
+        each poll ~13 s on the UI thread, freezing the app for 20+ minutes."""
+        from twitch_drop_farmer.ui import MainWindow
+
+        fake = MagicMock()
+        fake._dashboard_whitelist_games.return_value = [f"Game {index}" for index in range(98)]
+        fake._current_farm_decision.return_value = None
+        snapshot = MagicMock()
+        fake.engine.poll.return_value = snapshot
+
+        MainWindow._do_dashboard_drop_refresh(fake)
+
+        fake.engine.poll.assert_called_once_with(allow_browser_fallback=True, full_scan=True)
+        fake._apply_snapshot.assert_called_once_with(snapshot, from_browser_enrichment=True)
+        fake.engine.client.set_priority_game.assert_called_once_with("Game 0")
+        # The button is re-enabled even though only one poll ran.
+        fake.btn_dashboard_refresh_drops.setEnabled.assert_called_with(True)
+
+    def test_refresh_prioritises_the_game_currently_being_farmed(self):
+        from twitch_drop_farmer.ui import MainWindow
+
+        fake = MagicMock()
+        fake._dashboard_whitelist_games.return_value = ["Alpha", "Beta"]
+        fake._current_farm_decision.return_value = MagicMock(campaign=MagicMock(game_name="Beta"))
+
+        MainWindow._do_dashboard_drop_refresh(fake)
+
+        fake.engine.client.set_priority_game.assert_called_once_with("Beta")
+
+
 class TestCurrentDropQuery(unittest.TestCase):
     """Regression: the app logged `CurrentDrop: Variable "$channelID" of type
     "String!" used in position expecting type "ID"`, so the drop-session progress
