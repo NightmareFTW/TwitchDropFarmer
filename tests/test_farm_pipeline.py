@@ -443,7 +443,9 @@ class TestFarmEnginePipeline(unittest.TestCase):
         self.assertIn("source", DropCampaign.__slots__)
 
     def test_fetch_campaigns_uses_external_registry_when_dashboard_is_integrity_limited(self):
-        """When Twitch is integrity-limited, the external registry must replace the partial source list."""
+        """When Twitch is integrity-limited, the full external registry listing is used instead of
+        the partial dashboard list, AND whatever the Inventory reports as in progress is kept
+        (it carries the real progress; dropping it made the dashboard fall back to 0/0)."""
         client = TwitchClient()
 
         inventory_payload = {
@@ -493,9 +495,11 @@ class TestFarmEnginePipeline(unittest.TestCase):
             client.login_state.oauth_token = "token"
             campaigns = client.fetch_campaigns()
 
-        self.assertEqual(len(campaigns), 1)
-        self.assertEqual(campaigns[0].game_name, "Full Registry Campaign")
-        self.assertEqual(campaigns[0].source, "external_registry")
+        by_game = {campaign.game_name: campaign for campaign in campaigns}
+        self.assertEqual(set(by_game), {"Full Registry Campaign", "Partial Campaign"})
+        self.assertEqual(by_game["Full Registry Campaign"].source, "external_registry")
+        # The campaign Twitch's Inventory says is in progress is never discarded for the registry.
+        self.assertEqual(by_game["Partial Campaign"].source, "twitch")
 
     def test_fetch_campaigns_uses_external_registry_when_dashboard_user_is_missing(self):
         """If Twitch returns no dashboard payload, the external registry should still be used."""
@@ -1157,6 +1161,65 @@ class TestDashboardIntegrityFallback(unittest.TestCase):
 
         self.assertEqual([campaign.id for campaign in campaigns], [campaign_id])
         client._campaigns_from_external_registry.assert_not_called()
+
+    def test_with_inventory_campaigns_replaces_the_registry_entry_of_the_same_game(self):
+        client = self._make_client()
+        in_progress = DropCampaign(
+            id="11111111-2222-4333-8444-555555555555",
+            game_name="MARVEL SNAP",
+            title="Knights of Avalon Drops!",
+            starts_at=datetime.now(UTC) - timedelta(days=1),
+            ends_at=datetime.now(UTC) + timedelta(days=2),
+            status="ACTIVE",
+            required_minutes=360,
+            progress_minutes=22,
+            drops=_make_drops(3),
+        )
+        registry = [_browser_campaign("MARVEL SNAP", "aaa"), _browser_campaign("Other Game", "bbb")]
+        client._parse_campaign = MagicMock(return_value=in_progress)
+
+        result = client._with_inventory_campaigns(registry, {in_progress.id: {"id": in_progress.id}})
+
+        self.assertEqual([c.id for c in result], [in_progress.id, "browser-bbb"])
+        # Nothing in progress: the registry list is returned untouched.
+        self.assertIs(client._with_inventory_campaigns(registry, {}), registry)
+        # An Inventory entry that cannot be parsed is skipped, not fatal.
+        client._parse_campaign = MagicMock(return_value=None)
+        self.assertIs(client._with_inventory_campaigns(registry, {"x": {"id": "x"}}), registry)
+
+    def test_registry_fallback_keeps_the_campaigns_the_inventory_says_are_in_progress(self):
+        """Regression: with the dashboard integrity-blocked the app fell back to the
+        registry and ignored the Inventory it had just read, so the real progress
+        (e.g. 22/360 min) flickered back to 0/0 on every refresh."""
+        client = self._make_client()
+        campaign_id = "11111111-2222-4333-8444-555555555555"
+        in_progress = DropCampaign(
+            id=campaign_id,
+            game_name="MARVEL SNAP",
+            title="Knights of Avalon Drops!",
+            starts_at=datetime.now(UTC) - timedelta(days=1),
+            ends_at=datetime.now(UTC) + timedelta(days=2),
+            status="ACTIVE",
+            required_minutes=360,
+            progress_minutes=22,
+            drops=_make_drops(3),
+        )
+        registry_snap = _browser_campaign("MARVEL SNAP", "aaa")
+        registry_other = _browser_campaign("Other Game", "bbb")
+        client._campaigns_from_drops_page = MagicMock(return_value={})
+        client._campaigns_from_external_registry = MagicMock(return_value=[registry_snap, registry_other])
+        client._parse_campaign = MagicMock(return_value=in_progress)
+        inventory = {"data": {"currentUser": {"inventory": {"dropCampaignsInProgress": [{"id": campaign_id}]}}}}
+        blocked = {"errors": [{"message": "failed integrity check"}], "data": {"currentUser": {}}}
+        client._post_gql = MagicMock(side_effect=[inventory, blocked])
+
+        campaigns = client.fetch_campaigns(allow_browser_fallback=False)
+
+        by_id = {campaign.id: campaign for campaign in campaigns}
+        self.assertIn(campaign_id, by_id)
+        self.assertEqual(by_id[campaign_id].progress_minutes, 22)
+        self.assertNotIn(registry_snap.id, by_id)  # replaced by the Inventory entry
+        self.assertIn(registry_other.id, by_id)  # other games still come from the registry
 
     def test_browser_probe_description_is_informative_and_secret_free(self):
         from twitch_drop_farmer.twitch_client import _describe_browser_probe

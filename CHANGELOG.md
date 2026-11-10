@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.45] - 2026-11-10
+
+### Fixed
+
+- **O progresso real voltava a 0/0 a cada actualização** — quando o dashboard da
+  Twitch está bloqueado a app usa o registry público (só nome do jogo, nº de drops
+  e tempo restante) e **ignorava o Inventory** que acabara de ler, mesmo com uma
+  campanha em progresso (ex.: 22/360 min). O progresso só aparecia nos instantes a
+  seguir a cada heartbeat e desaparecia na actualização seguinte («Sem drops activos
+  para mostrar»). Agora as campanhas do Inventory entram sempre e substituem a
+  entrada do registry do mesmo jogo, com os drops e minutos reais.
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.45`.
+
 ## [2.2.44] - 2026-11-10
 
 ### Fixed
