@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import platform
 import re
 import sys
 import time
@@ -17,6 +18,7 @@ from urllib.parse import quote
 
 import requests
 
+import PySide6
 from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, QPoint, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygon
 
@@ -80,7 +82,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import load_config, save_config
+from .config import CONFIG_DIR, load_config, save_config
+from .log_export import save_log
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
 from .twitch_client import TwitchClient
@@ -890,6 +893,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "open_drops_page": "Abrir página de Drops",
         "link_button_disabled": "Selecciona uma campanha com conta por ligar.",
         "log_label": "Log",
+        "save_log_button": "Guardar log",
+        "save_log_tooltip": "Guarda o log actual num ficheiro (com os tokens mascarados) e copia o caminho do ficheiro, para o colares num explorador de ficheiros sem copiar e colar o log todo.",
+        "log_saved": "Log guardado em: {path} (caminho copiado: é só colar).",
         "error_title": "Erro",
         "oauth_saved": "auth-token guardado e validado.",
         "oauth_refreshing": "Token validado. A actualizar campanhas...",
@@ -1189,6 +1195,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "open_drops_page": "Open Drops page",
         "link_button_disabled": "Select a campaign that still needs account linking.",
         "log_label": "Log",
+        "save_log_button": "Save log",
+        "save_log_tooltip": "Saves the current log to a file (tokens masked) and copies the file's path, so you can paste it into a file browser instead of copy-pasting the whole log.",
+        "log_saved": "Log saved to: {path} (path copied: just paste it).",
         "error_title": "Error",
         "oauth_saved": "auth-token saved and validated.",
         "oauth_refreshing": "Token validated. Refreshing campaigns...",
@@ -2451,6 +2460,9 @@ class MainWindow(QMainWindow):
         link_row.addWidget(self.btn_link_account)
         link_row.addWidget(self.btn_open_drops_page)
         self.log_label = QLabel()
+        self.btn_save_log = QPushButton()
+        self.btn_save_log.setMaximumHeight(24)
+        self.btn_save_log.clicked.connect(self.handle_save_log)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
 
@@ -2464,7 +2476,11 @@ class MainWindow(QMainWindow):
         self.tabs_right.addTab(farming_tab, "")
         self.tabs_right.addTab(campaigns_tab, "")
         vbox.addWidget(self.tabs_right, 3)
-        vbox.addWidget(self.log_label)
+        log_row = QHBoxLayout()
+        log_row.addWidget(self.log_label)
+        log_row.addStretch(1)
+        log_row.addWidget(self.btn_save_log)
+        vbox.addLayout(log_row)
         vbox.addWidget(self.log_output, 1)
         version_row = QHBoxLayout()
         version_row.addStretch(1)
@@ -2939,6 +2955,8 @@ class MainWindow(QMainWindow):
         self.btn_link_account.setText(self._t("link_account"))
         self.btn_open_drops_page.setText(self._t("open_drops_page"))
         self.log_label.setText(self._t("log_label"))
+        self.btn_save_log.setText(self._t("save_log_button"))
+        self.btn_save_log.setToolTip(self._t("save_log_tooltip"))
         self._refresh_filter_lists()
         self._refresh_filter_tab_counts()
         self._refresh_dashboard_games()
@@ -2963,6 +2981,36 @@ class MainWindow(QMainWindow):
     def _log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_output.append(f"[{timestamp}] {message}")
+
+    def _log_report_header(self) -> list[str]:
+        """What a bug report needs besides the log itself (no secrets)."""
+        lines = [
+            f"Twitch Drop Farmer {__version__}",
+            f"Saved at: {datetime.now().isoformat(timespec='seconds')}",
+            f"System: {platform.platform()}",
+            f"Python {platform.python_version()} | PySide6 {PySide6.__version__}",
+            f"Farming: {'running' if self.timer.isActive() else 'stopped'}",
+        ]
+        decision = self._current_farm_decision()
+        if decision is not None:
+            campaign = decision.campaign
+            channel = decision.stream.login if decision.stream is not None else "-"
+            lines.append(f"Target: {campaign.game_name} | {campaign.title} | channel {channel}")
+        return lines
+
+    def handle_save_log(self) -> None:
+        self._with_errors(self._do_save_log)
+
+    def _do_save_log(self) -> None:
+        """Save the log to a file and put the file's path on the clipboard."""
+        path = save_log(
+            self.log_output.toPlainText(),
+            self._log_report_header(),
+            CONFIG_DIR,
+            version=__version__,
+        )
+        QApplication.clipboard().setText(str(path))
+        self._log(self._t("log_saved", path=str(path)))
 
     def _sort_mode_label(self) -> str:
         return self._t(f"sort_{self.config.sort_mode}")

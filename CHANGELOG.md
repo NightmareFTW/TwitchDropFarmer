@@ -6,6 +6,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.51] - 2026-11-10
+
+### Added
+
+- **Botão «Guardar log»** (canto superior direito da zona do log) — grava o log num
+  ficheiro em `~/.twitch-drop-farmer/logs/` (`log-<versão>-<data>-<hora>.txt`, no
+  Windows `C:\Users\<utilizador>\.twitch-drop-farmer\logs\`) e **copia o caminho
+  do ficheiro para a área de transferência**, para o colares num explorador de ficheiros
+  e anexares o ficheiro em vez de copiar e colar o log todo. O ficheiro começa com um
+  cabeçalho (versão, sistema, se está a farmar, jogo e canal) e os tokens são mascarados
+  (`<redacted>`) antes de gravar. Ficam guardados os 20 ficheiros mais recentes.
+
 ## [2.2.50] - 2026-11-10
 
 ### Fixed
