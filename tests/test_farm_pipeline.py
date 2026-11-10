@@ -1183,6 +1183,84 @@ class TestDashboardIntegrityFallback(unittest.TestCase):
         self.assertIn("a página não respondeu", _describe_browser_probe({}))
 
 
+class TestBrowserIntegrityCircuitBreaker(unittest.TestCase):
+    """When the page's own ViewerDropsDashboard request is rejected by the integrity
+    check, the invisible browser is the thing being refused: waiting longer or
+    scraping the (equally blocked) HTML cannot work, and retrying every cycle just
+    burns ~70 s each time."""
+
+    @staticmethod
+    def _client() -> "TwitchClient":
+        client = TwitchClient.__new__(TwitchClient)
+        client._note = MagicMock()
+        client._harvested_integrity_token = "browser-token"
+        client._harvested_integrity_token_captured_mono = time.monotonic()
+        return client
+
+    def test_probe_detects_integrity_rejection_of_the_pages_own_dashboard_request(self):
+        from twitch_drop_farmer.twitch_client import _probe_shows_integrity_block
+
+        blocked = {"ops": {"ViewerDropsDashboard": 2, "Inventory": 1}, "errors": ["failed integrity check"]}
+        self.assertTrue(_probe_shows_integrity_block(blocked))
+        # Not conclusive yet: the page has only asked once (it may still retry).
+        self.assertFalse(_probe_shows_integrity_block({**blocked, "ops": {"ViewerDropsDashboard": 1}}))
+        # An unrelated error must not trip the breaker.
+        self.assertFalse(_probe_shows_integrity_block({**blocked, "errors": ["service error"]}))
+        self.assertFalse(_probe_shows_integrity_block({"ops": {}, "errors": []}))
+        self.assertFalse(_probe_shows_integrity_block(None))
+
+    def test_block_window_expires(self):
+        client = self._client()
+        self.assertFalse(client._browser_integrity_block_active())  # attribute not set yet
+        client._browser_integrity_blocked_until = time.monotonic() + 60
+        self.assertTrue(client._browser_integrity_block_active())
+        client._browser_integrity_blocked_until = time.monotonic() - 1
+        self.assertFalse(client._browser_integrity_block_active())
+
+    def test_browser_is_not_launched_while_blocked(self):
+        client = self._client()
+        client._browser_integrity_blocked_until = time.monotonic() + 600
+        client._campaigns_via_browser_gql_intercept = MagicMock()
+
+        self.assertEqual(client._campaigns_from_browser_page(), [])
+
+        client._campaigns_via_browser_gql_intercept.assert_not_called()
+
+    def test_explicit_full_scan_bypasses_the_block(self):
+        client = self._client()
+        client._browser_integrity_blocked_until = time.monotonic() + 600
+        campaign = _browser_campaign("Some Game")
+        client._campaigns_via_browser_gql_intercept = MagicMock(return_value=[campaign])
+
+        self.assertEqual(client._campaigns_from_browser_page(full_scan=True), [campaign])
+
+        client._campaigns_via_browser_gql_intercept.assert_called_once()
+
+    def test_html_scrape_is_skipped_once_the_page_was_rejected(self):
+        client = self._client()
+
+        def rejected_by_integrity_check(*, full_scan: bool = False):
+            client._browser_integrity_blocked_until = time.monotonic() + 600
+            return []
+
+        client._campaigns_via_browser_gql_intercept = MagicMock(side_effect=rejected_by_integrity_check)
+
+        # Reaching the HTML-scrape stage would try to start a real QtWebEngine page.
+        self.assertEqual(client._campaigns_from_browser_page(), [])
+
+        notes = " ".join(str(call.args[0]) for call in client._note.call_args_list)
+        self.assertIn("Análise de HTML dispensada", notes)
+
+    def test_harvested_token_is_not_retried_after_the_page_was_rejected(self):
+        client = self._client()
+        client._browser_integrity_blocked_until = time.monotonic() + 600
+        client._post_gql = MagicMock()
+
+        self.assertIsNone(client._retry_dashboard_with_harvested_integrity())
+
+        client._post_gql.assert_not_called()
+
+
 class TestFetchStreamsSlugResolution(unittest.TestCase):
     """
     Unit tests for TwitchClient.fetch_streams() and related methods.

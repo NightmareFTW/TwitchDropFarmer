@@ -252,6 +252,29 @@ _RETRIEVE_GQL_STORE_JS = """(() => {
 })();"""
 
 
+# How long the invisible browser fallback is skipped after Twitch's integrity
+# check rejected the page's own dashboard request. Retrying sooner only burns
+# ~70 s per cycle (and traffic) on a result that cannot change; an explicit
+# full scan requested by the user still bypasses this.
+_BROWSER_INTEGRITY_BLOCK_SECONDS = 900.0
+
+
+def _probe_shows_integrity_block(probe: dict[str, Any] | None) -> bool:
+    """True when the page itself asked for ViewerDropsDashboard (at least twice,
+    i.e. it already retried) and Twitch answered "failed integrity check".
+
+    In that state the embedded browser is the one being rejected, so waiting
+    longer or scraping the rendered HTML (same blocked data) cannot succeed.
+    """
+    if not isinstance(probe, dict):
+        return False
+    ops = probe.get("ops") if isinstance(probe.get("ops"), dict) else {}
+    errors = probe.get("errors") if isinstance(probe.get("errors"), list) else []
+    asked_dashboard = int(ops.get("ViewerDropsDashboard") or 0) >= 2
+    integrity_error = any("integrity" in str(error).casefold() for error in errors)
+    return asked_dashboard and integrity_error
+
+
 def _describe_browser_probe(probe: dict[str, Any] | None) -> str:
     """One-line, secret-free summary of what the invisible browser page did.
 
@@ -448,6 +471,9 @@ class TwitchClient:
         # it expires or a request rejects it. See _current_integrity_token().
         self._harvested_integrity_token: str = ""
         self._harvested_integrity_token_captured_mono: float = 0.0
+        # Monotonic deadline until which the invisible browser fallback is skipped
+        # because Twitch's integrity check rejected the page's own requests.
+        self._browser_integrity_blocked_until: float = 0.0
         self.device_id = ""
         self.session_id = secrets.token_hex(16)
         self._load_cookies()
@@ -2485,6 +2511,20 @@ class TwitchClient:
                         # Keep the latest page state so an empty capture can be
                         # explained in the log (see _describe_browser_probe).
                         captured["probe"] = {key: parsed.get(key) for key in ("ops", "errors", "page")}
+                        if not captured["data"] and _probe_shows_integrity_block(captured["probe"]):
+                            # The page's own dashboard request was rejected by the
+                            # integrity check: stop waiting, nothing will arrive.
+                            if not captured.get("integrity_blocked"):
+                                captured["integrity_blocked"] = True
+                                self._browser_integrity_blocked_until = (
+                                    time.monotonic() + _BROWSER_INTEGRITY_BLOCK_SECONDS
+                                )
+                                self._note(
+                                    "O integrity check da Twitch rejeitou o pedido do browser invisível "
+                                    "(ViewerDropsDashboard): a abortar a espera."
+                                )
+                            finish()
+                            return
                         items = parsed.get("campaigns")
                         if not isinstance(items, list):
                             return
@@ -2724,12 +2764,29 @@ class TwitchClient:
 
         return got_detail["value"]
 
+    def _browser_integrity_block_active(self) -> bool:
+        """True while the invisible browser is known to be rejected by Twitch's
+        integrity check (see _BROWSER_INTEGRITY_BLOCK_SECONDS)."""
+        return time.monotonic() < getattr(self, "_browser_integrity_blocked_until", 0.0)
+
     def _campaigns_from_browser_page(self, *, full_scan: bool = False) -> list[DropCampaign]:
-        # Primary path: intercept the GQL calls the Twitch web app makes in QWebEngine.
-        # The web app generates integrity tokens client-side, bypassing the integrity check.
+        if not full_scan and self._browser_integrity_block_active():
+            minutes = max(1, int(self._browser_integrity_blocked_until - time.monotonic()) // 60)
+            self._note(
+                "Browser fallback suspenso: o integrity check da Twitch rejeitou o browser "
+                f"invisível há pouco (nova tentativa em ~{minutes} min)."
+            )
+            return []
+        # Primary path: intercept the GQL calls the Twitch web app makes in QWebEngine
+        # (the web app attaches its own client-side integrity token to those requests).
         gql_campaigns = self._campaigns_via_browser_gql_intercept(full_scan=full_scan)
         if gql_campaigns:
             return gql_campaigns
+        if self._browser_integrity_block_active():
+            # The page's own dashboard request was rejected; the rendered HTML is
+            # built from the same blocked data, so scraping it cannot work either.
+            self._note("Análise de HTML dispensada: a própria página foi rejeitada pelo integrity check.")
+            return []
         self._note("Browser GQL intercept sem resultados — a tentar análise de HTML renderizado.")
 
         try:
@@ -3679,6 +3736,11 @@ class TwitchClient:
         None when there is no token or Twitch still rejects the request.
         """
         if not self._current_integrity_token():
+            return None
+        if self._browser_integrity_block_active():
+            # The same token already got the page's own dashboard request
+            # rejected, so repeating it over HTTP is guaranteed to fail too.
+            self._note("Token do browser não repetido: a própria página foi rejeitada pelo integrity check.")
             return None
         self._note("Token de integridade do browser disponível: a repetir o ViewerDropsDashboard por pedido directo.")
         try:
