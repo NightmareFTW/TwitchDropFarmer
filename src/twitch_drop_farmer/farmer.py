@@ -172,6 +172,20 @@ class FarmEngine:
             return False
         return True
 
+    def is_channel_live(self, campaign_id: str, login: str) -> bool:
+        """Whether the last lookup for ``campaign_id`` still lists ``login`` as live.
+
+        True when nothing is known (no lookup yet): an unknown state must not be reported
+        as "the channel went offline".
+        """
+        cached = self._stream_cache.get(campaign_id)
+        if cached is None:
+            return True
+        return any(stream.login.casefold() == login.casefold() for stream in cached[1])
+
+    def is_channel_penalized(self, login: str) -> bool:
+        return self._channel_penalized(login)
+
     def _channel_priority(self, stream: StreamCandidate) -> tuple[int, int, int, int]:
         whitelist = {item.casefold() for item in self.config.whitelist_channels}
         preferred = int(bool(whitelist) and stream.login.casefold() in whitelist)

@@ -6,6 +6,39 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.56] - 2026-11-10
+
+### Fixed
+
+- **As selecções dos Filtros só eram guardadas ao carregar em «Guardar definições», que
+  fica noutro separador** — marcar jogos nos Filtros mudava o dashboard mas o motor do farm
+  continuava a usar a lista antiga até se guardar, e fechar a app perdia as alterações.
+  Agora os filtros (e as restantes definições) são **guardados automaticamente** 0,7 s
+  depois da última alteração feita pelo utilizador, também ao fechar a janela, e a lista
+  nova passa logo a valer para o farm. A gravação nunca apaga uma lista que ainda não foi
+  construída.
+- **A «demora do auto-update» nunca chegava à configuração.** E, mais importante, **as
+  opções de actualização automática não faziam nada**: o `UpdateManager` nunca é arrancado
+  (a app só verifica versões quando carregas em «Verificar actualizações» e nunca transfere
+  nem instala nada sozinha). A caixa e a demora ficam desactivadas, desmarcadas, com a dica
+  «ainda não implementado», e o valor por omissão passa a desligado.
+- **As caixas de alerta «Canal offline» e «Erro de API» não controlavam nada** — nada no
+  código as accionava. Agora há um aviso quando o canal em farm fica offline (diz para onde
+  o farm passou, ou que não há alternativa; não avisa quando o canal foi deixado de
+  propósito) e quando 3 heartbeats seguidos falham (uma vez por sequência).
+
+### Added
+
+- **Mensagem «Definições guardadas ✓» / «Filtros guardados ✓»** ao fundo da janela:
+  aparece, fica 3 s e desvanece (não é um popup, não rouba o foco nem apanha o rato), e
+  também confirma o botão «Guardar definições». Se a gravação falhar, aparece a laranja com
+  o motivo.
+- **Auditoria dos botões** (`tests/test_buttons.py`): a janela real, sem rede, sem
+  diálogos e sem browser, com um teste por botão (conta, filtros ×16, guardar, iniciar/parar,
+  seguinte, redimir, ligar conta, abrir página de drops, actualizar dashboard, guardar log,
+  cartões do dashboard), caixas, perfis de energia e seleccionadores. Um teste falha se um
+  botão novo não tiver nada ligado ou não for testado.
+
 ## [2.2.55] - 2026-11-10
 
 ### Fixed

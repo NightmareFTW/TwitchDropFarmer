@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -128,6 +129,13 @@ INVENTORY_LAG_FORCE_MINUTES = 3
 # stopped moving is left alone before the farm tries it again.
 CHANNEL_PENALTY_SEC = 45 * 60.0
 CAMPAIGN_HOLD_SEC = 30 * 60.0
+
+# This many heartbeats in a row failing is reported as an API error (once per streak).
+HEARTBEAT_FAILURES_ALERT = 3
+
+# Changes to the filters/settings are written to disk this long after the last change.
+AUTOSAVE_DELAY_MS = 700
+TOAST_DURATION_MS = 3000
 
 # The on-screen log is capped: a farm can run for days and the widget keeps every line in memory.
 LOG_MAX_LINES = 5000
@@ -758,7 +766,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sort_longest_campaign": "Maior duração total",
         "refresh_active": "Actualizar campanhas e streams",
         "active_lists_note": "As listas abaixo são geradas a partir das campanhas e canais activos devolvidos pela Twitch.",
-        "filters_hint": "Organiza os filtros por sub-aba e usa pesquisa para encontrar jogos/canais rapidamente.",
+        "filters_hint": "Organiza os filtros por sub-aba e usa pesquisa para encontrar jogos/canais rapidamente. As alterações são guardadas automaticamente.",
         "filters_search_games": "Pesquisar jogo...",
         "filters_search_channels": "Pesquisar canal...",
         "filters_select_all": "Seleccionar todos",
@@ -918,6 +926,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_saved": "auth-token guardado e validado.",
         "oauth_refreshing": "Token validado. A actualizar campanhas...",
         "settings_saved": "Definições guardadas.",
+        "toast_saved": "Definições guardadas ✓",
+        "toast_filters_saved": "Filtros guardados ✓",
+        "toast_save_failed": "Não foi possível guardar: {error}",
         "farming_started": "Farm automático iniciado.",
         "farming_stopped": "Farm parado.",
         "streamless_running": "Modo streamless activo para o alvo seleccionado.",
@@ -995,8 +1006,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reactivo (mais pedidos).",
         "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando detecta bloqueio.",
         "help_watchdog_timeout": "Minutos sem progresso até o monitor desistir da campanha e passar a outra. Antes disso tenta, a 1/5 do tempo, reiniciar a vigilância do canal e, a metade, mudar de canal.",
-        "help_autoupdate": "Quando activo, a aplicação pode transferir e aplicar automaticamente uma nova versão quando disponível.",
-        "help_autoupdate_delay": "Tempo de espera antes de reiniciar a aplicação para concluir uma actualização automática.",
+        "help_autoupdate": "Ainda não implementado: a aplicação só verifica se há uma versão nova quando carregas em «Verificar actualizações»; não transfere nem instala nada sozinha.",
+        "help_autoupdate_delay": "Ainda não implementado (ver a opção de actualização automática).",
         "alert_type_campaign_expiring_soon": "Campanha a expirar brevemente",
         "alert_type_token_invalid": "Token inválido",
         "alert_type_no_progress": "Sem progresso",
@@ -1027,6 +1038,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "watchdog_switch_campaign": "{game}: {minutes} min sem progresso; a passar a outra campanha durante {hold} min.",
         "watchdog_recovered_title": "Farm recuperado",
         "watchdog_recovered": "{game}: o progresso voltou a subir depois da recuperação automática.",
+        "stream_offline_title": "Canal offline",
+        "stream_offline_switch": "{game}: o canal {channel} ficou offline; a passar para {new}.",
+        "stream_offline_none": "{game}: o canal {channel} ficou offline e não há outro canal disponível; a aguardar.",
+        "api_error_title": "Erro de ligação à Twitch",
+        "api_error_heartbeat": "O heartbeat falhou {count} vezes seguidas em {channel}. Verifica a ligação à internet; a app continua a tentar.",
         "target_switch": "Alvo alterado: {previous} -> {game} (motivo: {reason}).",
         "target_switch_manual": "selecção manual",
         "target_switch_gone": "a campanha anterior já não está na lista",
@@ -1068,7 +1084,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "sort_longest_campaign": "Longest total duration",
         "refresh_active": "Refresh campaigns and streams",
         "active_lists_note": "The lists below are built from the active campaigns and channels returned by Twitch.",
-        "filters_hint": "Use sub-tabs and search to browse all games/channels with less scrolling.",
+        "filters_hint": "Use sub-tabs and search to browse all games/channels with less scrolling. Changes are saved automatically.",
         "filters_search_games": "Search game...",
         "filters_search_channels": "Search channel...",
         "filters_select_all": "Select all",
@@ -1228,6 +1244,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_saved": "auth-token saved and validated.",
         "oauth_refreshing": "Token validated. Refreshing campaigns...",
         "settings_saved": "Settings saved.",
+        "toast_saved": "Settings saved ✓",
+        "toast_filters_saved": "Filters saved ✓",
+        "toast_save_failed": "Could not save: {error}",
         "farming_started": "Automatic farming started.",
         "farming_stopped": "Farming stopped.",
         "streamless_running": "Streamless mode active for the selected target.",
@@ -1305,8 +1324,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "help_energy_profile": "Defines app behavior: more economical (fewer requests) or more responsive (more requests).",
         "help_watchdog": "Monitors lack of progress and tries automatic recovery when farming gets stuck.",
         "help_watchdog_timeout": "Minutes without progress before the monitor gives up on the campaign and moves to another one. Before that it restarts the channel watch (at 1/5 of the time) and switches channel (at half).",
-        "help_autoupdate": "When enabled, the app can automatically download and apply a new version when available.",
-        "help_autoupdate_delay": "Wait time before restarting the app to finish an automatic update.",
+        "help_autoupdate": "Not implemented yet: the app only checks for a new version when you press \"Check for updates\"; it does not download or install anything by itself.",
+        "help_autoupdate_delay": "Not implemented yet (see the automatic update option).",
         "alert_type_campaign_expiring_soon": "Campaign expiring soon",
         "alert_type_token_invalid": "Invalid token",
         "alert_type_no_progress": "No progress",
@@ -1337,6 +1356,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "watchdog_switch_campaign": "{game}: {minutes} min without progress; moving to another campaign for {hold} min.",
         "watchdog_recovered_title": "Farm recovered",
         "watchdog_recovered": "{game}: progress is moving again after the automatic recovery.",
+        "stream_offline_title": "Channel offline",
+        "stream_offline_switch": "{game}: channel {channel} went offline; moving to {new}.",
+        "stream_offline_none": "{game}: channel {channel} went offline and there is no other channel available; waiting.",
+        "api_error_title": "Twitch connection error",
+        "api_error_heartbeat": "The heartbeat failed {count} times in a row on {channel}. Check your internet connection; the app keeps trying.",
         "target_switch": "Target changed: {previous} -> {game} (reason: {reason}).",
         "target_switch_manual": "manual selection",
         "target_switch_gone": "the previous campaign is no longer listed",
@@ -1429,7 +1453,82 @@ def _effective_dashboard_game_names(
     return sorted(canonical_by_key.values(), key=lambda item: item.casefold())
 
 
+class Toast(QLabel):
+    """A small message that fades in, stays a few seconds and fades out (not a popup).
+
+    It floats at the bottom of its parent, never takes the mouse and never steals focus, so
+    "Settings saved" can be shown without interrupting what the user is doing.
+    """
+
+    OK_STYLE = (
+        "background: rgba(28, 28, 32, 238); color: #f2f2f4; border: 1px solid #9147ff;"
+        " border-radius: 10px; padding: 8px 18px; font-weight: 600;"
+    )
+    WARN_STYLE = (
+        "background: rgba(28, 28, 32, 238); color: #ffd9a8; border: 1px solid #e67e22;"
+        " border-radius: 10px; padding: 8px 18px; font-weight: 600;"
+    )
+
+    def __init__(self, parent: QWidget, *, fade_in_ms: int = 150, fade_out_ms: int = 600) -> None:
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._fade_in_ms = fade_in_ms
+        self._fade_out_ms = fade_out_ms
+        self._effect = QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._effect)
+        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
+        self._fade.finished.connect(self._on_fade_finished)
+        self._fading_out = False
+        self._hold = QTimer(self)
+        self._hold.setSingleShot(True)
+        self._hold.timeout.connect(self._start_fade_out)
+        self.hide()
+
+    def show_message(self, text: str, *, ok: bool = True, duration_ms: int = 3000) -> None:
+        """Show ``text`` for ``duration_ms`` (a new message replaces the current one)."""
+        self._hold.stop()
+        self._fade.stop()
+        self._fading_out = False
+        self.setStyleSheet(self.OK_STYLE if ok else self.WARN_STYLE)
+        self.setText(text)
+        self.adjustSize()
+        self.reposition()
+        self.show()
+        self.raise_()
+        self._fade.setDuration(self._fade_in_ms)
+        self._fade.setStartValue(self._effect.opacity())
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+        self._hold.start(duration_ms)
+
+    def reposition(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.move(max(0, (parent.width() - self.width()) // 2), max(0, parent.height() - self.height() - 28))
+
+    def _start_fade_out(self) -> None:
+        self._fading_out = True
+        self._fade.stop()
+        self._fade.setDuration(self._fade_out_ms)
+        self._fade.setStartValue(self._effect.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def _on_fade_finished(self) -> None:
+        if self._fading_out:
+            self._fading_out = False
+            self.hide()
+
+
 class MarkerListWidget(QListWidget):
+    # Emitted whenever the set of selected keys really changes (a click, "select all", a
+    # manual add...), never when the list is just rebuilt from data.
+    selection_changed = Signal()
+
     def __init__(self, marker: str) -> None:
         super().__init__()
         self._marker = marker.replace("âœ“", CHECK_MARK)
@@ -1481,6 +1580,7 @@ class MarkerListWidget(QListWidget):
             changed = True
         if changed:
             self._rebuild_items()
+            self.selection_changed.emit()
 
     def select_all(self) -> None:
         if not self._all_entries:
@@ -1490,20 +1590,25 @@ class MarkerListWidget(QListWidget):
             return
         self._selected_keys = all_keys
         self._rebuild_items()
+        self.selection_changed.emit()
 
     def clear_all(self) -> None:
         if not self._selected_keys:
             return
         self._selected_keys.clear()
         self._rebuild_items()
+        self.selection_changed.emit()
 
     def add_selected_key(self, key: str) -> None:
         """Programmatically mark a key as selected (used for manual whitelist adds)."""
         key = (key or "").strip()
         if not key:
             return
+        is_new = key not in self._selected_keys
         self._selected_keys.add(key)
         self._has_state = True
+        if is_new:
+            self.selection_changed.emit()
 
     def clear_visible(self) -> None:
         if not self._all_entries:
@@ -1514,6 +1619,7 @@ class MarkerListWidget(QListWidget):
             return
         self._selected_keys = new_selected
         self._rebuild_items()
+        self.selection_changed.emit()
 
     def _rebuild_items(self) -> None:
         if self._filter_text:
@@ -1566,6 +1672,7 @@ class MarkerListWidget(QListWidget):
             self._selected_keys.add(key)
         self._update_item_appearance(item)
         self.clearSelection()
+        self.selection_changed.emit()
 
     def _update_item_appearance(self, item: QListWidgetItem) -> None:
         key = item.data(Qt.ItemDataRole.UserRole)
@@ -1820,7 +1927,14 @@ class MainWindow(QMainWindow):
         self._last_refresh_at: str = ""
         self._auto_claim_tried: dict[str, tuple[datetime, int]] = {}  # drop key -> (last attempt, attempts)
         self._auto_claim_gave_up: set[str] = set()
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(AUTOSAVE_DELAY_MS)
+        self._autosave_timer.timeout.connect(self._autosave_now)
+        self._autosave_reasons: set[str] = set()
         self._farm_health = FarmHealth(self.config.watchdog_stall_timeout_min)
+        self._heartbeat_failures = 0
+        self._api_error_announced = False
         self._farm_health.enabled = bool(self.config.watchdog_enabled)
         self._campaign_hold: dict[str, float] = {}
         self._last_forced_refresh_at: float | None = None
@@ -1844,6 +1958,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
         root = QWidget()
         self.setCentralWidget(root)
+        self._toast = Toast(root)
         layout = QGridLayout(root)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 2)
@@ -1863,6 +1978,7 @@ class MainWindow(QMainWindow):
         self._apply_theme(self.config.theme)
         self._set_oauth_hidden(self._oauth_hidden)
         self._update_auth_status()
+        self._wire_autosave()
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -2029,7 +2145,12 @@ class MainWindow(QMainWindow):
         self.autoupdate_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.autoupdate_help_icon.setFixedSize(18, 18)
         self.autoupdate_checkbox = QCheckBox()
-        self.autoupdate_checkbox.setChecked(self.config.auto_update_enabled)
+        # Nothing ever downloads or installs an update by itself (UpdateManager is never
+        # started; the "Check for updates" button only checks and reports), so this option
+        # and its delay box would promise something that does not exist.
+        self.config.auto_update_enabled = False
+        self.autoupdate_checkbox.setChecked(False)
+        self.autoupdate_checkbox.setEnabled(False)
         self.autoupdate_checkbox.toggled.connect(self.handle_autoupdate_toggle)
         autoupdate_enable_layout.addWidget(self.autoupdate_label)
         autoupdate_enable_layout.addWidget(self.autoupdate_help_icon)
@@ -2047,6 +2168,7 @@ class MainWindow(QMainWindow):
         self.autoupdate_delay_spinbox.setMaximum(300)
         self.autoupdate_delay_spinbox.setValue(self.config.auto_update_restart_delay_sec)
         self.autoupdate_delay_spinbox.setSuffix(" seg")
+        self.autoupdate_delay_spinbox.setEnabled(False)
         autoupdate_delay_layout.addWidget(self.autoupdate_delay_label)
         autoupdate_delay_layout.addWidget(self.autoupdate_delay_help_icon)
         autoupdate_delay_layout.addWidget(self.autoupdate_delay_spinbox)
@@ -4391,6 +4513,39 @@ class MainWindow(QMainWindow):
                 reason = old.reason_code
         self._log(self._t("target_switch", previous=previous_game, game=campaign.game_name, reason=reason))
 
+    def _note_heartbeat_result(self, ok: bool, channel: str) -> None:
+        """Count heartbeats that fail in a row and report the streak once as an API error."""
+        if ok:
+            self._heartbeat_failures = 0
+            self._api_error_announced = False
+            return
+        self._heartbeat_failures += 1
+        if self._heartbeat_failures >= HEARTBEAT_FAILURES_ALERT and not self._api_error_announced:
+            self._api_error_announced = True
+            get_alert_manager().raise_alert(
+                AlertType.API_ERROR,
+                AlertSeverity.ERROR,
+                self._t("api_error_title"),
+                self._t("api_error_heartbeat", count=self._heartbeat_failures, channel=channel or "-"),
+                auto_dismiss_sec=20,
+            )
+
+    def _alert_if_channel_went_offline(self, campaign_id: str, game: str, channel: str, replacement: str) -> None:
+        """Tell the user when the channel being farmed went offline (not when it was left on
+        purpose: a manual pick, or the stall monitor skipping a channel that did not credit)."""
+        if not channel or self.engine.is_channel_penalized(channel):
+            return
+        if self.engine.is_channel_live(campaign_id, channel):
+            return  # still live: the farm moved for another reason
+        key = "stream_offline_switch" if replacement else "stream_offline_none"
+        get_alert_manager().raise_alert(
+            AlertType.STREAM_OFFLINE,
+            AlertSeverity.WARNING,
+            self._t("stream_offline_title"),
+            self._t(key, game=game, channel=channel, new=replacement),
+            auto_dismiss_sec=15,
+        )
+
     def _streamless_heartbeat_tick(self) -> None:
         if not self.timer.isActive():
             return
@@ -4406,13 +4561,19 @@ class MainWindow(QMainWindow):
             if not self._streamless_no_target_logged:
                 self._log(self._t("streamless_no_target"))
                 self._streamless_no_target_logged = True
+            lost_channel, lost_campaign_id, lost_game = (
+                self._streamless_channel, self._streamless_campaign_id, self._streamless_game
+            )
             self._streamless_channel = ""
             self._streamless_failure_channel = ""
             self.client.segment_watcher.stop()
+            self._alert_if_channel_went_offline(lost_campaign_id, lost_game, lost_channel, "")
             return
 
         self._streamless_no_target_logged = False
         channel_login = decision.stream.login
+        previous_channel = self._streamless_channel
+        previous_campaign_id, previous_game = self._streamless_campaign_id, self._streamless_game
         self._note_target_switch(decision)
         # Keep requesting the channel's new HLS segments in the background (own
         # thread, so it does not depend on this event loop); a no-op if unchanged.
@@ -4421,6 +4582,7 @@ class MainWindow(QMainWindow):
             self._streamless_channel = channel_login
             self._streamless_failure_channel = ""
             self._log(self._t("streamless_target", channel=channel_login))
+            self._alert_if_channel_went_offline(previous_campaign_id, previous_game, previous_channel, channel_login)
 
         _channel_id = decision.stream.channel_id
         _broadcast_id = decision.stream.broadcast_id
@@ -4576,7 +4738,9 @@ class MainWindow(QMainWindow):
             ok, messages, reconciled_campaign, current_drop_session = future.result()
         except Exception as exc:
             self._log(f"Heartbeat error: {exc}")
+            self._note_heartbeat_result(False, pending_channel)
             return
+        self._note_heartbeat_result(ok, pending_channel)
         for message in messages:
             self._log(message)
 
@@ -4966,21 +5130,84 @@ class MainWindow(QMainWindow):
     def handle_save_config(self) -> None:
         self._with_errors(self._do_save_config)
 
-    def _do_save_config(self) -> None:
-        self.config.whitelist_games = self.games_whitelist_list.selected_keys()
-        self.config.blacklist_games = self.games_blacklist_list.selected_keys()
-        self.config.whitelist_channels = self.channels_whitelist_list.selected_keys()
-        self.config.blacklist_channels = self.channels_blacklist_list.selected_keys()
+    def _apply_widgets_to_config(self) -> None:
+        """Copy what the filter lists and the settings widgets show into the config."""
+        # _selected_values falls back to the config for a list that has no state yet, so
+        # saving can never wipe a list that has not been built.
+        self.config.whitelist_games = self._selected_values(self.games_whitelist_list, self.config.whitelist_games)
+        self.config.blacklist_games = self._selected_values(self.games_blacklist_list, self.config.blacklist_games)
+        self.config.whitelist_channels = self._selected_values(self.channels_whitelist_list, self.config.whitelist_channels)
+        self.config.blacklist_channels = self._selected_values(self.channels_blacklist_list, self.config.blacklist_channels)
         self.config.language = self._current_language()
         self.config.theme = self._current_theme()
         self.config.sort_mode = self._current_sort_mode()
         self.config.auto_claim_drops = self.auto_claim_checkbox.isChecked()
         self.config.dashboard_hide_subscription_required = self.dashboard_hide_sub_only_checkbox.isChecked()
+
+    def _do_save_config(self) -> None:
+        """The "Save settings" button: save everything now and confirm it."""
+        self._autosave_timer.stop()
+        self._autosave_reasons.clear()
+        self._apply_widgets_to_config()
         save_config(self.config)
         self.engine.config = self.config
         self._log(self._t("settings_saved"))
+        self._toast.show_message(self._t("toast_saved"), duration_ms=TOAST_DURATION_MS)
         if self.latest_snapshot is not None:
             self.refresh_snapshot()
+
+    def _schedule_autosave(self, reason: str = "settings") -> None:
+        """Save a moment after the last change: the filters live in one tab and the Save
+        button in another, so a selection used to look applied (the dashboard showed it)
+        while the farm still used the old list, and it was lost on restart."""
+        self._autosave_reasons.add(reason)
+        self._autosave_timer.start()
+
+    def _autosave_now(self) -> None:
+        reasons, self._autosave_reasons = self._autosave_reasons, set()
+        try:
+            self._apply_widgets_to_config()
+            save_config(self.config)
+        except Exception as exc:  # noqa: BLE001
+            self._log(self._t("toast_save_failed", error=str(exc)))
+            self._toast.show_message(self._t("toast_save_failed", error=str(exc)), ok=False, duration_ms=5000)
+            return
+        self.engine.config = self.config
+        only_filters = reasons == {"filters"}
+        self._toast.show_message(
+            self._t("toast_filters_saved" if only_filters else "toast_saved"), duration_ms=TOAST_DURATION_MS
+        )
+        if "filters" in reasons and self.latest_snapshot is not None:
+            self.refresh_snapshot()  # the farm decisions follow the new lists
+
+    def _wire_autosave(self) -> None:
+        """Save on every user change of the filters and settings (user actions only, so
+        rebuilding a list or translating the UI does not trigger it)."""
+        for widget in (
+            self.games_whitelist_list,
+            self.games_blacklist_list,
+            self.channels_whitelist_list,
+            self.channels_blacklist_list,
+        ):
+            widget.selection_changed.connect(lambda: self._schedule_autosave("filters"))
+        for combo in (self.language_picker, self.theme_picker, self.sort_picker):
+            combo.activated.connect(lambda _index: self._schedule_autosave("settings"))
+        for checkbox in (
+            self.auto_claim_checkbox,
+            self.dashboard_hide_sub_only_checkbox,
+            self.watchdog_checkbox,
+            self.autoupdate_checkbox,
+            *self.alert_checkboxes.values(),
+        ):
+            checkbox.clicked.connect(lambda _checked: self._schedule_autosave("settings"))
+        for _name, button in self.energy_profile_buttons:
+            button.clicked.connect(lambda _checked: self._schedule_autosave("settings"))
+        for spinbox in (self.watchdog_timeout_spinbox, self.autoupdate_delay_spinbox):
+            spinbox.valueChanged.connect(lambda _value: self._schedule_autosave("settings"))
+        self.autoupdate_delay_spinbox.valueChanged.connect(self.handle_autoupdate_delay_change)
+
+    def handle_autoupdate_delay_change(self, seconds: int) -> None:
+        self.config.auto_update_restart_delay_sec = int(seconds)
 
     def handle_start(self) -> None:
         self._with_errors(self._do_start)
@@ -5258,7 +5485,15 @@ class MainWindow(QMainWindow):
         if self.timer.isActive() and (self._heartbeat_retry_after_snapshot or self._streamless_channel == ""):
             self._streamless_heartbeat_tick()
 
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._toast.reposition()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._autosave_timer.isActive():
+            # A change made in the last moments must not be lost by closing the window.
+            self._autosave_timer.stop()
+            self._autosave_now()
         self._snap_poll_timer.stop()
         self._heartbeat_poll_timer.stop()
         self.client.segment_watcher.stop()

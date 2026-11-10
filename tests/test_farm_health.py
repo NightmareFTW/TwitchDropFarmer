@@ -272,6 +272,27 @@ class TestChannelChoice(unittest.TestCase):
         self.assertIsNone(decision.stream)
         self.assertEqual(decision.reason_code, "no_valid_stream")
 
+    def test_a_channel_is_live_while_the_last_lookup_lists_it(self):
+        engine, _ = _engine()
+        campaign = _campaign()
+        engine.remember_streams(campaign, [_stream("Alpha", 5), _stream("beta", 9)])
+
+        self.assertTrue(engine.is_channel_live(campaign.id, "alpha"))  # case does not matter
+        self.assertFalse(engine.is_channel_live(campaign.id, "gone"))
+
+    def test_with_no_lookup_yet_a_channel_is_not_reported_as_offline(self):
+        engine, _ = _engine()
+
+        self.assertTrue(engine.is_channel_live("never-looked-up", "anything"))
+
+    def test_the_penalty_is_visible_from_outside(self):
+        engine, clock = _engine()
+        engine.penalize_channel("Chan", 60)
+
+        self.assertTrue(engine.is_channel_penalized("chan"))
+        clock.advance(61)
+        self.assertFalse(engine.is_channel_penalized("chan"))
+
     def test_the_old_poll_time_watchdog_is_gone(self):
         engine, _ = _engine()
         self.assertFalse(hasattr(engine, "watchdog"))

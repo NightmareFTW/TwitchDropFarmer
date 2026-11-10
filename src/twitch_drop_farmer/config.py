@@ -40,7 +40,7 @@ class AppConfig:
     alert_api_error: bool = True
     alert_watchdog_recovered: bool = True
     alert_drop_ready: bool = True
-    auto_update_enabled: bool = True  # Enable automatic update + restart
+    auto_update_enabled: bool = False  # Not implemented: nothing downloads or installs an update by itself
     auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
     check_updates_on_startup: bool = True
     dashboard_hide_subscription_required: bool = False
