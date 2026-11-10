@@ -37,6 +37,7 @@ class AppConfig:
     alert_stream_offline: bool = True
     alert_api_error: bool = True
     alert_watchdog_recovered: bool = True
+    alert_drop_ready: bool = True
     auto_update_enabled: bool = True  # Enable automatic update + restart
     auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
     check_updates_on_startup: bool = True

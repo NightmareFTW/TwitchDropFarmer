@@ -961,6 +961,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "alert_help_stream_offline": "Avisa quando o canal alvo fica offline.",
         "alert_help_api_error": "Avisa quando há falhas de comunicação com a API da Twitch.",
         "alert_help_watchdog_recovered": "Avisa quando o monitor detecta problema e consegue recuperar automaticamente.",
+        "alert_type_drop_ready": "Drop pronto a reivindicar",
+        "alert_help_drop_ready": "Avisa quando um drop chega a 100% e tem de ser reivindicado no teu browser (a Twitch bloqueia a reivindicação automática).",
+        "drop_ready_title": "Drop pronto a reivindicar",
+        "drop_ready_body": "{game}: «{drop}» está a 100%. Reivindica em twitch.tv/drops/inventory.",
         "redeem_drops": "Redimir drops",
         "redeem_done": "Drops redimidos: {count}.",
         "redeem_none": "Nenhum drop pronto para redimir.",
@@ -1251,6 +1255,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "alert_help_stream_offline": "Warn when the target channel goes offline.",
         "alert_help_api_error": "Warn when communication with Twitch API fails.",
         "alert_help_watchdog_recovered": "Warn when watchdog detects an issue and recovers automatically.",
+        "alert_type_drop_ready": "Drop ready to claim",
+        "alert_help_drop_ready": "Warn when a drop reaches 100% and must be claimed in your browser (Twitch blocks automatic claiming).",
+        "drop_ready_title": "Drop ready to claim",
+        "drop_ready_body": "{game}: \"{drop}\" is at 100%. Claim it at twitch.tv/drops/inventory.",
         "redeem_drops": "Redeem drops",
         "redeem_done": "Redeemed drops: {count}.",
         "redeem_none": "No drops are ready to redeem.",
@@ -1642,6 +1650,10 @@ class ImageFetchBridge(QObject):
 
 
 class MainWindow(QMainWindow):
+    # Alerts are raised from worker threads (engine.poll); this signal hands them
+    # over to the UI thread, where they are shown in the log and as a desktop toast.
+    alert_raised = Signal(object)
+
     def __init__(self) -> None:
         super().__init__()
         icon_path = _ASSETS_DIR / "icon.ico"
@@ -1711,6 +1723,10 @@ class MainWindow(QMainWindow):
         self._last_refresh_at: str = ""
         self._last_auto_claim_at: datetime | None = None
         self._last_display_decision: FarmDecision | None = None
+        self._announced_ready_drops: set[str] = set()
+        # Nothing used to listen to the alert manager, so no alert was ever shown.
+        self.alert_raised.connect(self._show_alert)
+        get_alert_manager().register_callback(self.alert_raised.emit)
         self.executor = ThreadPoolExecutor(max_workers=2)
         self._thumb_executor = ThreadPoolExecutor(max_workers=4)
         self._thumb_fetch_bridge = ImageFetchBridge(self)
@@ -4205,6 +4221,7 @@ class MainWindow(QMainWindow):
             return None, ""
         previous = int(target.progress_minutes)
         self._merge_campaign_progress(target, fresh)
+        self._announce_ready_drops(target)
         return previous, target.id
 
     def _poll_heartbeat_future(self) -> None:
@@ -4792,6 +4809,38 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _show_alert(self, alert) -> None:  # type: ignore[no-untyped-def]
+        """Show an alert in the log and as a desktop toast (UI thread)."""
+        self._log(f"[{alert.title}] {alert.message}")
+        get_alert_manager().show_desktop_notification(alert)
+
+    def _announce_ready_drops(self, campaign: DropCampaign) -> None:
+        """Alert once per drop that reached 100% and still has to be claimed.
+
+        Claiming is blocked by Twitch's integrity check for this app (even the claim
+        mutation answers "failed integrity check" without a token), so the user has to
+        claim in a normal browser: this makes sure they notice.
+        """
+        for drop in campaign.drops or []:
+            if not isinstance(drop, dict) or drop.get("claimed"):
+                continue
+            required = int(drop.get("required_minutes") or 0)
+            current = int(drop.get("current_minutes") or 0)
+            if required <= 0 or current < required:
+                continue
+            drop_name = str(drop.get("name") or "Drop")
+            key = f"{campaign.game_name.casefold()}|{str(drop.get('id') or drop_name).casefold()}"
+            if key in self._announced_ready_drops:
+                continue
+            self._announced_ready_drops.add(key)
+            get_alert_manager().raise_alert(
+                AlertType.DROP_READY,
+                AlertSeverity.INFO,
+                self._t("drop_ready_title"),
+                self._t("drop_ready_body", game=campaign.game_name, drop=drop_name),
+                auto_dismiss_sec=15,
+            )
+
     def refresh_snapshot(self) -> None:
         """Lança engine.poll() em background. Ignorado se já estiver em curso."""
         if self._snap_future is not None and not self._snap_future.done():
@@ -4850,6 +4899,8 @@ class MainWindow(QMainWindow):
         self._last_refresh_at = datetime.now().strftime("%H:%M:%S")
         self.dashboard_loading_label.setVisible(False)
         self.latest_snapshot = snapshot
+        for campaign in snapshot.campaigns:
+            self._announce_ready_drops(campaign)
         self.engine.config = self.config
         self.available_game_entries = self._compose_game_entries(snapshot.available_games)
         self.available_channel_entries = [FilterEntry(key=channel.login, label=channel.label) for channel in snapshot.available_channels]

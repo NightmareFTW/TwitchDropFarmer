@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -31,6 +33,7 @@ class AlertType(Enum):
     STREAM_OFFLINE = "stream_offline"
     API_ERROR = "api_error"
     WATCHDOG_RECOVERED = "watchdog_recovered"
+    DROP_READY = "drop_ready"
 
 
 @dataclass(slots=True)
@@ -61,12 +64,18 @@ class Alert:
 class AlertManager:
     """Centralized alert management."""
 
-    def __init__(self) -> None:
+    def __init__(self, dedupe_window_sec: float = 3600.0) -> None:
         self.alerts: list[Alert] = []
         self.callbacks: list[Callable[[Alert], None]] = []
         self.config: dict[AlertType, bool] = {
             alert_type: True for alert_type in AlertType
         }
+        # The engine raises some alerts on every poll (e.g. "farm complete" for each
+        # finished campaign). Now that alerts are actually shown, an identical alert
+        # is only delivered once per window instead of on every refresh.
+        self._dedupe_window = dedupe_window_sec
+        self._recent: dict[tuple[AlertType, str, str], float] = {}
+        self._lock = threading.Lock()
 
     def register_callback(self, callback: Callable[[Alert], None]) -> None:
         """Register callback to be called when alert is raised."""
@@ -98,6 +107,17 @@ class AlertManager:
                 title=title,
                 message=message,
             )
+
+        now = time.monotonic()
+        key = (alert_type, title, message)
+        with self._lock:
+            last = self._recent.get(key)
+            if last is not None and now - last < self._dedupe_window:
+                logger.debug(f"Alert {alert_type.value} suppressed (duplicate within window).")
+                return Alert(alert_type=alert_type, severity=severity, title=title, message=message)
+            self._recent[key] = now
+            if len(self._recent) > 256:
+                self._recent = {k: t for k, t in self._recent.items() if now - t < self._dedupe_window}
 
         alert = Alert(
             alert_type=alert_type,

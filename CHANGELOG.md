@@ -6,6 +6,31 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.46] - 2026-11-10
+
+### Fixed
+
+- **Os alertas nunca eram mostrados** — o gestor de alertas registava-os no
+  logger, mas nada na interface escutava (`register_callback` nunca era chamado) e
+  `show_desktop_notification` nunca era usado: «token inválido», «campanha a
+  expirar» e «farm concluída» nunca chegaram a ser vistos. Passam a aparecer no log
+  e como notificação do Windows (via sinal, porque nascem em threads de trabalho).
+  Como o motor levanta alguns alertas a cada actualização, um alerta idêntico só é
+  entregue uma vez por hora.
+
+### Added
+
+- **Aviso «Drop pronto a reivindicar»** — quando um drop chega a 100% e ainda não
+  foi reivindicado, a app avisa uma vez por drop (log e notificação) com o jogo, o
+  nome do drop e o endereço do inventário. A reivindicação automática não é viável
+  para esta app: a mutação de claim responde `failed integrity check` (mesmo sem
+  token), tal como o dashboard, por isso o claim tem de ser feito no browser normal.
+  Tem opção própria nas definições de alertas (`alert_drop_ready`).
+
+### Maintenance
+
+- **Bump de versão** — atualização para `2.2.46`.
+
 ## [2.2.45] - 2026-11-10
 
 ### Fixed
