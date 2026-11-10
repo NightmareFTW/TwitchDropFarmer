@@ -29,6 +29,7 @@ TestExpiringAlertTimestampSource verifies the campaign-expiring alert:
 """
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import sys
 import os
@@ -51,10 +52,14 @@ UTC = timezone.utc
 
 def _load_launcher_module():
     launcher_path = Path(__file__).resolve().parents[1] / "TwitchDropFarmer.pyw"
-    spec = importlib.util.spec_from_file_location("twitchdropfarmer_launcher", launcher_path)
+    # ``.pyw`` is only a registered source suffix on Windows, so
+    # spec_from_file_location() returns None elsewhere. An explicit loader
+    # makes the test portable (Linux/macOS CI, future cross-platform support).
+    loader = importlib.machinery.SourceFileLoader("twitchdropfarmer_launcher", str(launcher_path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader is not None
-    spec.loader.exec_module(module)
+    loader.exec_module(module)
     return module
 
 
