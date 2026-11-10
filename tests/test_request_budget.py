@@ -35,7 +35,7 @@ class _Clock:
         self.now += seconds
 
 
-def _campaign(name: str, *, data: bool = True, days: int = 5) -> DropCampaign:
+def _campaign(name: str, *, data: bool = True, days: int = 5, progress: int | None = None) -> DropCampaign:
     return DropCampaign(
         id=f"id-{name}",
         game_name=name,
@@ -43,10 +43,10 @@ def _campaign(name: str, *, data: bool = True, days: int = 5) -> DropCampaign:
         starts_at=datetime.now(UTC) - timedelta(days=1),
         ends_at=datetime.now(UTC) + timedelta(days=days),
         status="ACTIVE",
-        required_minutes=120 if data else 0,
-        progress_minutes=10 if data else 0,
+        required_minutes=360 if data else 0,
+        progress_minutes=(10 if data else 0) if progress is None else progress,
         has_watchable_drops=data,
-        drops=[{"id": f"{name}-d", "name": "Reward", "required_minutes": 120, "current_minutes": 10, "claimed": False}]
+        drops=[{"id": f"{name}-d", "name": "Reward", "required_minutes": 360, "current_minutes": 10, "claimed": False}]
         if data
         else [],
     )
@@ -193,6 +193,16 @@ class TestChannelLookupBudget(unittest.TestCase):
         world.engine.poll()
 
         self.assertEqual(world.lookups[0], "id-Progress")
+
+    def test_a_campaign_already_in_progress_is_looked_up_before_the_others_with_data(self):
+        """Regression: with dozens of campaigns carrying data, Marvel Snap (61 %) stayed 'A VERIFICAR'."""
+        others = [_campaign(f"D{i:02d}", progress=0, days=1) for i in range(40)]  # end sooner
+        started = _campaign("MarvelSnap", progress=144, days=2)
+        world = _World(others + [started], live=set())
+
+        world.engine.poll()
+
+        self.assertEqual(world.lookups[0], "id-MarvelSnap")
 
     def test_the_walk_goes_on_until_it_finds_live_channels_for_the_next_candidates(self):
         campaigns = [_campaign(f"G{i:02d}", days=1 + i) for i in range(10)]
@@ -433,6 +443,49 @@ class TestUiRefresh(unittest.TestCase):
 
         self.assertTrue(MainWindow._verify_decision_stream(fake, decision))
         self.assertIs(decision.stream, known)
+
+    def _click_window(self, *decisions: FarmDecision) -> MagicMock:
+        fake = _window()
+        fake.latest_snapshot = MagicMock(decisions=list(decisions))
+        fake._forced_farm_game = ""
+        fake._forced_farm_campaign_id = ""
+        fake._forced_farm_channel = ""
+        fake._campaign_is_known_subscription_locked = lambda c: MainWindow._campaign_is_known_subscription_locked(fake, c)
+        fake._decision_is_displayable_active = lambda d: MainWindow._decision_is_displayable_active(fake, d)
+        fake._verify_decision_stream = lambda d: MainWindow._verify_decision_stream(fake, d)
+        return fake
+
+    def test_clicking_a_game_that_was_never_checked_looks_it_up_and_farms_it(self):
+        """Regression: an unchecked game could not be started because it had no known channel yet."""
+        campaign = _campaign("MarvelSnap", progress=144)
+        decision = FarmDecision(campaign=campaign, stream=None, reason_code="stream_unchecked")
+        live = _stream(campaign)
+        fake = self._click_window(decision)
+        fake.client.fetch_streams.return_value = [live]
+        fake.engine.choose_stream.return_value = live
+
+        MainWindow._force_farm_game(fake, "marvelsnap", "MarvelSnap")
+
+        fake.client.fetch_streams.assert_called_once_with(campaign)
+        self.assertEqual(fake._forced_farm_campaign_id, campaign.id)
+        self.assertEqual(fake._forced_farm_channel, live.login)
+        self.assertEqual(fake._forced_farm_game, "MarvelSnap")
+
+    def test_clicking_a_game_with_no_live_channel_says_so_and_changes_nothing(self):
+        campaigns = [_campaign("Multi", progress=p) for p in (10, 20, 30, 40)]
+        # Four campaigns of the same game: only three lookups may be spent on one click.
+        for index, campaign in enumerate(campaigns):
+            campaign.id = f"id-multi-{index}"
+        decisions = [FarmDecision(campaign=c, stream=None, reason_code="stream_unchecked") for c in campaigns]
+        fake = self._click_window(*decisions)
+        fake.client.fetch_streams.return_value = []
+        fake.engine.choose_stream.return_value = None
+
+        MainWindow._force_farm_game(fake, "multi", "Multi")
+
+        self.assertEqual(fake.client.fetch_streams.call_count, 3)
+        self.assertEqual(fake._forced_farm_campaign_id, "")
+        fake._log.assert_called_once()
 
     def test_the_unchecked_state_has_a_text_in_both_languages(self):
         for language in ("pt_PT", "en"):
