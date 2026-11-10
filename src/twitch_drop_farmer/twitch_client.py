@@ -60,6 +60,13 @@ TWITCH_URL = "https://www.twitch.tv"
 CAMPAIGN_UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+# twitchdrops.app game cards carry the exact game name in a dedicated element
+# (and in the cover image alt text); the drop count / time-left live in a
+# sibling "sb-name-sub" element and must never be mixed into the name.
+_REGISTRY_CARD_TITLE_RE = re.compile(
+    r"""(?is)class=["'][^"']*\bsb-name-title\b[^"']*["'][^>]*>(.*?)</div>"""
+)
+_REGISTRY_CARD_IMG_ALT_RE = re.compile(r"""(?is)<img\b[^>]*\balt=["']([^"']+)["']""")
 
 # Jogos "especiais" cujas campanhas podem ser farmadas em qualquer stream com drops activos.
 # IRL (509672) e Special Events (509663) — correspondem ao mesmo critério do DevilXD/TwitchDropsMiner.
@@ -1934,6 +1941,26 @@ class TwitchClient:
             )
         return campaigns
 
+    def _registry_card_game_name(self, card_html: str) -> str:
+        """Return the exact game name from a twitchdrops.app card.
+
+        Reading the dedicated title element (then the cover image alt text) keeps
+        the name intact. Flattening the whole card into text and cutting at the
+        first "drop(s)" keyword leaves the drop count glued to the name (e.g.
+        "Planet Zoo 2 1"), and Twitch cannot resolve such a name to a game, so no
+        streams are ever found for it. The text heuristic is only a last resort
+        for older/unknown layouts.
+        """
+        for pattern in (_REGISTRY_CARD_TITLE_RE, _REGISTRY_CARD_IMG_ALT_RE):
+            match = pattern.search(card_html)
+            if match is None:
+                continue
+            name = re.sub(r"<[^>]+>", " ", html_module.unescape(match.group(1)))
+            name = re.sub(r"\s+", " ", name).strip()
+            if name:
+                return name
+        return self._clean_external_game_text(card_html)
+
     def _campaigns_from_external_registry(self) -> list[DropCampaign]:
         campaigns: list[DropCampaign] = []
         seen: set[str] = set()
@@ -1958,7 +1985,7 @@ class TwitchClient:
             )
             if link_matches:
                 for href, text_chunk in link_matches:
-                    game_name = self._clean_external_game_text(text_chunk)
+                    game_name = self._registry_card_game_name(text_chunk)
                     if not game_name:
                         continue
                     key = game_name.casefold()
