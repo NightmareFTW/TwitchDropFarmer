@@ -17,6 +17,19 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   agora lido do elemento próprio do cartão (com o `alt` da imagem como segunda
   opção); a heurística antiga fica só como último recurso. A lista passa de ~199
   entradas duplicadas para um registo por jogo.
+- **Token de integridade do browser ignorado no mesmo ciclo** — o browser
+  invisível podia obter um token de integridade e mesmo assim não capturar
+  campanhas; a app caía logo para o registry (sem dados de drops) e o token só
+  era tentado no ciclo seguinte. Agora o `ViewerDropsDashboard` é repetido uma
+  vez, por pedido directo, com esse token antes de desistir para o registry.
+
+### Added
+
+- **Diagnóstico do browser invisível** — quando não captura campanhas, o log
+  inclui uma linha `Browser probe:` com o URL final, o título, se há botão de
+  login, se existe o cookie `twilight-user`, as operações GraphQL pedidas pela
+  página e os erros recebidos. Só nomes e contagens: nunca tokens nem valores de
+  cookies.
 
 ## [2.2.43] - 2026-09-04
 
