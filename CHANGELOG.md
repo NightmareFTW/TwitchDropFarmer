@@ -6,6 +6,37 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.48] - 2026-11-10
+
+### Fixed
+
+- **O farm deixa de saltar de jogo em jogo** — com «Redimir drops automaticamente»
+  ligado, cada botão «Claim» clicado na página do inventário era contado como drop
+  reivindicado e a app forçava logo o jogo seguinte. A Twitch rejeita o claim feito
+  pela app (verificação de integridade), por isso o drop continuava por reivindicar
+  e, de 2 em 2 minutos, o ciclo repetia-se: nenhum jogo chegava ao fim. Agora um
+  clique nunca muda o alvo, e o auto-claim só é tentado quando há mesmo um drop a
+  100 % por reivindicar, no máximo uma vez a cada 15 minutos por drop.
+- **O alvo deixa de mudar só porque a lista foi reordenada** — a cada actualização as
+  campanhas são reordenadas e a app farmava a primeira da lista, por isso qualquer
+  reordenação (ou uma consulta de streams que falhou numa volta) trocava de jogo. A
+  campanha em curso mantém-se enquanto tiver canal e tempo por ver; só muda quando
+  deixa de ser farmável ou por escolha manual. Isto significa que uma campanha nova
+  com prioridade mais alta já não interrompe a que está a decorrer.
+
+### Changed
+
+- **As mensagens de claim deixam de dizer «redimidos»** — um clique não é um claim.
+  O log diz agora quantos botões foram clicados e lembra que a Twitch pode rejeitar o
+  pedido (confirma no inventário).
+- **Cada troca de alvo fica registada** — «Alvo alterado: A -> B (motivo: …)», com o
+  motivo (sem canal, campanha concluída, selecção manual…), para que qualquer salto
+  futuro se perceba logo no log.
+
+### Removed
+
+- `_auto_advance_after_claim` (o salto forçado para o jogo seguinte depois de um clique).
+
 ## [2.2.47] - 2026-11-10
 
 ### Added

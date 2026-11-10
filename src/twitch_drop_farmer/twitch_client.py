@@ -3531,7 +3531,11 @@ class TwitchClient:
         clicked_total = int(state["clicked_total"])
         if clicked_total > 0:
             shown = ", ".join(sorted({str(label) for label in state["labels"]}))
-            self._note(f"Claimed {clicked_total} drop reward button(s) from inventory page: {shown}")
+            # A click is not a claim: Twitch's integrity check usually rejects it.
+            self._note(
+                f"Clicked {clicked_total} claim button(s) on the inventory page: {shown} "
+                "(Twitch may still reject the claim; check the inventory)."
+            )
         return clicked_total
 
     def _parse_campaign(self, data: dict[str, Any]) -> DropCampaign | None:
