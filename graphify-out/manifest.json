@@ -1,0 +1,134 @@
+{
+  ".github/workflows/release.yml": {
+    "mtime": 1794299869.076031,
+    "seen": 1794299992.8262923,
+    "ast_hash": "3776464513540f6ff0446caf095fcf22",
+    "semantic_hash": "3776464513540f6ff0446caf095fcf22"
+  },
+  "build_exe.ps1": {
+    "mtime": 1794299869.076031,
+    "seen": 1794299992.8263004,
+    "ast_hash": "bd814d9c3c95eab322ec7d42d79a4a3b",
+    "semantic_hash": "bd814d9c3c95eab322ec7d42d79a4a3b"
+  },
+  "security_check.ps1": {
+    "mtime": 1794299869.0780458,
+    "seen": 1794299992.8263245,
+    "ast_hash": "cc0fca83073df0f7e53a553b18c0fe96",
+    "semantic_hash": "cc0fca83073df0f7e53a553b18c0fe96"
+  },
+  "src/twitch_drop_farmer/__init__.py": {
+    "mtime": 1794299869.0789177,
+    "seen": 1794299992.8263283,
+    "ast_hash": "8407740ce11c0ea5c731124a62a584ba",
+    "semantic_hash": "8407740ce11c0ea5c731124a62a584ba"
+  },
+  "src/twitch_drop_farmer/__main__.py": {
+    "mtime": 1794299869.078943,
+    "seen": 1794299992.826331,
+    "ast_hash": "42f56024f709ecaf179ba9bfe3fae3dd",
+    "semantic_hash": "42f56024f709ecaf179ba9bfe3fae3dd"
+  },
+  "src/twitch_drop_farmer/_debug.py": {
+    "mtime": 1794299869.078943,
+    "seen": 1794299992.8263326,
+    "ast_hash": "587da11a0cd3c30bb8bec1b79dd98d03",
+    "semantic_hash": "587da11a0cd3c30bb8bec1b79dd98d03"
+  },
+  "src/twitch_drop_farmer/alerts.py": {
+    "mtime": 1794299869.078943,
+    "seen": 1794299992.826335,
+    "ast_hash": "d4c72cb8981744083254b3dcad212435",
+    "semantic_hash": "d4c72cb8981744083254b3dcad212435"
+  },
+  "src/twitch_drop_farmer/config.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263366,
+    "ast_hash": "dcccaf02d8ae48a2cc3ffc7fe589a08f",
+    "semantic_hash": "dcccaf02d8ae48a2cc3ffc7fe589a08f"
+  },
+  "src/twitch_drop_farmer/diagnostic.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263385,
+    "ast_hash": "51502630d69090fd714c2b228319201c",
+    "semantic_hash": "51502630d69090fd714c2b228319201c"
+  },
+  "src/twitch_drop_farmer/energy_profiles.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263402,
+    "ast_hash": "48cc454353b8e9a58ef711a4cdab90b8",
+    "semantic_hash": "48cc454353b8e9a58ef711a4cdab90b8"
+  },
+  "src/twitch_drop_farmer/farmer.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263419,
+    "ast_hash": "a2ee51831efe9b3c8068bd6c822b9d80",
+    "semantic_hash": "a2ee51831efe9b3c8068bd6c822b9d80"
+  },
+  "src/twitch_drop_farmer/models.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263445,
+    "ast_hash": "64bf270f8fb324a3adc6344ab2e6203f",
+    "semantic_hash": "64bf270f8fb324a3adc6344ab2e6203f"
+  },
+  "src/twitch_drop_farmer/twitch_client.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.826346,
+    "ast_hash": "1bf62ef8c3a75bf73cd4d3850e465850",
+    "semantic_hash": "1bf62ef8c3a75bf73cd4d3850e465850"
+  },
+  "src/twitch_drop_farmer/ui.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263476,
+    "ast_hash": "6a62fa800fa34e1f764c2c26d81a9bb1",
+    "semantic_hash": "6a62fa800fa34e1f764c2c26d81a9bb1"
+  },
+  "src/twitch_drop_farmer/updater.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263493,
+    "ast_hash": "c154b05c16894793294e853c8d9b2bd5",
+    "semantic_hash": "c154b05c16894793294e853c8d9b2bd5"
+  },
+  "src/twitch_drop_farmer/watchdog.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.826351,
+    "ast_hash": "aa00830caa6a1a646e0f7956a90741a5",
+    "semantic_hash": "aa00830caa6a1a646e0f7956a90741a5"
+  },
+  "tests/test_farm_pipeline.py": {
+    "mtime": 1794299869.0794246,
+    "seen": 1794299992.8263528,
+    "ast_hash": "ba0e7ec91baac0dc0356cfe649c85f7c",
+    "semantic_hash": "ba0e7ec91baac0dc0356cfe649c85f7c"
+  },
+  "tools/probe_browser_drop_routes.py": {
+    "mtime": 1794299869.0820458,
+    "seen": 1794299992.826355,
+    "ast_hash": "a3c64273f5be90f16edf00bc0c1dd49f",
+    "semantic_hash": "a3c64273f5be90f16edf00bc0c1dd49f"
+  },
+  "tools/probe_graphql_payloads.py": {
+    "mtime": 1794299869.082641,
+    "seen": 1794299992.8263566,
+    "ast_hash": "73d3c568c411b47c2bf8563c1902e91b",
+    "semantic_hash": "73d3c568c411b47c2bf8563c1902e91b"
+  },
+  "tools/refresh_icon_cache.ps1": {
+    "mtime": 1794299869.082641,
+    "seen": 1794299992.8263586,
+    "ast_hash": "aa52bbba028672d7e8abc6c8224361fe",
+    "semantic_hash": "aa52bbba028672d7e8abc6c8224361fe"
+  },
+  "tools/repro_campaign_fetch.py": {
+    "mtime": 1794299869.082641,
+    "seen": 1794299992.8263602,
+    "ast_hash": "d8ba6754134c8af41b6a3da3b02d7daf",
+    "semantic_hash": "d8ba6754134c8af41b6a3da3b02d7daf"
+  },
+  "tools/take_screenshots.py": {
+    "mtime": 1794299869.082641,
+    "seen": 1794299992.8263624,
+    "ast_hash": "56bf4248bd0543a2a4beeefe3181b142",
+    "semantic_hash": "56bf4248bd0543a2a4beeefe3181b142"
+  }
+}
