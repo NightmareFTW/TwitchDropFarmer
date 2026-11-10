@@ -6,6 +6,27 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.47] - 2026-11-10
+
+### Added
+
+- **Medições de tempo na vigilância HLS** — um episódio de ~90 s em que a vigilância
+  pediu apenas 1 segmento (sem erros) e o heartbeat ficou parado ainda não tem causa
+  conhecida. O watcher passa a medir cada ciclo e, quando um demora 8 s ou mais,
+  escreve no log «ciclo lento de X s (playlist Y s, segmentos Z s)» (no máximo uma
+  vez por 30 s). O resumo de cada minuto inclui agora o ciclo mais lento e quantos
+  foram lentos, para se ver exactamente que chamada bloqueou.
+
+### Changed
+
+- **Timeouts HLS mais curtos** — os pedidos do watcher (playlist e segmento) passam a
+  ter `(4 s ligação, 8 s leitura)`; um pedido pendurado é cortado e repetido no
+  ciclo seguinte (2 s) em vez de bloquear a vigilância durante 10 s ou mais.
+- **O heartbeat deixa de repetir o ping HLS** — depois do `sendSpadeEvents`, o
+  heartbeat fazia mais 2–3 pedidos HLS bloqueantes (até 20 s cada) numa thread de
+  trabalho. Com o watcher a pedir já todos os segmentos desse canal, o reforço é
+  redundante e só é feito quando o watcher não está activo no canal.
+
 ## [2.2.46] - 2026-11-10
 
 ### Fixed

@@ -108,6 +108,124 @@ class TestIteration(unittest.TestCase):
             watcher._iteration("chan", _RecentSet(), first_pass=True)
 
 
+class _FakeClock:
+    """Manually advanced clock so timing behaviour can be tested without sleeping."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class TestTimingDiagnostics(unittest.TestCase):
+    def _watcher(self, clock, notes, **kwargs):
+        def fetch(_login):
+            clock.advance(self.fetch_cost)
+            return _playlist("s1.ts"), BASE
+
+        def touch(_login, _url):
+            clock.advance(self.touch_cost)
+
+        return SegmentWatcher(fetch, touch, note=notes.append, clock=clock, **kwargs)
+
+    fetch_cost = 0.0
+    touch_cost = 0.0
+
+    def test_iteration_records_the_playlist_and_segment_time_separately(self):
+        clock, notes = _FakeClock(), []
+        self.fetch_cost, self.touch_cost = 1.5, 4.0
+        watcher = self._watcher(clock, notes)
+
+        watcher._iteration("chan", _RecentSet(), first_pass=True)
+
+        self.assertAlmostEqual(watcher.last_fetch_sec, 1.5)
+        self.assertAlmostEqual(watcher.last_touch_sec, 4.0)
+
+    def test_a_fast_cycle_is_not_reported(self):
+        clock, notes = _FakeClock(), []
+        watcher = self._watcher(clock, notes, slow_cycle_sec=8.0)
+
+        watcher._record_cycle("chan", 0.4)
+
+        self.assertEqual(notes, [])
+
+    def test_a_slow_cycle_is_reported_with_where_the_time_went(self):
+        clock, notes = _FakeClock(), []
+        self.fetch_cost, self.touch_cost = 9.5, 0.2
+        watcher = self._watcher(clock, notes, slow_cycle_sec=8.0)
+        watcher._iteration("chan", _RecentSet(), first_pass=True)
+
+        watcher._record_cycle("chan", watcher.last_fetch_sec + watcher.last_touch_sec)
+
+        self.assertEqual(len(notes), 1)
+        self.assertIn("chan", notes[0])
+        self.assertIn("ciclo lento de 9.7 s", notes[0])
+        self.assertIn("playlist 9.5 s", notes[0])
+        self.assertIn("segmentos 0.2 s", notes[0])
+
+    def test_slow_cycle_notes_are_rate_limited(self):
+        clock, notes = _FakeClock(), []
+        watcher = self._watcher(clock, notes, slow_cycle_sec=8.0, slow_note_every_sec=30.0)
+
+        watcher._record_cycle("chan", 12.0)
+        clock.advance(10)
+        watcher._record_cycle("chan", 12.0)  # within 30 s of the previous note: silent
+        clock.advance(25)
+        watcher._record_cycle("chan", 12.0)  # 35 s after the first note: reported again
+
+        self.assertEqual(len(notes), 2)
+
+    def test_a_failing_playlist_still_records_how_long_it_blocked(self):
+        clock, notes = _FakeClock(), []
+
+        def fetch(_login):
+            clock.advance(10.0)
+            raise TimeoutError("read timed out")
+
+        watcher = SegmentWatcher(fetch, lambda _l, _u: None, note=notes.append, clock=clock)
+
+        with self.assertRaises(TimeoutError):
+            watcher._iteration("chan", _RecentSet(), first_pass=True)
+
+        self.assertAlmostEqual(watcher.last_fetch_sec, 10.0)
+
+    def test_the_minute_summary_includes_the_slowest_cycle(self):
+        clock, notes = _FakeClock(), []
+        enough = threading.Event()
+        cycles = {"n": 0}
+
+        def fetch(_login):
+            cycles["n"] += 1
+            clock.advance(20.0 if cycles["n"] == 2 else 0.1)
+            if cycles["n"] >= 3:
+                enough.set()
+            return _playlist(f"s{cycles['n']}.ts"), BASE
+
+        watcher = SegmentWatcher(
+            fetch,
+            lambda _l, _u: None,
+            note=notes.append,
+            clock=clock,
+            poll_interval_sec=0.01,
+            summary_every_sec=15.0,
+            slow_cycle_sec=8.0,
+        )
+        self.addCleanup(watcher.stop)
+
+        watcher.set_channel("chan")
+        self.assertTrue(enough.wait(timeout=5))
+        watcher.stop()
+
+        summaries = [note for note in notes if "segmento(s) pedidos" in note]
+        self.assertTrue(summaries, notes)
+        self.assertIn("ciclo mais lento 20.0 s", summaries[0])
+        self.assertIn("1 lento(s)", summaries[0])
+
+
 class TestThreadLifecycle(unittest.TestCase):
     def _make(self, *, fetch=None):
         touched: list[tuple[str, str]] = []
