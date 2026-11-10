@@ -23,6 +23,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   era tentado no ciclo seguinte. Agora o `ViewerDropsDashboard` é repetido uma
   vez, por pedido directo, com esse token antes de desistir para o registry.
 
+### Changed
+
+- **O browser invisível deixa de esperar por um resultado impossível** — quando a
+  própria página recebe `failed integrity check` no `ViewerDropsDashboard` (o
+  browser embutido é que está a ser recusado, não os cookies), a espera é
+  abortada logo, a análise do HTML renderizado é dispensada (usa os mesmos dados
+  bloqueados) e o fallback do browser fica suspenso ~15 min. Antes cada ciclo
+  gastava ~75 s nisto. O "Actualizar dashboard" (scan completo) continua a
+  tentar sempre.
+
 ### Added
 
 - **Diagnóstico do browser invisível** — quando não captura campanhas, o log
