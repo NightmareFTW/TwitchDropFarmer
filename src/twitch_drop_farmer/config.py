@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from .game_names import clean_game_names
+
 
 CONFIG_DIR = Path.home() / ".twitch-drop-farmer"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -50,6 +52,10 @@ def load_config() -> AppConfig:
     data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     valid_keys = {item.name for item in fields(AppConfig)}
     filtered = {key: value for key, value in data.items() if key in valid_keys}
+    # Names saved by older versions may carry a registry card's status text.
+    for key in ("whitelist_games", "blacklist_games"):
+        if isinstance(filtered.get(key), list):
+            filtered[key] = clean_game_names(filtered[key])
     return AppConfig(**filtered)
 
 

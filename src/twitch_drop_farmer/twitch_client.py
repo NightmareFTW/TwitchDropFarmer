@@ -35,10 +35,12 @@ if __package__ in {None, ""}:
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
     from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
+    from twitch_drop_farmer.game_names import clean_game_name
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
     from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
     from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
+    from .game_names import clean_game_name
     from .models import DropCampaign, StreamCandidate
     from .stream_watcher import SegmentWatcher
 
@@ -2232,10 +2234,10 @@ class TwitchClient:
             if match is None:
                 continue
             name = re.sub(r"<[^>]+>", " ", html_module.unescape(match.group(1)))
-            name = re.sub(r"\s+", " ", name).strip()
+            name = clean_game_name(re.sub(r"\s+", " ", name).strip())
             if name:
                 return name
-        return self._clean_external_game_text(card_html)
+        return clean_game_name(self._clean_external_game_text(card_html))
 
     def _campaigns_from_external_registry(self) -> list[DropCampaign]:
         campaigns: list[DropCampaign] = []
@@ -3813,6 +3815,7 @@ class TwitchClient:
             return
         now = datetime.now(timezone.utc)
         loaded = 0
+        dropped = 0
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -3821,10 +3824,18 @@ class TwitchClient:
                 continue
             if not self._campaign_cache_keep(campaign, now):
                 continue
+            if clean_game_name(campaign.game_name) != campaign.game_name:
+                # Saved by an older version with a registry card's status text in the
+                # name (e.g. "... 1 drop · in 4 days"). The registry fetch brings the same
+                # game back under its real name, so the polluted entry is just dropped.
+                dropped += 1
+                continue
             self._campaign_cache[campaign.id] = campaign
             loaded += 1
         if loaded:
             self._note(f"Cache de campanhas: {loaded} campanha(s) carregadas do disco.")
+        if dropped:
+            self._note(f"Cache de campanhas: {dropped} entrada(s) com nome sujo de versões antigas foram descartadas.")
 
     def _save_campaign_cache(self, campaigns: list[DropCampaign]) -> None:
         """Persist the current cache to disk atomically (best-effort; a failure
