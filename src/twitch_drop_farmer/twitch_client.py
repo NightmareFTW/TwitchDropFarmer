@@ -83,6 +83,37 @@ _GQL_INTERCEPT_JS = """(function() {
     window.__tdfGqlStore = {};
     window.__tdfIntegrityToken = null;
     window.__tdfIntegrityTokenAt = 0;
+    // Diagnostics only (never tokens / cookie values): which GQL operations the
+    // page issued and the error messages Twitch answered with, so an empty
+    // capture can be explained instead of just reported.
+    window.__tdfGqlOps = {};
+    window.__tdfGqlErrors = [];
+
+    function _noteOps(body) {
+        try {
+            if (typeof body !== 'string') return;
+            var parsed = JSON.parse(body);
+            var list = Array.isArray(parsed) ? parsed : [parsed];
+            for (var i = 0; i < list.length; i++) {
+                var name = list[i] && list[i].operationName;
+                if (name) window.__tdfGqlOps[name] = (window.__tdfGqlOps[name] || 0) + 1;
+            }
+        } catch(e) {}
+    }
+
+    function _noteErrors(item) {
+        try {
+            var errs = item && item.errors;
+            if (!Array.isArray(errs)) return;
+            for (var i = 0; i < errs.length; i++) {
+                var msg = errs[i] && errs[i].message;
+                if (typeof msg !== 'string') continue;
+                msg = msg.slice(0, 120);
+                if (window.__tdfGqlErrors.indexOf(msg) === -1 && window.__tdfGqlErrors.length < 8)
+                    window.__tdfGqlErrors.push(msg);
+            }
+        } catch(e) {}
+    }
 
     function _store(c) {
         if (!c || !c.id) return;
@@ -102,6 +133,7 @@ _GQL_INTERCEPT_JS = """(function() {
             var items = Array.isArray(data) ? data : [data];
             for (var i = 0; i < items.length; i++) {
                 var item = items[i];
+                _noteErrors(item);
                 if (!item || !item.data) continue;
                 var d = item.data;
                 var cu = d.currentUser;
@@ -146,6 +178,7 @@ _GQL_INTERCEPT_JS = """(function() {
             if (url.indexOf('/gql') !== -1) {
                 var hdrs = (init && init.headers) || (input && input.headers);
                 _captureIntegrity(_extractIntegrity(hdrs));
+                _noteOps(init && init.body);
             }
         } catch(e) {}
         return _oFetch.call(this, input, init).then(function(r) {
@@ -173,8 +206,9 @@ _GQL_INTERCEPT_JS = """(function() {
         } catch(e) {}
         return _oSetHeader.apply(this, arguments);
     };
-    XMLHttpRequest.prototype.send = function() {
+    XMLHttpRequest.prototype.send = function(body) {
         if (this.__tdfU && this.__tdfU.indexOf('/gql') !== -1) {
+            _noteOps(body);
             var x = this;
             this.addEventListener('load', function() {
                 try { _process(JSON.parse(x.responseText)); } catch(e) {}
@@ -189,13 +223,57 @@ _GQL_INTERCEPT_JS = """(function() {
 # captured campaign payloads.
 _RETRIEVE_GQL_STORE_JS = """(() => {
     try {
+        var cookieNames = [];
+        try {
+            cookieNames = document.cookie
+                ? document.cookie.split(';').map(function(s) { return s.split('=')[0].trim(); })
+                : [];
+        } catch(e) {}
+        var loginButton = false;
+        try {
+            loginButton = !!document.querySelector(
+                '[data-a-target="login-button"],[data-test-selector="login-button"]'
+            );
+        } catch(e) {}
         return JSON.stringify({
             campaigns: Object.values(window.__tdfGqlStore || {}),
             integrityToken: window.__tdfIntegrityToken || null,
-            integrityTokenAt: window.__tdfIntegrityTokenAt || 0
+            integrityTokenAt: window.__tdfIntegrityTokenAt || 0,
+            ops: window.__tdfGqlOps || {},
+            errors: window.__tdfGqlErrors || [],
+            page: {
+                href: String(location.href || '').split('?')[0].split('#')[0],
+                title: String(document.title || '').slice(0, 80),
+                loginButton: loginButton,
+                cookieNames: cookieNames.slice(0, 40)
+            }
         });
     } catch(e) { return '{}'; }
 })();"""
+
+
+def _describe_browser_probe(probe: dict[str, Any] | None) -> str:
+    """One-line, secret-free summary of what the invisible browser page did.
+
+    Built only from names/counts/messages (never token or cookie values), so it is
+    safe to show in the log and to paste into an issue.
+    """
+    if not isinstance(probe, dict) or not probe:
+        return "Browser probe: a página não respondeu ao script de diagnóstico."
+    page = probe.get("page") if isinstance(probe.get("page"), dict) else {}
+    ops = probe.get("ops") if isinstance(probe.get("ops"), dict) else {}
+    errors = probe.get("errors") if isinstance(probe.get("errors"), list) else []
+    cookie_names = page.get("cookieNames") if isinstance(page.get("cookieNames"), list) else []
+    parts = [
+        f"url={page.get('href') or '?'}",
+        f"titulo={str(page.get('title') or '?')!r}",
+        f"botao_login={'sim' if page.get('loginButton') else 'nao'}",
+        f"cookie_twilight-user={'sim' if 'twilight-user' in cookie_names else 'nao'}",
+        f"cookies_visiveis={len(cookie_names)}",
+        "gql_ops=" + (", ".join(f"{name}x{count}" for name, count in sorted(ops.items())) or "nenhuma"),
+        "gql_erros=" + (" | ".join(str(error) for error in errors) or "nenhum"),
+    ]
+    return "Browser probe: " + "; ".join(parts)
 
 # How long a harvested Client-Integrity token is trusted for direct HTTP requests
 # before we stop offering it and fall back to the browser to mint a fresh one.
@@ -2404,6 +2482,9 @@ class TwitchClient:
                         if not isinstance(parsed, dict):
                             return
                         self._capture_integrity_from_retrieved(parsed)
+                        # Keep the latest page state so an empty capture can be
+                        # explained in the log (see _describe_browser_probe).
+                        captured["probe"] = {key: parsed.get(key) for key in ("ops", "errors", "page")}
                         items = parsed.get("campaigns")
                         if not isinstance(items, list):
                             return
@@ -2484,6 +2565,7 @@ class TwitchClient:
         raw_payloads = list(captured["data"].values())
         if not raw_payloads:
             self._note("Browser GQL intercept: sem dados de campanhas capturados.")
+            self._note(_describe_browser_probe(captured.get("probe")))
             return []
 
         self._note(f"Browser GQL intercept capturou {len(raw_payloads)} payload(s) de campanha.")
@@ -3586,6 +3668,43 @@ class TwitchClient:
         merged.sort(key=lambda item: item.active, reverse=True)
         return merged
 
+    def _retry_dashboard_with_harvested_integrity(self) -> dict[str, dict[str, Any]] | None:
+        """Repeat ViewerDropsDashboard once with the Client-Integrity token the
+        invisible browser harvested during this same cycle.
+
+        The browser fallback can obtain a token yet still capture no campaign
+        cards. Without this retry the cycle gave up straight to the public
+        registry and the token was only tried on the *next* cycle (or never, if
+        it expired first). Returns the active/upcoming campaigns keyed by id, or
+        None when there is no token or Twitch still rejects the request.
+        """
+        if not self._current_integrity_token():
+            return None
+        self._note("Token de integridade do browser disponível: a repetir o ViewerDropsDashboard por pedido directo.")
+        try:
+            response = self._post_gql(CAMPAIGNS_QUERY, client_profile="android")
+        except requests.RequestException as exc:
+            self._note(f"Repetição do ViewerDropsDashboard falhou: {exc}")
+            return None
+        if not isinstance(response, dict):
+            return None
+        if any("failed integrity check" in message.casefold() for message in self._graphql_error_messages(response)):
+            self._note("O ViewerDropsDashboard continua bloqueado mesmo com o token de integridade do browser.")
+            return None
+        user = (response.get("data") or {}).get("currentUser")
+        if not isinstance(user, dict):
+            self._note("A repetição do ViewerDropsDashboard não devolveu currentUser.")
+            return None
+        campaigns = {
+            item.get("id", ""): item
+            for item in (user.get("dropCampaigns") or [])
+            if item.get("id") and item.get("status") in {"ACTIVE", "UPCOMING"}
+        }
+        self._note(
+            f"ViewerDropsDashboard passou com o token do browser ({len(campaigns)} campanha(s) activa(s)/futura(s))."
+        )
+        return campaigns
+
     def fetch_campaigns(
         self, *, allow_browser_fallback: bool = True, full_scan: bool = False
     ) -> list[DropCampaign]:
@@ -3696,14 +3815,22 @@ class TwitchClient:
                         "ViewerDropsDashboard está integrity-protected; browser fallback recuperou a lista completa e interrompe a cadeia de Twitch."
                     )
                     return browser_campaigns
-                external_campaigns = self._campaigns_from_external_registry()
-                if external_campaigns:
-                    self._note(
-                        "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
-                    )
-                    external_campaigns.sort(key=lambda item: item.starts_at)
-                    external_campaigns.sort(key=lambda item: item.active, reverse=True)
-                    return external_campaigns
+                # The browser captured no cards, but it may still have harvested
+                # an integrity token: try the direct dashboard once more with it
+                # before settling for the (data-less) public registry.
+                recovered = self._retry_dashboard_with_harvested_integrity()
+                if recovered is not None:
+                    available_campaigns = recovered
+                    dashboard_integrity_blocked = False
+                else:
+                    external_campaigns = self._campaigns_from_external_registry()
+                    if external_campaigns:
+                        self._note(
+                            "Nenhuma origem válida da Twitch foi encontrada; usa-se a listagem completa do registry público como fonte definitiva."
+                        )
+                        external_campaigns.sort(key=lambda item: item.starts_at)
+                        external_campaigns.sort(key=lambda item: item.active, reverse=True)
+                        return external_campaigns
         if available_campaigns and len(available_campaigns) <= minimum_expected:
             self._note(
                 "ViewerDropsDashboard returned a small campaign list. "

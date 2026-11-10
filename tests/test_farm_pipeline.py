@@ -34,6 +34,7 @@ import importlib.util
 import sys
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1074,6 +1075,112 @@ class TestDashboardIntegrityFallback(unittest.TestCase):
         self.assertEqual(len(campaigns), 1)
         self.assertEqual(campaigns[0].id, "browser-fallback-001")
         client._campaigns_from_browser_page.assert_called_once()
+
+    @staticmethod
+    def _make_client(*, harvested_token: str = "") -> "TwitchClient":
+        client = TwitchClient.__new__(TwitchClient)
+        client.session = MagicMock()
+        client.login_state = MagicMock()
+        client.login_state.oauth_token = "dummy-token"
+        client.login_state.user_id = "123456"
+        client.login_state.login_name = "tester"
+        client._diagnostics = []
+        client._note = MagicMock()
+        client.validate_oauth_token = MagicMock()
+        client._harvested_integrity_token = harvested_token
+        client._harvested_integrity_token_captured_mono = time.monotonic()
+        return client
+
+    def test_retry_with_harvested_token_is_skipped_without_a_token(self):
+        client = self._make_client(harvested_token="")
+        client._post_gql = MagicMock()
+
+        self.assertIsNone(client._retry_dashboard_with_harvested_integrity())
+        client._post_gql.assert_not_called()
+
+    def test_retry_with_harvested_token_reports_still_blocked(self):
+        client = self._make_client(harvested_token="browser-token")
+        client._post_gql = MagicMock(return_value={
+            "errors": [{"message": "failed integrity check"}],
+            "data": {"currentUser": None},
+        })
+
+        self.assertIsNone(client._retry_dashboard_with_harvested_integrity())
+        client._post_gql.assert_called_once()
+
+    def test_retry_with_harvested_token_returns_active_and_upcoming_campaigns(self):
+        client = self._make_client(harvested_token="browser-token")
+        client._post_gql = MagicMock(return_value={"data": {"currentUser": {"dropCampaigns": [
+            {"id": "aaaa", "status": "ACTIVE"},
+            {"id": "bbbb", "status": "UPCOMING"},
+            {"id": "cccc", "status": "EXPIRED"},
+        ]}}})
+
+        recovered = client._retry_dashboard_with_harvested_integrity()
+
+        self.assertEqual(set(recovered), {"aaaa", "bbbb"})
+
+    def test_dashboard_is_retried_with_browser_token_before_using_the_registry(self):
+        """Browser got an integrity token but captured no cards: the direct dashboard
+        must be retried with that token in the same cycle instead of falling
+        straight to the data-less public registry."""
+        client = self._make_client(harvested_token="browser-token")
+        campaign_id = "e16c5850-2c6c-4d4f-9ed0-d5c98ac12df5"
+        real_campaign = DropCampaign(
+            id=campaign_id,
+            game_name="Dying Light 2",
+            title="Dying Light 2 Campaign",
+            starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=7),
+            status="ACTIVE",
+            required_minutes=120,
+            drops=_make_drops(3),
+            linked=True,
+        )
+        registry_campaign = _browser_campaign("Registry Game")
+        client._campaigns_from_drops_page = MagicMock(return_value={})
+        client._campaigns_from_browser_page = MagicMock(return_value=[])  # nothing captured
+        client._campaigns_from_external_registry = MagicMock(return_value=[registry_campaign])
+        client._parse_campaign = MagicMock(return_value=real_campaign)
+        client._merge_campaign_cache = MagicMock(side_effect=lambda campaigns: campaigns)
+        blocked = {"errors": [{"message": "failed integrity check"}], "data": {"currentUser": {}}}
+        passed = {"data": {"currentUser": {"dropCampaigns": [{"id": campaign_id, "status": "ACTIVE"}]}}}
+        details = {"data": {"user": {"dropCampaign": {"id": campaign_id, "status": "ACTIVE"}}}}
+        client._post_gql = MagicMock(side_effect=[
+            {"data": {"currentUser": {"inventory": {"dropCampaignsInProgress": []}}}},  # Inventory
+            blocked,   # ViewerDropsDashboard (no token yet)
+            passed,    # ViewerDropsDashboard retried with the browser token
+            details,   # DropCampaignDetails
+        ])
+
+        campaigns = client.fetch_campaigns(allow_browser_fallback=True)
+
+        self.assertEqual([campaign.id for campaign in campaigns], [campaign_id])
+        client._campaigns_from_external_registry.assert_not_called()
+
+    def test_browser_probe_description_is_informative_and_secret_free(self):
+        from twitch_drop_farmer.twitch_client import _describe_browser_probe
+
+        text = _describe_browser_probe({
+            "ops": {"ViewerDropsDashboard": 2, "Inventory": 1},
+            "errors": ["failed integrity check"],
+            "page": {
+                "href": "https://www.twitch.tv/login",
+                "title": "Login",
+                "loginButton": True,
+                "cookieNames": ["unique_id", "persistent"],
+            },
+        })
+
+        self.assertIn("url=https://www.twitch.tv/login", text)
+        self.assertIn("botao_login=sim", text)
+        self.assertIn("cookie_twilight-user=nao", text)
+        self.assertIn("Inventoryx1, ViewerDropsDashboardx2", text)
+        self.assertIn("failed integrity check", text)
+        # Only names/counts are ever reported, never values.
+        self.assertNotIn("dummy-token", text)
+        self.assertIn("a página não respondeu", _describe_browser_probe(None))
+        self.assertIn("a página não respondeu", _describe_browser_probe({}))
 
 
 class TestFetchStreamsSlugResolution(unittest.TestCase):
