@@ -90,7 +90,7 @@ from .log_export import save_log
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
 from .twitch_client import TwitchClient, is_placeholder_box_art
-from .energy_profiles import AVAILABLE_PROFILES, get_profile_by_name
+from .energy_profiles import AVAILABLE_PROFILES, EnergyProfile, get_default_profile, get_profile_by_name
 from .alerts import AlertManager, AlertSeverity, AlertType, get_alert_manager
 from . import __version__, updater
 
@@ -139,6 +139,11 @@ TOAST_DURATION_MS = 3000
 
 # The on-screen log is capped: a farm can run for days and the widget keeps every line in memory.
 LOG_MAX_LINES = 5000
+
+
+def _minutes_text(seconds: int) -> str:
+    """60 -> "1", 300 -> "5", 90 -> "1.5" (for the profile texts)."""
+    return str(seconds // 60) if seconds % 60 == 0 else f"{seconds / 60:.1f}"
 
 
 def ready_drops(campaign: DropCampaign) -> list[tuple[str, str]]:
@@ -1003,7 +1008,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Versão: {version}"
         ),
         "version_corner": "v{version}",
-        "help_energy_profile": "Define o comportamento da aplicação: mais económico (menos pedidos) ou mais reactivo (mais pedidos).",
+        "help_energy_profile": "Define o ritmo da aplicação. Um perfil mais económico faz menos pedidos à Twitch, mas demora mais a notar que um canal ficou offline; um mais reactivo faz mais pedidos e reage mais depressa. O heartbeat e a vigilância do vídeo (o que a Twitch conta como estares a ver) são iguais nos três.\n{profiles}",
+        "energy_profile_line": "• {name}: verifica os canais de {poll} em {poll} min, renova as campanhas de {refresh} em {refresh} min e desiste de uma campanha parada aos {stall} min.",
+        "energy_profile_applied": "Perfil {name}: canais de {poll} em {poll} min, campanhas de {refresh} em {refresh} min, desiste de uma campanha parada aos {stall} min.",
         "help_watchdog": "Monitoriza ausência de progresso e tenta recuperar automaticamente quando detecta bloqueio.",
         "help_watchdog_timeout": "Minutos sem progresso até o monitor desistir da campanha e passar a outra. Antes disso tenta, a 1/5 do tempo, reiniciar a vigilância do canal e, a metade, mudar de canal.",
         "help_autoupdate": "Ainda não implementado: a aplicação só verifica se há uma versão nova quando carregas em «Verificar actualizações»; não transfere nem instala nada sozinha.",
@@ -1321,7 +1328,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Version: {version}"
         ),
         "version_corner": "v{version}",
-        "help_energy_profile": "Defines app behavior: more economical (fewer requests) or more responsive (more requests).",
+        "help_energy_profile": "Sets the app's rhythm. A more economical profile asks Twitch less often but takes longer to notice a channel going offline; a more responsive one asks more often and reacts faster. The heartbeat and the video watcher (what Twitch counts as you watching) are the same in all three.\n{profiles}",
+        "energy_profile_line": "• {name}: checks channels every {poll} min, refreshes campaigns every {refresh} min and gives up on a stalled campaign after {stall} min.",
+        "energy_profile_applied": "Profile {name}: channels every {poll} min, campaigns every {refresh} min, gives up on a stalled campaign after {stall} min.",
         "help_watchdog": "Monitors lack of progress and tries automatic recovery when farming gets stuck.",
         "help_watchdog_timeout": "Minutes without progress before the monitor gives up on the campaign and moves to another one. Before that it restarts the channel watch (at 1/5 of the time) and switches channel (at half).",
         "help_autoupdate": "Not implemented yet: the app only checks for a new version when you press \"Check for updates\"; it does not download or install anything by itself.",
@@ -1932,6 +1941,7 @@ class MainWindow(QMainWindow):
         self._autosave_timer.setInterval(AUTOSAVE_DELAY_MS)
         self._autosave_timer.timeout.connect(self._autosave_now)
         self._autosave_reasons: set[str] = set()
+        self._ui_ready = False  # True once the window is built (see handle_energy_profile_change)
         self._farm_health = FarmHealth(self.config.watchdog_stall_timeout_min)
         self._heartbeat_failures = 0
         self._api_error_announced = False
@@ -1979,6 +1989,7 @@ class MainWindow(QMainWindow):
         self._set_oauth_hidden(self._oauth_hidden)
         self._update_auth_status()
         self._wire_autosave()
+        self._ui_ready = True
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -3035,7 +3046,7 @@ class MainWindow(QMainWindow):
         self.settings_tabs.setTabText(2, self._t("settings_tab_alerts"))
         
         self.energy_profile_label.setText(self._t("energy_profile_label"))
-        self.energy_profile_help_icon.setToolTip(self._t("help_energy_profile"))
+        self.energy_profile_help_icon.setToolTip(self._energy_profiles_help())
         self.watchdog_label.setText(self._t("watchdog_enabled"))
         self.watchdog_help_icon.setToolTip(self._t("help_watchdog"))
         self.watchdog_timeout_label.setText(self._t("watchdog_timeout"))
@@ -4844,15 +4855,48 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_priority_label()
 
+    def _energy_profile(self) -> EnergyProfile:
+        return get_profile_by_name(self.config.energy_profile) or get_default_profile()
+
     def handle_energy_profile_change(self, profile_name: str) -> None:
-        """Handle energy profile selection change."""
+        """Use another energy profile: how often Twitch is asked, and how long a stalled
+        campaign is given before the stall monitor gives up on it."""
         self.config.energy_profile = profile_name
         profile = get_profile_by_name(profile_name)
-        if profile:
-            logger.info(f"Perfil de energia alterado para: {profile_name}")
-            self.config.watchdog_stall_timeout_min = profile.watchdog_stall_timeout_min
-            if hasattr(self, "watchdog_timeout_spinbox"):
-                self.watchdog_timeout_spinbox.setValue(profile.watchdog_stall_timeout_min)
+        if profile is None:
+            return
+        self.engine.apply_profile(profile)
+        if not self._ui_ready:
+            # The saved choice is only being shown while the window is built: leave the
+            # stall timeout the user saved alone.
+            return
+        self.config.watchdog_stall_timeout_min = profile.watchdog_stall_timeout_min
+        self.watchdog_timeout_spinbox.setValue(profile.watchdog_stall_timeout_min)
+        if self.timer.isActive():  # a running farm follows the new rhythm at once
+            self.timer.setInterval(profile.poll_interval_sec * 1000)
+        self._log(
+            self._t(
+                "energy_profile_applied",
+                name=profile.name,
+                poll=_minutes_text(profile.poll_interval_sec),
+                refresh=_minutes_text(profile.campaign_refresh_sec),
+                stall=profile.watchdog_stall_timeout_min,
+            )
+        )
+
+    def _energy_profiles_help(self) -> str:
+        """The tooltip: what each profile really does, built from the profile data itself."""
+        lines = [
+            self._t(
+                "energy_profile_line",
+                name=profile.name,
+                poll=_minutes_text(profile.poll_interval_sec),
+                refresh=_minutes_text(profile.campaign_refresh_sec),
+                stall=profile.watchdog_stall_timeout_min,
+            )
+            for profile in AVAILABLE_PROFILES
+        ]
+        return self._t("help_energy_profile", profiles="\n".join(lines))
 
     def handle_watchdog_timeout_change(self, minutes: int) -> None:
         self.config.watchdog_stall_timeout_min = int(minutes)
@@ -5213,7 +5257,7 @@ class MainWindow(QMainWindow):
         self._with_errors(self._do_start)
 
     def _do_start(self) -> None:
-        self.timer.start(self.config.auto_switch_interval_sec * 1000)
+        self.timer.start(self._energy_profile().poll_interval_sec * 1000)
         self.streamless_timer.start()
         self._set_farming_controls(True)
         self._forced_farm_channel = ""

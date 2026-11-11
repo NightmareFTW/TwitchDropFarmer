@@ -11,7 +11,7 @@ from .config import AppConfig
 from .models import ChannelOption, DropCampaign, FarmDecision, StreamCandidate
 from .twitch_client import TwitchClient
 from .alerts import get_alert_manager, AlertType, AlertSeverity
-from .energy_profiles import get_profile_by_name
+from .energy_profiles import EnergyProfile, get_default_profile, get_profile_by_name
 from .game_names import loose_game_key
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ class FarmEngine:
     #   * everything else (it only feeds the dashboard ribbons): after BACKGROUND_TTL_SEC,
     #     at most MAX_BACKGROUND_LOOKUPS per poll.
     # What was not looked up keeps its last answer (or "stream_unchecked" if there is none).
+    # These are the defaults ("Balanceado"); the energy profile (energy_profiles.py) sets the
+    # three durations per instance through apply_profile().
     CAMPAIGN_REFRESH_SEC = 600.0
     FRONT_TTL_SEC = 300.0
     FRONT_LIVE_WANTED = 2
@@ -135,12 +137,10 @@ class FarmEngine:
         self.current_channel = ""
         self._channel_penalty: dict[str, float] = {}
 
-        # Apply energy profile settings if available
-        profile = get_profile_by_name(config.energy_profile)
-        if profile:
-            self.polling_interval_sec = profile.polling_interval_sec
-            self.api_timeout_sec = profile.api_timeout_sec
-            logger.info(f"FarmEngine iniciado com perfil: {config.energy_profile}")
+        self.campaign_refresh_sec = self.CAMPAIGN_REFRESH_SEC
+        self.front_ttl_sec = self.FRONT_TTL_SEC
+        self.background_ttl_sec = self.BACKGROUND_TTL_SEC
+        self.apply_profile(get_profile_by_name(config.energy_profile) or get_default_profile())
 
     def _game_is_allowed(self, game: str) -> bool:
         # Compared without punctuation, so the registry's "Honkai Star Rail" matches a
@@ -273,6 +273,13 @@ class FarmEngine:
         messages.extend(self.client.consume_diagnostics())
         return streams
 
+    def apply_profile(self, profile: EnergyProfile) -> None:
+        """Use the request budget of an energy profile (how long answers are reused)."""
+        self.campaign_refresh_sec = float(profile.campaign_refresh_sec)
+        self.front_ttl_sec = float(profile.front_ttl_sec)
+        self.background_ttl_sec = float(profile.background_ttl_sec)
+        logger.info(f"FarmEngine com o perfil de energia: {profile.name}")
+
     def set_focus(self, *campaign_ids: str) -> None:
         """Campaigns whose channel must be re-checked on every poll (the farmed one)."""
         self.focus_campaign_ids = {cid for cid in campaign_ids if cid}
@@ -284,7 +291,7 @@ class FarmEngine:
     def _load_campaigns(
         self, *, allow_browser_fallback: bool, full_scan: bool, force: bool
     ) -> tuple[list[DropCampaign], list[str]]:
-        """The campaign list, from Twitch at most every CAMPAIGN_REFRESH_SEC."""
+        """The campaign list, from Twitch at most every ``campaign_refresh_sec``."""
         now = self._clock()
         cached_age = None if self._campaigns_fetched_at is None else now - self._campaigns_fetched_at
         if (
@@ -292,7 +299,7 @@ class FarmEngine:
             and not full_scan
             and self._campaign_cache
             and cached_age is not None
-            and cached_age < self.CAMPAIGN_REFRESH_SEC
+            and cached_age < self.campaign_refresh_sec
         ):
             return self._campaign_cache, list(self.client.consume_diagnostics())
 
@@ -490,10 +497,10 @@ class FarmEngine:
             if focus:
                 refresh = True
             elif in_front:
-                refresh = age >= self.FRONT_TTL_SEC
+                refresh = age >= self.front_ttl_sec
                 front_lookups += int(refresh)
             else:
-                refresh = age >= self.BACKGROUND_TTL_SEC and background_lookups < self.MAX_BACKGROUND_LOOKUPS
+                refresh = age >= self.background_ttl_sec and background_lookups < self.MAX_BACKGROUND_LOOKUPS
                 background_lookups += int(refresh)
 
             streams: list[StreamCandidate] | None = cached[1] if cached is not None else None

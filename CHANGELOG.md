@@ -6,6 +6,36 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.58] - 2026-11-11
+
+### Fixed
+
+- **O perfil de energia (Económico / Balanceado / Agressivo) não fazia nada.** Os três botões
+  só gravavam o nome na configuração e ninguém o lia — a dica prometia «menos pedidos» e
+  «mais pedidos» e a app fazia sempre o mesmo. Agora o perfil controla o que a dica diz:
+  - **de quanto em quanto tempo a app verifica** (300 s / 120 s / 60 s);
+  - **durante quanto tempo reutiliza a lista de campanhas** antes de a pedir de novo
+    (30 min / 10 min / 5 min);
+  - **durante quanto tempo reutiliza a consulta dos canais** de cada jogo (os próximos da
+    fila 10 min / 5 min / 2 min; os restantes 2 h / 1 h / 30 min);
+  - **ao fim de quanto tempo sem progresso** o guarda de estagnação reage (45 / 30 / 20 min).
+  Em regime estável, com 100 jogos em directo, isto dá cerca de **69 / 144 / 298 pedidos por
+  hora** (medido por simulação com relógio simulado; o Balanceado é exactamente o que a app
+  já fazia, por isso quem não mexe nos botões não nota diferença). A troca de perfil aplica-se
+  logo, mesmo com a quinta a correr, e fica escrita no log.
+  O que o perfil **não** muda: o *heartbeat* e o leitor de vídeo (é isso que credita o
+  tempo, por isso não se poupa); o custo do Económico é detectar mais tarde que um canal
+  ficou offline ou que há uma campanha nova.
+- A dica do perfil passa a ser gerada a partir dos próprios valores, para nunca mais poder
+  dizer uma coisa e fazer outra.
+
+### Removed
+
+- Campos de perfil que nada lia (`polling_interval_sec`, `api_timeout_sec`,
+  `stream_check_timeout_sec`, `log_level`, `enable_aggressive_retry`) e a opção
+  `auto_switch_interval_sec` da configuração. Um `config.json` antigo que ainda a tenha
+  continua a abrir sem problema.
+
 ## [2.2.57] - 2026-11-11
 
 ### Fixed

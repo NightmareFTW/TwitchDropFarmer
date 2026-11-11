@@ -722,6 +722,65 @@ class TestSettingControls(_WindowCase):
                 self.assertEqual(w.config.energy_profile, name)
                 self.assertTrue(w._autosave_timer.isActive())
 
+    def test_a_profile_changes_the_engine_the_stall_timeout_and_says_so_in_the_log(self):
+        w = self.window
+        for profile in ui.AVAILABLE_PROFILES:
+            with self.subTest(profile.name):
+                w.log_output.clear()
+                for name, button in w.energy_profile_buttons:
+                    if name == profile.name:
+                        button.click()
+
+                self.assertEqual(w.engine.campaign_refresh_sec, profile.campaign_refresh_sec)
+                self.assertEqual(w.engine.front_ttl_sec, profile.front_ttl_sec)
+                self.assertEqual(w.config.watchdog_stall_timeout_min, profile.watchdog_stall_timeout_min)
+                self.assertEqual(w._farm_health.timeout_min, profile.watchdog_stall_timeout_min)
+                self.assertIn(profile.name, self.log_text())
+                self.assertIn(str(profile.watchdog_stall_timeout_min), self.log_text())
+
+    def test_a_running_farm_follows_the_new_profile_at_once_and_a_started_one_uses_it(self):
+        w = self.window
+        w._streamless_heartbeat_tick = MagicMock()
+        w.latest_snapshot = None
+        w.handle_start()
+        self.addCleanup(w.handle_stop)
+        for profile in ui.AVAILABLE_PROFILES:
+            for name, button in w.energy_profile_buttons:
+                if name == profile.name:
+                    button.click()
+            self.assertEqual(w.timer.interval(), profile.poll_interval_sec * 1000, profile.name)
+
+        w.handle_stop()
+        w.handle_start()  # a fresh start uses the profile that is selected now
+        self.assertEqual(w.timer.interval(), ui.AVAILABLE_PROFILES[-1].poll_interval_sec * 1000)
+
+    def test_showing_the_saved_profile_at_start_up_keeps_the_saved_stall_timeout(self):
+        w = self.window
+        w.config.watchdog_stall_timeout_min = 33
+        w._ui_ready = False
+        try:
+            w.handle_energy_profile_change("Económico")  # what the radio button does while the window is built
+        finally:
+            w._ui_ready = True
+
+        self.assertEqual(w.config.watchdog_stall_timeout_min, 33)
+
+    def test_the_tooltip_describes_every_profile_with_its_real_numbers(self):
+        w = self.window
+        w.language_picker.setCurrentIndex(w.language_picker.findData("pt_PT"))
+        w._retranslate_ui()
+
+        tip = w.energy_profile_help_icon.toolTip()
+
+        for profile in ui.AVAILABLE_PROFILES:
+            self.assertIn(profile.name, tip)
+            self.assertIn(f"{ui._minutes_text(profile.poll_interval_sec)} em {ui._minutes_text(profile.poll_interval_sec)} min", tip)
+            self.assertIn(f"{ui._minutes_text(profile.campaign_refresh_sec)} em {ui._minutes_text(profile.campaign_refresh_sec)} min", tip)
+            self.assertIn(f"{profile.watchdog_stall_timeout_min} min", tip)
+
+    def test_minutes_text(self):
+        self.assertEqual((ui._minutes_text(60), ui._minutes_text(300), ui._minutes_text(90)), ("1", "5", "1.5"))
+
     def test_the_sort_and_theme_pickers_change_the_config(self):
         w = self.window
         for picker, attr, handler in ((w.sort_picker, "sort_mode", w._current_sort_mode),
