@@ -1342,6 +1342,87 @@ class TestSubscriptionOnlyGames(_WindowCase):
         self.assertTrue(self.window.dashboard_hide_sub_only_checkbox.text().endswith("(0)"))
 
 
+class TestButtonsAreNotClipped(_WindowCase):
+    """The bottom of letters such as "g" was cut off on "Save log" and on the "Signed in" button."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token="k" * 30, login_name="example_user", token_valid=True)
+        w._update_auth_status()
+        w.resize(1500, 800)
+        w.show()
+        self.app.processEvents()
+
+    def clipped_buttons(self) -> list[str]:
+        """Every button that is on screen in any tab and is shorter than its text needs."""
+        w = self.window
+        clipped: list[str] = []
+        for left in range(w.tabs_left.count()):
+            for right in range(w.tabs_right.count()):
+                w.tabs_left.setCurrentIndex(left)
+                w.tabs_right.setCurrentIndex(right)
+                self.app.processEvents()
+                for button in w.findChildren(QPushButton):
+                    if button.isVisible() and button.height() < button.sizeHint().height():
+                        clipped.append(f"{button.text()!r}: {button.height()}px < {button.sizeHint().height()}px")
+        return sorted(set(clipped))
+
+    def test_no_visible_button_is_shorter_than_its_text_needs(self):
+        self.assertEqual(self.clipped_buttons(), [])
+
+    def test_the_save_log_button_has_no_height_limit(self):
+        self.assertGreaterEqual(self.window.btn_save_log.maximumHeight(), self.window.btn_save_log.sizeHint().height())
+
+    def test_the_signed_in_button_gets_the_height_it_needs_not_the_tab_bars(self):
+        w = self.window
+
+        self.assertGreaterEqual(w.btn_smart_login.height(), w.btn_smart_login.sizeHint().height())
+
+    def test_it_still_holds_with_a_bigger_font_as_on_another_machine(self):
+        """The height a button needs depends on the font of the machine; a fixed number would clip it there.
+
+        (Changing the application font does nothing to these buttons, so the font is set on the widgets.)
+        """
+        from PySide6.QtGui import QFont
+        from PySide6.QtWidgets import QWidget
+
+        w = self.window
+        widgets = [w] + w.findChildren(QWidget)
+        originals = {widget: widget.font() for widget in widgets}
+
+        def restore() -> None:
+            for widget, font in originals.items():
+                widget.setFont(font)
+            w._update_auth_status()
+            self.app.processEvents()
+
+        self.addCleanup(restore)
+        needed_before = w.btn_smart_login.sizeHint().height()
+        for widget in widgets:
+            font = QFont(widget.font())
+            font.setPointSize(font.pointSize() + 4)
+            widget.setFont(font)
+        self.app.processEvents()
+        self.assertGreater(w.btn_smart_login.sizeHint().height(), needed_before, "the simulated font changed nothing")
+        w._update_auth_status()  # the app does this on every refresh
+        self.app.processEvents()
+
+        self.assertEqual(self.clipped_buttons(), [])
+
+    def test_it_holds_in_english_and_in_every_theme(self):
+        w = self.window
+        for language in ("en", "pt_PT"):
+            w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+            w._retranslate_ui()
+            for theme in ui.THEMES:
+                with self.subTest(language=language, theme=theme):
+                    w._apply_theme(theme)
+                    self.app.processEvents()
+                    self.assertEqual(self.clipped_buttons(), [])
+        w._apply_theme(w.config.theme)
+
+
 class TestNoButtonIsLeftOut(_WindowCase):
     def test_every_button_has_something_connected_to_it(self):
         dead = []

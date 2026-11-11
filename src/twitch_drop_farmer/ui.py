@@ -2795,8 +2795,7 @@ class MainWindow(QMainWindow):
         link_row.addWidget(self.btn_link_account)
         link_row.addWidget(self.btn_open_drops_page)
         self.log_label = QLabel()
-        self.btn_save_log = QPushButton()
-        self.btn_save_log.setMaximumHeight(24)
+        self.btn_save_log = QPushButton()  # no height limit: the theme's padding plus the font decide, or letters get clipped
         self.btn_save_log.clicked.connect(self.handle_save_log)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -2952,6 +2951,18 @@ class MainWindow(QMainWindow):
             self.btn_login.setEnabled(True)
         self.btn_edit_oauth.setEnabled(bool(self.client.login_state.oauth_token))
 
+    @staticmethod
+    def _fit_button_height(button: QPushButton) -> None:
+        """Make sure a button is at least as tall as its text needs.
+
+        A tab widget squeezes its corner widget to the height of the tab bar, which is a few pixels
+        less than a themed button needs, and the bottom of letters like "g" got cut off. What a
+        button needs depends on the font of the machine it runs on, so it is asked, not guessed.
+        """
+        needed = button.sizeHint().height()
+        if button.minimumHeight() != needed:
+            button.setMinimumHeight(needed)
+
     def _refresh_login_button(self) -> None:
         state = self.client.login_state
         if state.logged_in:
@@ -2961,6 +2972,7 @@ class MainWindow(QMainWindow):
         else:
             self.btn_smart_login.setText(self._t("login_button"))
             self.btn_smart_login.setToolTip(self._t("login_button_tip_out"))
+        self._fit_button_height(self.btn_smart_login)
 
     def _update_auth_status(self) -> None:
         self._refresh_login_button()
@@ -3323,6 +3335,8 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, name: str) -> None:
         self.setStyleSheet(THEMES.get(name, THEMES["twitch"]))
+        if hasattr(self, "btn_smart_login"):
+            self._fit_button_height(self.btn_smart_login)
 
     def _with_errors(self, fn: Callable[[], None]) -> None:
         try:

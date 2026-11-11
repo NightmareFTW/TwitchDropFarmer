@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.63] - 2026-11-11
+
+### Fixed
+
+- **O texto de dois botões aparecia cortado em baixo** (o pé do «g»): «Guardar log» e o
+  botão «Sessão: …» do canto superior direito. O primeiro tinha um limite de altura de 24 px
+  que eu pus (o tema dá 7 px de enchimento por cima e por baixo, e a letra já não cabia); o
+  segundo, por ser um *corner widget* do `QTabWidget`, era espremido à altura da barra de
+  separadores, 3 px abaixo do que precisa. Agora o «Guardar log» não tem limite de altura e o
+  botão da sessão pede ao Qt a altura de que o tipo de letra **da tua máquina** precisa, em vez
+  de um número fixo. Um teste novo falha se qualquer botão visível, em qualquer separador,
+  tema ou idioma, ficar mais baixo do que o seu texto precisa.
+
 ## [2.2.62] - 2026-11-11
 
 ### Fixed
