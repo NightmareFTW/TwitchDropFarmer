@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.62] - 2026-11-11
+
+### Fixed
+
+- **Uma janela de cmd abria com a app e ficava aberta até ela fechar** (e fechá-la matava a
+  app). O `TwitchDropFarmer.pyw` corre sem consola, mas relançava a app com `python.exe`, um
+  programa de consola, e o Windows abre sempre uma consola nova para esses. O processo filho
+  passa a ser lançado sem janela (`CREATE_NO_WINDOW`), a saída continua a ser capturada para
+  mostrar um erro de arranque se houver, e o mesmo vale para a instalação automática de
+  dependências. Se o `.pyw` for aberto por um `python.exe` com uma consola criada só para ele,
+  o launcher fecha-a; um terminal teu (partilhado com a shell) nunca é tocado.
+  Correr `python -m twitch_drop_farmer` à mão num terminal continua a mostrar esse terminal.
+
 ## [2.2.61] - 2026-11-11
 
 ### Fixed

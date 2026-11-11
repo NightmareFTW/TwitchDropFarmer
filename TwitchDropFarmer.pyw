@@ -17,6 +17,39 @@ if sys.platform == "win32":
         pass
 
 
+# On Windows a console program (python.exe) started by a program that has no console gets a console
+# window of its own. This flag stops that: the child still runs and its output is still captured.
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _hidden_window_options() -> dict[str, int]:
+    """subprocess options that keep a child process from opening a console window (Windows only:
+    elsewhere ``creationflags`` is an error)."""
+    return {"creationflags": CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
+
+def _release_private_console() -> None:
+    """Close the console this launcher was given if it was opened just for it.
+
+    A double click on a .pyw that Windows associates with python.exe (not pythonw.exe) opens a
+    console that exists only for this process. When another process shares the console (a terminal
+    the user typed the command into) it is left alone.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.GetConsoleWindow():
+            return  # no console at all (pythonw.exe): nothing to close
+        sharing = (ctypes.c_uint * 2)()
+        if kernel32.GetConsoleProcessList(sharing, 2) != 1:
+            return  # a terminal of the user's: leave it
+        kernel32.FreeConsole()
+        sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")  # the console's streams are gone
+    except Exception:
+        pass
+
+
 def _show_error(title: str, message: str) -> None:
     if sys.platform == "win32":
         ctypes.windll.user32.MessageBoxW(None, message, title, 0x10 | 0x1000)
@@ -72,6 +105,7 @@ def _ensure_runtime_dependencies(project_root: Path) -> bool:
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **_hidden_window_options(),
         )
 
     try:
@@ -99,6 +133,7 @@ def _run_python_module(project_root: Path, python_executable: Path, extra_env: d
         capture_output=True,
         text=True,
         check=False,
+        **_hidden_window_options(),
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "Sem detalhe do processo.").strip()
@@ -114,6 +149,7 @@ def _run_python_module(project_root: Path, python_executable: Path, extra_env: d
 
 
 def main() -> int:
+    _release_private_console()
     project_root = Path(__file__).resolve().parent
 
     if sys.platform == "win32" and not getattr(sys, "frozen", False):

@@ -208,6 +208,107 @@ class TestFarmEnginePipeline(unittest.TestCase):
         show_error.assert_called_once()
         self.assertIn("No module named twitch_drop_farmer", show_error.call_args[0][1])
 
+    def test_launcher_child_process_opens_no_console_window_on_windows(self):
+        """Double-clicking the .pyw opened a cmd window that stayed open (and closing it killed the app)."""
+        module = _load_launcher_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            python = root / "python.exe"
+            python.write_text("fake", encoding="utf-8")
+
+            with patch.object(module.sys, "platform", "win32"), \
+                 patch.object(module.subprocess, "run", return_value=MagicMock(returncode=0)) as run_mock:
+                self.assertEqual(module._run_python_module(root, python), 0)
+
+            self.assertEqual(run_mock.call_args.kwargs["creationflags"], 0x08000000)
+            # The output is still captured, so a start-up failure can still be shown to the user.
+            self.assertTrue(run_mock.call_args.kwargs["capture_output"])
+
+    def test_launcher_pip_install_opens_no_console_window_either(self):
+        module = _load_launcher_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text("requests\n", encoding="utf-8")
+            python = root / "python.exe"
+            python.write_text("fake", encoding="utf-8")
+            real_import = __import__
+
+            def fake_import(name, *args, **kwargs):
+                if name in {"requests", "PySide6"}:
+                    raise ModuleNotFoundError(name)
+                return real_import(name, *args, **kwargs)
+
+            with patch.object(module.sys, "platform", "win32"), \
+                 patch.object(module, "_resolve_python_executable", return_value=python), \
+                 patch.object(module.subprocess, "run") as run_mock, \
+                 patch("builtins.__import__", side_effect=fake_import):
+                module._ensure_runtime_dependencies(root)
+
+            self.assertEqual(run_mock.call_args.kwargs["creationflags"], 0x08000000)
+
+    def test_launcher_passes_no_windows_only_option_elsewhere(self):
+        """creationflags raises on Linux/macOS, so it must only be passed on Windows."""
+        module = _load_launcher_module()
+        with patch.object(module.sys, "platform", "linux"):
+            self.assertEqual(module._hidden_window_options(), {})
+
+    def _console(self, *, has_console: bool, sharing: int):
+        kernel32 = MagicMock()
+        kernel32.GetConsoleWindow.return_value = 1234 if has_console else 0
+        kernel32.GetConsoleProcessList.return_value = sharing
+        return MagicMock(kernel32=kernel32)
+
+    def test_launcher_closes_a_console_that_was_opened_only_for_it(self):
+        module = _load_launcher_module()
+        windll = self._console(has_console=True, sharing=1)
+
+        with patch.object(module.sys, "platform", "win32"), patch.object(module.ctypes, "windll", windll, create=True), \
+             patch.object(module.sys, "stdout", None), patch.object(module.sys, "stderr", None):
+            module._release_private_console()
+            self.assertIsNotNone(module.sys.stdout)  # the dead console's streams were replaced
+
+        windll.kernel32.FreeConsole.assert_called_once()
+
+    def test_launcher_leaves_a_terminal_the_user_opened_alone(self):
+        module = _load_launcher_module()
+        for sharing in (2, 3):  # the shell plus the launcher
+            with self.subTest(sharing=sharing):
+                windll = self._console(has_console=True, sharing=sharing)
+                with patch.object(module.sys, "platform", "win32"), patch.object(module.ctypes, "windll", windll, create=True):
+                    module._release_private_console()
+                windll.kernel32.FreeConsole.assert_not_called()
+
+    def test_launcher_does_nothing_when_there_is_no_console_or_not_on_windows(self):
+        module = _load_launcher_module()
+        windll = self._console(has_console=False, sharing=1)
+        with patch.object(module.sys, "platform", "win32"), patch.object(module.ctypes, "windll", windll, create=True):
+            module._release_private_console()
+        windll.kernel32.FreeConsole.assert_not_called()
+
+        windll = self._console(has_console=True, sharing=1)
+        with patch.object(module.sys, "platform", "linux"), patch.object(module.ctypes, "windll", windll, create=True):
+            module._release_private_console()
+        windll.kernel32.GetConsoleWindow.assert_not_called()
+
+    def test_launcher_main_frees_its_private_console_before_anything_else(self):
+        module = _load_launcher_module()
+        calls = MagicMock()
+
+        with patch.object(module, "_release_private_console", calls.release), \
+             patch.object(module, "_ensure_runtime_dependencies", side_effect=lambda root: calls.deps(root) and False), \
+             patch.object(module, "_show_error"):
+            self.assertEqual(module.main(), 1)  # stops at the dependency check: the real app is never started
+
+        self.assertEqual([c[0] for c in calls.mock_calls][:2], ["release", "deps"])
+
+    def test_launcher_survives_a_console_api_failure(self):
+        module = _load_launcher_module()
+        windll = MagicMock()
+        windll.kernel32.GetConsoleWindow.side_effect = OSError("no console API")
+
+        with patch.object(module.sys, "platform", "win32"), patch.object(module.ctypes, "windll", windll, create=True):
+            module._release_private_console()  # must not raise
+
     def test_timestamped_diagnostics_include_timestamp(self):
         """Diagnostics must be stamped with the time they were recorded."""
         client = TwitchClient()
