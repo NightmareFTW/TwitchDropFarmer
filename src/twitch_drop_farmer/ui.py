@@ -976,6 +976,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_import_error": "Erro ao importar sessão: {error}",
         "session_export_success": "Sessão exportada. Copia o JSON abaixo e guarda-o num local seguro.",
         "session_export_copied": "JSON da sessão copiado para a área de transferência.",
+        "login_open_window": "Abrir janela de sessão",
+        "login_open_window_tip": "Abre a janela que explica como iniciar sessão e onde podes escolher lembrar a sessão neste computador.",
         "login_button": "Iniciar sessão",
         "login_button_logged": "Sessão: {login}",
         "login_button_tip_out": "Entra na tua conta Twitch. Usa os dados da aba «Conta» (ou a sessão que deixaste guardada); se ainda não existirem, abre uma janela para os preencheres.",
@@ -1361,6 +1363,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_import_error": "Error importing session: {error}",
         "session_export_success": "Session exported. Copy the JSON below and save it securely.",
         "session_export_copied": "Session JSON copied to clipboard.",
+        "login_open_window": "Open sign-in window",
+        "login_open_window_tip": "Opens the window that explains how to sign in and where you can choose to remember the session on this computer.",
         "login_button": "Log in",
         "login_button_logged": "Signed in: {login}",
         "login_button_tip_out": "Sign in to your Twitch account. It uses the data from the “Account” tab (or the session you chose to keep); if there is none yet, it opens a window to fill it in.",
@@ -2631,6 +2635,14 @@ class MainWindow(QMainWindow):
         self.auth_tabs.addTab(session_auth_tab, "")
         self.auth_tabs.addTab(quick_auth_tab, "")
         
+        # The window that explains how to sign in (and holds "remember the session") is otherwise only
+        # reached when nothing usable exists, so someone who is already signed in could never open it.
+        self.btn_open_login_window = QPushButton()
+        self.btn_open_login_window.clicked.connect(lambda: self.open_login_dialog())
+        open_window_row = QHBoxLayout()
+        open_window_row.addWidget(self.btn_open_login_window)
+        open_window_row.addStretch(1)
+        account_layout.addLayout(open_window_row)
         account_layout.addWidget(self.auth_tabs)
         account_layout.addStretch(1)
 
@@ -3168,6 +3180,8 @@ class MainWindow(QMainWindow):
         self.token_input.setPlaceholderText(self._t("oauth_placeholder"))
         self.oauth_help_icon.setToolTip(self._t("oauth_help"))
         self.btn_login.setText(self._t("save_oauth"))
+        self.btn_open_login_window.setText(self._t("login_open_window"))
+        self.btn_open_login_window.setToolTip(self._t("login_open_window_tip"))
         self.btn_edit_oauth.setText(self._t("edit_oauth"))
 
         self.session_group.setTitle(self._t("session_group"))

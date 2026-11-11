@@ -951,6 +951,27 @@ class TestLoginButton(_WindowCase):
         w._retranslate_ui()
         self.assertEqual(w.btn_smart_login.text(), "Signed in: example_user")
 
+    def test_someone_already_signed_in_can_still_open_the_window_from_the_account_tab(self):
+        """Without this button the window (and "remember the session") was unreachable once signed in."""
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="someone", token_valid=True)
+        w._update_auth_status()
+        w.btn_smart_login.click()  # signed in: this only confirms, it does not open anything
+        self.assertIsNone(w._login_dialog)
+
+        w.btn_open_login_window.click()
+
+        dialog = self.dialog()
+        self.assertIn("someone", dialog.status_label.text())
+        self.assertTrue(dialog.remember_checkbox.isEnabled())
+
+    def test_the_account_tab_button_is_translated(self):
+        w = self.window
+        self.assertEqual(w.btn_open_login_window.text(), "Abrir janela de sessão")
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        w._retranslate_ui()
+        self.assertEqual(w.btn_open_login_window.text(), "Open sign-in window")
+
     def test_the_language_picker_spells_portugues_with_its_accent(self):
         labels = [self.window.language_picker.itemText(i) for i in range(self.window.language_picker.count())]
 

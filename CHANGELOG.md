@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.61] - 2026-11-11
+
+### Fixed
+
+- **A opção «Lembrar a sessão neste computador» não era alcançável com a sessão iniciada.**
+  A janela de sessão só abria quando não havia nada utilizável, por isso quem já tinha uma
+  sessão válida nunca a via — e era essa pessoa que queria ligar a opção. A aba **Conta**
+  passa a ter o botão «Abrir janela de sessão».
+
 ## [2.2.60] - 2026-11-11
 
 Tudo isto vem da análise do log da noite (9 horas a farmar) e de um censo ao registo
