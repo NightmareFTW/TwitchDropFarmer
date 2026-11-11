@@ -330,6 +330,10 @@ class FarmEngine:
             full_scan=full_scan,
             force=force_campaigns,
         )
+        # What the background sweep learned about subscription-only drops (memory only, no request).
+        apply_registry_rewards = getattr(self.client, "apply_registry_rewards", None)
+        if callable(apply_registry_rewards):
+            apply_registry_rewards(campaigns)
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
@@ -413,16 +417,19 @@ class FarmEngine:
                 continue
 
             # Check for expiring campaigns — use real campaign endAt, not watch time remaining.
+            # Once per campaign (the minutes in the text change on every poll, so the wording cannot
+            # be what tells two alerts apart) and never for one that has already ended.
             if (
                 getattr(campaign, "timestamp_source", "") == "campaign"
-                and campaign.seconds_until_end < 3600
+                and 0 < campaign.seconds_until_end < 3600
             ):
                 if self.config.alert_campaign_expiring_soon:
                     self.alert_manager.raise_alert(
                         AlertType.CAMPAIGN_EXPIRING_SOON,
                         AlertSeverity.WARNING,
                         "Campanha a expirar",
-                        f"{campaign.game_name} — termina em {campaign.seconds_until_end // 60} minutos"
+                        f"{campaign.game_name} — termina em {campaign.seconds_until_end // 60} minutos",
+                        dedupe_key=f"expiring:{campaign.id}",
                     )
 
             # Inventory campaigns with synthetic timestamps (missing startAt/endAt from

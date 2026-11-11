@@ -16,6 +16,56 @@ from twitch_drop_farmer.ui import TRANSLATIONS, MainWindow  # noqa: E402
 UTC = timezone.utc
 
 
+def _expiring_campaign(campaign_id: str, name: str, minutes_left: float) -> DropCampaign:
+    now = datetime.now(UTC)
+    return DropCampaign(
+        id=campaign_id, game_name=name, title=f"{name} campaign", starts_at=now - timedelta(days=7),
+        ends_at=now + timedelta(minutes=minutes_left), status="ACTIVE", required_minutes=120, progress_minutes=60,
+        has_watchable_drops=True, linked=True, timestamp_source="campaign",
+        drops=[{"id": "d", "name": "r", "required_minutes": 120, "current_minutes": 60, "claimed": False}],
+    )
+
+
+class TestExpiringAlertInTheEngine(unittest.TestCase):
+    """The overnight log: "The Quinfall - termina em 0 minutos" every hour, and a new Albion alert every poll."""
+
+    def poll_times(self, campaigns_per_poll: list[list[DropCampaign]]) -> list[str]:
+        from twitch_drop_farmer.config import AppConfig
+        from twitch_drop_farmer.farmer import FarmEngine
+
+        manager = AlertManager(dedupe_window_sec=3600)
+        delivered: list[str] = []
+        manager.register_callback(lambda alert: delivered.append(alert.message))
+        client = MagicMock()
+        client.consume_diagnostics.return_value = []
+        client.fetch_streams.return_value = []
+        engine = FarmEngine(client, AppConfig(watchdog_enabled=False, alert_campaign_expiring_soon=True))
+        engine.alert_manager = manager
+        for campaigns in campaigns_per_poll:
+            client.fetch_campaigns.return_value = campaigns
+            engine.poll(force_campaigns=True)
+        return delivered
+
+    def test_a_countdown_alerts_once_per_campaign_not_once_per_poll(self):
+        polls = [[_expiring_campaign("albion", "Albion Online", minutes)] for minutes in (35, 33, 31, 29, 27)]
+
+        delivered = self.poll_times(polls)
+
+        self.assertEqual(len(delivered), 1)
+        self.assertIn("Albion Online", delivered[0])
+
+    def test_two_campaigns_ending_soon_are_two_alerts(self):
+        polls = [[_expiring_campaign("a", "Game A", 30), _expiring_campaign("b", "Game B", 40)]] * 3
+
+        self.assertEqual(len(self.poll_times(polls)), 2)
+
+    def test_a_campaign_that_has_already_ended_is_not_announced_as_ending_in_0_minutes(self):
+        ended = _expiring_campaign("quinfall", "The Quinfall", -5)
+
+        self.assertEqual(ended.seconds_until_end, 0)
+        self.assertEqual(self.poll_times([[ended]]), [])
+
+
 class TestAlertDeduplication(unittest.TestCase):
     def test_an_identical_alert_is_delivered_once_per_window(self):
         manager = AlertManager(dedupe_window_sec=3600)
@@ -37,6 +87,30 @@ class TestAlertDeduplication(unittest.TestCase):
         manager.raise_alert(AlertType.FARM_COMPLETE, AlertSeverity.INFO, "Done", "Game Y - done")
 
         self.assertEqual(len(delivered), 2)
+
+    def test_a_dedupe_key_judges_an_alert_by_what_it_is_about_not_by_its_wording(self):
+        manager = AlertManager(dedupe_window_sec=3600)
+        delivered = []
+        manager.register_callback(delivered.append)
+
+        for minutes in (35, 34, 33):  # a countdown: the text differs on every poll
+            manager.raise_alert(AlertType.CAMPAIGN_EXPIRING_SOON, AlertSeverity.WARNING, "Expiring",
+                                f"Game X - ends in {minutes} minutes", dedupe_key="expiring:campaign-1")
+        manager.raise_alert(AlertType.CAMPAIGN_EXPIRING_SOON, AlertSeverity.WARNING, "Expiring",
+                            "Game Y - ends in 20 minutes", dedupe_key="expiring:campaign-2")
+
+        self.assertEqual(len(delivered), 2)
+
+    def test_without_a_dedupe_key_a_changing_countdown_is_not_suppressed(self):
+        """What the overnight log showed: Albion Online alerted on every poll for 35 minutes."""
+        manager = AlertManager(dedupe_window_sec=3600)
+        delivered = []
+        manager.register_callback(delivered.append)
+
+        for minutes in (35, 34, 33):
+            manager.raise_alert(AlertType.CAMPAIGN_EXPIRING_SOON, AlertSeverity.WARNING, "Expiring", f"Game X - {minutes}")
+
+        self.assertEqual(len(delivered), 3)
 
     def test_a_zero_window_delivers_every_alert(self):
         manager = AlertManager(dedupe_window_sec=0)

@@ -6,6 +6,54 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.60] - 2026-11-11
+
+Tudo isto vem da análise do log da noite (9 horas a farmar) e de um censo ao registo
+público (twitchdrops.app), com dados reais.
+
+### Fixed
+
+- **Os drops de subscrição não eram reconhecidos.** Com a Twitch a bloquear os detalhes das
+  campanhas em todos os ciclos (integrity check, visto no log), as campanhas vêm do registo
+  público, que só dá o nome do jogo: nenhuma chegava a ser marcada como «só subscrição» (o
+  contador «Ocultar jogos com drops de subscrição» ficava sempre a 0) e a app tentava farmar
+  esses jogos à espera de um progresso que nunca viria. O código que devia tratar disto
+  nunca era chamado e procurava um HTML (`reward-card`) que o site não tem. Agora a app lê a
+  página de cada jogo — onde cada drop diz «Watch 1h» ou «1 sub» —, devagar e em segundo
+  plano (1,5 s entre páginas, nunca bloqueia a lista), guarda o resultado em disco
+  (`registry_rewards.json`) e só volta a ler um jogo quando o cartão dele muda (ou ao fim de 3
+  dias). Um jogo é «só subscrição» quando **todos** os drops activos são «N sub»; um jogo com
+  drops de tempo e de subscrição **continua farmável**, e uma formulação desconhecida nunca
+  conta como subscrição. Medido no registo real (111 jogos): 2 só-subscrição — Call of Duty:
+  Modern Warfare 4 e ELDEN RING — e 8 mistos (Cyberpunk 2077, League of Legends, Legion TD 2,
+  World of Warcraft, PAYDAY 3, FELLOWSHIP, Hunt Club On Stream, Marbles on Stream). Ao arrancar
+  demora cerca de 2 a 3 minutos a ler tudo; o resultado aparece no poll seguinte e o log diz
+  quais são.
+- **Jogos expirados ou por lançar eram tratados como activos.** Todos os cartões do registo
+  eram marcados `ACTIVE` por 30 dias, incluindo os de «Campaign history» (Dead by Daylight,
+  Fortnite, Escape from Tarkov…) e os «Coming Soon» (GTA VI). O log mostra a app a procurar
+  canais para Dead by Daylight (9×), GTA VI (9×) e Fortnite (6×): se as campanhas em progresso
+  acabassem, o motor podia escolher um deles e ficar a «farmar» sem campanha nenhuma. Agora
+  são `EXPIRED` / `UPCOMING`. Dos 111 cartões: 88 activos, 3 por começar, 20 expirados.
+  As campanhas do registo passam também a usar as datas reais do cartão (antes tinham todas
+  «daqui a 30 dias», por isso a prioridade «Terminam mais cedo» não as distinguia).
+- **511 pesquisas de imagens repetidas numa noite** para um único jogo («LEGO Batman…», que
+  não tem categoria na Twitch): quando nenhuma fonte tinha a capa, o resultado nunca era
+  guardado e, a cada refresh do dashboard, repetia-se a cadeia toda (pedido GraphQL e página
+  da categoria na Twitch, Steam e Google) — mais tráfego da tua rede para a Twitch sem
+  nenhum proveito. Agora «ninguém a tem» fica lembrado 6 horas; uma falha causada pela rede
+  só 5 minutos, para um corte de Wi-Fi ao arrancar não deixar as capas em branco horas. O
+  botão «Actualizar dashboard» volta a tentar logo.
+- **Alertas «Campanha a expirar» repetidos.** Eram separados pelo texto: «The Quinfall —
+  termina em 0 minutos» (campanha já terminada) repetia-se de hora a hora e a contagem
+  decrescente do Albion Online gerava um alerta novo a cada poll. Agora há um alerta por
+  campanha e nenhum para campanhas já terminadas.
+
+### Removed
+
+- `_extract_game_rewards_from_page` e `_apply_game_page_reward_metadata`: nunca eram chamadas
+  e o teste que as cobria usava HTML inventado.
+
 ## [2.2.59] - 2026-11-11
 
 ### Added

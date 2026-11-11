@@ -17,6 +17,8 @@ SESSION_FILE = CONFIG_DIR / "session.json"
 # Cached campaign catalog (non-secret metadata) so the full game list survives
 # app restarts, instead of being empty until a browser-fallback fetch succeeds.
 CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
+# What the public registry says each game's active drops need (watch time or a subscription).
+REGISTRY_REWARDS_FILE = CONFIG_DIR / "registry_rewards.json"
 
 
 @dataclass(slots=True)

@@ -74,7 +74,7 @@ class AlertManager:
         # finished campaign). Now that alerts are actually shown, an identical alert
         # is only delivered once per window instead of on every refresh.
         self._dedupe_window = dedupe_window_sec
-        self._recent: dict[tuple[AlertType, str, str], float] = {}
+        self._recent: dict[tuple, float] = {}
         self._lock = threading.Lock()
 
     def register_callback(self, callback: Callable[[Alert], None]) -> None:
@@ -97,8 +97,14 @@ class AlertManager:
         message: str,
         dismissible: bool = True,
         auto_dismiss_sec: int | None = None,
+        dedupe_key: str | None = None,
     ) -> Alert:
-        """Raise a new alert."""
+        """Raise a new alert.
+
+        Identical alerts are delivered once per window. When the text changes every time (a
+        countdown, say), pass ``dedupe_key`` so the alert is judged by what it is about, not by
+        its wording.
+        """
         if not self.is_alert_enabled(alert_type):
             logger.debug(f"Alert {alert_type.value} is disabled, skipping.")
             return Alert(
@@ -109,7 +115,7 @@ class AlertManager:
             )
 
         now = time.monotonic()
-        key = (alert_type, title, message)
+        key = (alert_type, dedupe_key) if dedupe_key is not None else (alert_type, title, message)
         with self._lock:
             last = self._recent.get(key)
             if last is not None and now - last < self._dedupe_window:

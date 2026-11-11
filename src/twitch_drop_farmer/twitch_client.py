@@ -35,14 +35,20 @@ if __package__ in {None, ""}:
     package_root = Path(__file__).resolve().parents[1]
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
-    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, SESSION_FILE
+    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE
     from twitch_drop_farmer.game_names import clean_game_name, loose_game_key
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
+    from twitch_drop_farmer.registry_rewards import (
+        RewardCache, parse_card_window, parse_game_page, parse_home_signatures, slug_from_link, summarize,
+    )
     from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
-    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, SESSION_FILE
+    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE
     from .game_names import clean_game_name, loose_game_key
     from .models import DropCampaign, StreamCandidate
+    from .registry_rewards import (
+        RewardCache, parse_card_window, parse_game_page, parse_home_signatures, slug_from_link, summarize,
+    )
     from .stream_watcher import SegmentWatcher
 
 
@@ -425,6 +431,13 @@ def _describe_browser_probe(probe: dict[str, Any] | None) -> str:
 # that still fails with the token attached clears it immediately regardless.
 _INTEGRITY_TOKEN_TTL_SECONDS = 240.0
 
+# A game whose cover no source can find (for example one with no Twitch category) used to be looked up
+# again on every dashboard refresh: Twitch, its directory page, Steam and Google, about once a minute
+# (511 Google searches for one game in a single night). A "nobody has it" answer is now remembered;
+# a failure caused by the network is only remembered briefly, so a bad moment does not blank covers.
+BOX_ART_RETRY_SEC = 6 * 3600.0
+BOX_ART_RETRY_AFTER_ERROR_SEC = 300.0
+
 INVENTORY_QUERY = {
     "operationName": "Inventory",
     "variables": {"fetchRewardCampaigns": False},
@@ -575,6 +588,15 @@ class TwitchClient:
         self._game_ref_cache: dict[str, GameRef | None] = {}
         self._game_box_art_cache: dict[str, str] = {}
         self._external_box_art_cache: dict[str, str] = {}
+        self._box_art_failures: dict[tuple[str, str], float] = {}  # (scope, game) -> when to try again
+        self._box_art_error_count = 0  # network errors seen while resolving covers (see _remember_box_art_failure)
+        self._box_art_clock: Callable[[], float] = time.monotonic
+        # What the registry says each game's drops need (subscription or watch time), kept on disk.
+        self._registry_rewards = RewardCache(REGISTRY_REWARDS_FILE)
+        self._registry_lock = threading.Lock()
+        self._registry_pending: dict[str, str] = {}  # slug -> signature still to be read
+        self._registry_thread: threading.Thread | None = None
+        self._registry_pause_sec = 1.5  # between two game pages: a slow, polite sweep
         self._streamless_media_playlist_cache: dict[str, str] = {}
         # GraphQL pacing state (see _gql_wait_turn); the clock and sleep are injectable.
         self._gql_lock = threading.Lock()
@@ -642,6 +664,16 @@ class TwitchClient:
     def clear_box_art_caches(self) -> None:
         self._game_box_art_cache.clear()
         self._external_box_art_cache.clear()
+        self._box_art_failures.clear()  # a manual refresh is an explicit "try again"
+
+    def _box_art_failure_remembered(self, scope: str, key: str) -> bool:
+        retry_at = self._box_art_failures.get((scope, key))
+        return retry_at is not None and self._box_art_clock() < retry_at
+
+    def _remember_box_art_failure(self, scope: str, key: str, errors_before: int) -> None:
+        """Remember that nothing was found. Short if a request failed on the way, long if every source said no."""
+        wait = BOX_ART_RETRY_AFTER_ERROR_SEC if self._box_art_error_count != errors_before else BOX_ART_RETRY_SEC
+        self._box_art_failures[(scope, key)] = self._box_art_clock() + wait
 
     def resolve_external_box_art_url(self, game_name: str) -> str:
         return self._resolve_external_game_box_art_url(game_name)
@@ -2263,108 +2295,6 @@ class TwitchClient:
                 return " ".join(tokenized[:index]).strip()
         return cleaned
 
-    def _extract_game_rewards_from_page(self, page_html: str) -> list[dict[str, Any]]:
-        html = str(page_html or "")
-        rewards: list[dict[str, Any]] = []
-
-        def strip_tags(value: str) -> str:
-            return html_module.unescape(re.sub(r"<[^>]+>", " ", value)).replace("&nbsp;", " ")
-
-        def clean_text(value: str) -> str:
-            return re.sub(r"\s+", " ", strip_tags(value)).strip()
-
-        card_pattern = r'(?is)<[^>]*class=["\'][^"\']*reward-card[^"\']*["\'][^>]*>(.*?)</[^>]+>'
-        for card_html in re.findall(card_pattern, html):
-            name_matches = re.findall(
-                r'(?is)<[^>]*class=["\'][^"\']*(?:reward-name|reward-title|drop-reward-name)[^"\']*["\'][^>]*>(.*?)</[^>]+>',
-                card_html,
-            )
-            meta_matches = re.findall(
-                r'(?is)<[^>]*class=["\'][^"\']*(?:reward-meta|reward-description|drop-reward-meta)[^"\']*["\'][^>]*>(.*?)</[^>]+>',
-                card_html,
-            )
-            if not name_matches:
-                continue
-            name = clean_text(name_matches[0])
-            meta = clean_text(meta_matches[0]) if meta_matches else ""
-            if not name:
-                continue
-            required_minutes = 0
-            requires_subscription = False
-            lowered = meta.casefold()
-            if "sub" in lowered or "subscriber" in lowered or "subscription" in lowered:
-                requires_subscription = True
-            minutes_match = re.search(r"(\d+)\s*(?:m|min|mins|minute|minutes)", lowered)
-            if minutes_match:
-                required_minutes = int(minutes_match.group(1))
-            hours_match = re.search(r"(\d+)\s*(?:h|hr|hrs|hour|hours)", lowered)
-            if hours_match:
-                required_minutes = int(hours_match.group(1)) * 60
-            rewards.append(
-                {
-                    "name": name,
-                    "metadata": meta,
-                    "required_minutes": required_minutes,
-                    "requires_subscription": requires_subscription,
-                }
-            )
-
-        if rewards:
-            return rewards
-
-        name_matches = re.findall(
-            r'(?is)<[^>]*class=["\'](?:[^"\']*reward-name[^"\']*|[^"\']*reward-title[^"\']*)["\'][^>]*>(.*?)</[^>]+>',
-            html,
-        )
-        meta_matches = re.findall(
-            r'(?is)<[^>]*class=["\'](?:[^"\']*reward-meta[^"\']*|[^"\']*reward-description[^"\']*)["\'][^>]*>(.*?)</[^>]+>',
-            html,
-        )
-        for index, name in enumerate(name_matches):
-            cleaned_name = clean_text(name)
-            if not cleaned_name:
-                continue
-            meta = clean_text(meta_matches[index]) if index < len(meta_matches) else ""
-            lowered = meta.casefold()
-            required_minutes = 0
-            requires_subscription = "sub" in lowered or "subscriber" in lowered or "subscription" in lowered
-            minutes_match = re.search(r"(\d+)\s*(?:m|min|mins|minute|minutes)", lowered)
-            if minutes_match:
-                required_minutes = int(minutes_match.group(1))
-            hours_match = re.search(r"(\d+)\s*(?:h|hr|hrs|hour|hours)", lowered)
-            if hours_match:
-                required_minutes = int(hours_match.group(1)) * 60
-            rewards.append(
-                {
-                    "name": cleaned_name,
-                    "metadata": meta,
-                    "required_minutes": required_minutes,
-                    "requires_subscription": requires_subscription,
-                }
-            )
-        return rewards
-
-    def _apply_game_page_reward_metadata(self, campaigns: list[DropCampaign], page_html: str) -> list[DropCampaign]:
-        rewards = self._extract_game_rewards_from_page(page_html)
-        if not rewards:
-            return campaigns
-
-        for campaign in campaigns:
-            matching_rewards = [reward for reward in rewards if reward.get("name") and campaign.game_name.casefold() in reward.get("name", "").casefold()]
-            if not matching_rewards:
-                continue
-            campaign.required_minutes = max(
-                campaign.required_minutes,
-                max(int(reward.get("required_minutes", 0) or 0) for reward in matching_rewards),
-            )
-            campaign.has_watchable_drops = any(
-                int(reward.get("required_minutes", 0) or 0) > 0 for reward in matching_rewards
-            ) or campaign.has_watchable_drops
-            campaign.requires_subscription = campaign.requires_subscription or any(
-                bool(reward.get("requires_subscription")) for reward in matching_rewards
-            )
-        return campaigns
-
     def _registry_card_game_name(self, card_html: str) -> str:
         """Return the exact game name from a twitchdrops.app card.
 
@@ -2404,11 +2334,11 @@ class TwitchClient:
 
             html = str(response.text or "")
             link_matches = re.findall(
-                r'(?is)<a\b[^>]*href=["\']([^"\']*?/game/[^"\']*)["\'][^>]*>(.*?)</a>',
+                r'(?is)(<a\b[^>]*href=["\']([^"\']*?/game/[^"\']*)["\'][^>]*>)(.*?)</a>',
                 html,
             )
             if link_matches:
-                for href, text_chunk in link_matches:
+                for tag, href, text_chunk in link_matches:
                     game_name = self._registry_card_game_name(text_chunk)
                     if not game_name:
                         continue
@@ -2418,21 +2348,30 @@ class TwitchClient:
                     seen.add(key)
                     href_url = href.strip()
                     full_url = href_url if href_url.startswith("http") else urljoin("https://twitchdrops.app", href_url)
+                    starts_at, ends_at, status, timestamp_source = self._registry_card_schedule(tag + text_chunk, now)
                     campaign = DropCampaign(
                         id=f"external-{hashlib.sha1(game_name.encode('utf-8')).hexdigest()[:12]}",
                         game_name=game_name,
                         title=game_name,
-                        starts_at=now - timedelta(hours=1),
-                        ends_at=now + timedelta(days=30),
-                        status="ACTIVE",
+                        starts_at=starts_at,
+                        ends_at=ends_at,
+                        status=status,
                         linked=True,
                         link_url=full_url,
                         source="external_registry",
+                        timestamp_source=timestamp_source,
                     )
                     campaign.required_minutes = 0
                     campaigns.append(campaign)
 
             if campaigns:
+                # Read each game's page (slowly, in the background) to learn which drops need a subscription.
+                live_slugs = {
+                    slug_from_link(item.link_url) for item in campaigns if item.status in {"ACTIVE", "UPCOMING"}
+                }
+                signatures = parse_home_signatures(html)
+                self._schedule_registry_reward_checks({slug: sig for slug, sig in signatures.items() if slug in live_slugs})
+                self.apply_registry_rewards(campaigns)
                 return campaigns
 
             title_matches = re.findall(
@@ -2466,6 +2405,125 @@ class TwitchClient:
                 return campaigns
 
         return campaigns
+
+    @staticmethod
+    def _registry_card_schedule(card: str, now: datetime) -> tuple[datetime, datetime, str, str]:
+        """(starts_at, ends_at, status, timestamp_source) of a registry card.
+
+        A "Campaign history" card is over, and a "Coming soon" card has not started: treating them as
+        active made the app look for channels (and potentially farm) a game with no campaign. A card
+        with dates says when it runs. A card that says nothing keeps the old open window, so nothing
+        that worked stops working.
+        """
+        window = parse_card_window(card)
+        if window.expired:
+            return now - timedelta(days=30), now - timedelta(hours=1), "EXPIRED", "registry"
+        if window.starts_at is not None and window.ends_at is not None and window.ends_at > window.starts_at:
+            if now >= window.ends_at:
+                status = "EXPIRED"
+            elif now < window.starts_at:
+                status = "UPCOMING"
+            else:
+                status = "ACTIVE"
+            return window.starts_at, window.ends_at, status, "registry"
+        if window.upcoming:
+            # No dates yet: placeholders that keep it "not started" until the card gets real ones.
+            return now + timedelta(days=30), now + timedelta(days=60), "UPCOMING", ""
+        return now - timedelta(hours=1), now + timedelta(days=30), "ACTIVE", ""
+
+    def apply_registry_rewards(self, campaigns: list[DropCampaign]) -> int:
+        """Mark the registry's campaigns whose active drops all need a subscription.
+
+        Without this the app farms such a game (for example one whose only drop is a badge for
+        subscribing) and waits for progress that can never come. Games it has not read yet are
+        left alone. Returns how many campaigns are subscription-only.
+        """
+        marked = 0
+        for campaign in campaigns:
+            if campaign.source != "external_registry" or campaign.all_drops_claimed:
+                continue
+            slug = slug_from_link(campaign.link_url)
+            summary = self._registry_rewards.summary(slug) if slug else None
+            if summary is None:
+                continue
+            campaign.has_watchable_drops = summary.has_watchable
+            campaign.requires_subscription = summary.subscription_only
+            marked += int(campaign.requires_subscription)
+        return marked
+
+    def _schedule_registry_reward_checks(self, signatures: dict[str, str]) -> None:
+        """Queue the game pages that were never read, or whose card changed since."""
+        stale = self._registry_rewards.stale(signatures)
+        if not stale:
+            return
+        with self._registry_lock:
+            for slug in stale:
+                self._registry_pending.setdefault(slug, signatures[slug])
+            if self._registry_thread is not None and self._registry_thread.is_alive():
+                return
+            thread = threading.Thread(target=self._registry_reward_sweep, name="registry-rewards", daemon=True)
+            self._registry_thread = thread
+        thread.start()
+
+    def _registry_fetch_page(self, slug: str) -> str:
+        response = requests.get(
+            f"https://twitchdrops.app/game/{quote(slug, safe='')}",
+            headers={"User-Agent": WEB_USER_AGENT},
+            timeout=20,
+        )
+        if response.status_code != 200:
+            raise requests.HTTPError(f"HTTP {response.status_code}")
+        return str(response.text or "")
+
+    def _registry_reward_sweep(self) -> None:
+        """Read the queued game pages one by one, slowly, and keep what they say."""
+        checked = 0
+        consecutive_failures = 0
+        subscription_only: list[str] = []
+        while True:
+            with self._registry_lock:
+                if not self._registry_pending:
+                    break
+                slug = next(iter(self._registry_pending))
+                signature = self._registry_pending.pop(slug)
+            try:
+                page = self._registry_fetch_page(slug)
+            except (requests.RequestException, OSError) as exc:
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    with self._registry_lock:
+                        self._registry_pending.clear()  # the next list refresh queues them again
+                    self._note(f"Registo: a leitura das páginas dos jogos falhou {consecutive_failures} vezes seguidas ({exc}); tenta-se mais tarde.")
+                    break
+                time.sleep(self._registry_pause_sec)
+                continue
+            consecutive_failures = 0
+            summary = summarize(parse_game_page(page))
+            self._registry_rewards.store(slug, signature, summary)
+            checked += 1
+            if summary is not None and summary.subscription_only:
+                subscription_only.append(slug)
+            if checked % 25 == 0:
+                self._save_registry_rewards()
+            time.sleep(self._registry_pause_sec)
+        if checked:
+            self._save_registry_rewards()
+            detail = f" Só com subscrição: {', '.join(subscription_only)}." if subscription_only else ""
+            self._note(f"Registo: verificado o tipo de drops de {checked} jogo(s).{detail}")
+
+    def _save_registry_rewards(self) -> None:
+        try:
+            self._registry_rewards.save()
+        except OSError as exc:
+            self._note(f"Registo: não foi possível guardar o tipo de drops ({exc}).")
+
+    def wait_for_registry_rewards(self, timeout: float = 30.0) -> bool:
+        """Wait for the background sweep (used by tests). True when it has finished."""
+        thread = self._registry_thread
+        if thread is not None:
+            thread.join(timeout)
+            return not thread.is_alive()
+        return True
 
     def _campaign_from_browser_row(
         self,
@@ -4563,10 +4621,14 @@ class TwitchClient:
         cached = self._game_box_art_cache.get(cache_key)
         if cached is not None:
             return cached
+        if self._box_art_failure_remembered("art", cache_key):
+            return ""
+        errors_before = self._box_art_error_count
 
         try:
             ref = self.resolve_game(game_name)
         except requests.RequestException as exc:
+            self._box_art_error_count += 1
             self._note(f"Could not look up {game_name} on Twitch while resolving its box art: {exc}")
             ref = None
         official = official_box_art_url(ref.id) if ref is not None else ""
@@ -4587,6 +4649,7 @@ class TwitchClient:
                     self._game_box_art_cache[cache_key] = art_url
                     return art_url
             except requests.RequestException as exc:
+                self._box_art_error_count += 1
                 self._note(f"DirectoryPage_Game failed while resolving box art for {game_name}: {exc}")
 
         try:
@@ -4599,6 +4662,7 @@ class TwitchClient:
                 self._game_box_art_cache[cache_key] = art_url
                 return art_url
         except requests.RequestException as exc:
+            self._box_art_error_count += 1
             self._note(f"DirectoryGameRedirect failed while resolving box art for {game_name}: {exc}")
 
         directory_art = self._resolve_twitch_directory_box_art_url(game_name, slug=slug)
@@ -4611,7 +4675,9 @@ class TwitchClient:
             self._game_box_art_cache[cache_key] = external_url
             return external_url
 
-        # Do NOT cache failures — allow retry on the next call
+        # Nothing found: remember it for a while (see BOX_ART_RETRY_SEC) instead of asking every source again
+        # on the next dashboard refresh.
+        self._remember_box_art_failure("art", cache_key, errors_before)
         return ""
 
     def _resolve_external_game_box_art_url(self, game_name: str) -> str:
@@ -4619,7 +4685,16 @@ class TwitchClient:
         cached = self._external_box_art_cache.get(cache_key)
         if cached is not None:
             return cached
+        if self._box_art_failure_remembered("ext", cache_key):
+            return ""
+        errors_before = self._box_art_error_count
+        found = self._search_external_box_art_url(game_name)
+        if not found:
+            self._remember_box_art_failure("ext", cache_key, errors_before)
+        return found
 
+    def _search_external_box_art_url(self, game_name: str) -> str:
+        cache_key = game_name.casefold()
         api_url = "https://store.steampowered.com/api/storesearch/"
         try:
             response = self.session.get(
@@ -4631,6 +4706,7 @@ class TwitchClient:
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
+            self._box_art_error_count += 1
             self._note(f"Steam store search failed while resolving box art for {game_name}: {exc}")
             fallback = self._resolve_google_game_box_art_url(game_name)
             if fallback:
@@ -4668,7 +4744,7 @@ class TwitchClient:
                     self._external_box_art_cache[cache_key] = library_url
                     return library_url
             except requests.RequestException:
-                pass
+                self._box_art_error_count += 1
 
         tiny_image = str(best_item.get("tiny_image", "") or "").strip()
         if tiny_image:
@@ -4698,6 +4774,7 @@ class TwitchClient:
             response.raise_for_status()
             html = response.text
         except requests.RequestException:
+            self._box_art_error_count += 1
             return ""
 
         patterns = [
@@ -4752,6 +4829,7 @@ class TwitchClient:
             api_response.raise_for_status()
             payload = api_response.json()
         except (requests.RequestException, ValueError):
+            self._box_art_error_count += 1
             return ""
 
         for item in payload.get("results", []) or []:
@@ -4778,6 +4856,7 @@ class TwitchClient:
             response.raise_for_status()
             html = response.text
         except requests.RequestException as exc:
+            self._box_art_error_count += 1
             self._note(f"Google image search failed while resolving box art for {game_name}: {exc}")
             return ""
 

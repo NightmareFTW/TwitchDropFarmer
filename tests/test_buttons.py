@@ -65,6 +65,8 @@ class _WindowCase(unittest.TestCase):
         enter(patch.object(config_module, "CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"))
         enter(patch.object(config_module, "SESSION_FILE", base / "session.json"))
         enter(patch.object(tc, "SESSION_FILE", base / "session.json"))
+        enter(patch.object(config_module, "REGISTRY_REWARDS_FILE", base / "registry_rewards.json"))
+        enter(patch.object(tc, "REGISTRY_REWARDS_FILE", base / "registry_rewards.json"))
         enter(patch.object(tc, "CONFIG_DIR", base))
         enter(patch.object(tc, "COOKIE_FILE", base / "cookies.json"))
         enter(patch.object(tc, "CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"))
@@ -1271,6 +1273,52 @@ class TestLoginButton(_WindowCase):
 
         self.assertNotIn(self.TOKEN, self.log_text())
         self.assertNotIn(self.TOKEN, w.btn_smart_login.text() + w.btn_smart_login.toolTip())
+
+
+class TestSubscriptionOnlyGames(_WindowCase):
+    """What the dashboard shows once the registry has said which games need a subscription."""
+
+    def registry_campaign(self, name: str, slug: str) -> DropCampaign:
+        campaign = _campaign(name)
+        campaign.source = "external_registry"
+        campaign.link_url = f"https://twitchdrops.app/game/{slug}"
+        campaign.required_minutes = 0
+        campaign.progress_minutes = 0
+        campaign.drops = []
+        campaign.has_watchable_drops = False
+        return campaign
+
+    def show(self, campaigns: list[DropCampaign]) -> None:
+        from twitch_drop_farmer.registry_rewards import RewardSummary
+
+        w = self.window
+        w.client._registry_rewards.store("elden-ring", "s", RewardSummary(subscription=1))
+        w.client._registry_rewards.store("cyberpunk-2077", "s", RewardSummary(watchable=1, subscription=1))
+        w.client.apply_registry_rewards(campaigns)
+        names = [campaign.game_name for campaign in campaigns]
+        w.config.whitelist_games = list(names)
+        w.available_game_entries = w._compose_game_entries(names)
+        w.latest_snapshot = FarmSnapshot(campaigns=campaigns, decisions=[], available_games=names, available_channels=[])
+        w._refresh_filter_lists()
+        w._refresh_dashboard_hide_sub_only_label()
+
+    def test_the_counter_counts_the_subscription_only_games_and_not_the_mixed_ones(self):
+        elden = self.registry_campaign("ELDEN RING", "elden-ring")
+        cyberpunk = self.registry_campaign("Cyberpunk 2077", "cyberpunk-2077")
+
+        self.show([elden, cyberpunk])
+
+        self.assertTrue(elden.requires_subscription)
+        self.assertFalse(cyberpunk.requires_subscription)
+        self.assertTrue(self.window.dashboard_hide_sub_only_checkbox.text().endswith("(1)"),
+                        self.window.dashboard_hide_sub_only_checkbox.text())
+
+    def test_a_game_the_registry_has_not_been_read_for_is_not_counted(self):
+        unknown = self.registry_campaign("Mystery Game", "mystery-game")
+
+        self.show([unknown])
+
+        self.assertTrue(self.window.dashboard_hide_sub_only_checkbox.text().endswith("(0)"))
 
 
 class TestNoButtonIsLeftOut(_WindowCase):

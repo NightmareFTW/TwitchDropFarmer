@@ -392,30 +392,6 @@ class TestFarmEnginePipeline(unittest.TestCase):
         )
         self.assertEqual(len({campaign.id for campaign in campaigns}), len(campaigns))
 
-    def test_external_registry_game_page_parses_mixed_watch_and_sub_rewards(self):
-        """A game page with normal watch rewards and sub rewards must keep the game farmable until the normal drops finish."""
-        client = TwitchClient()
-        fake_html = """
-        <html><body>
-        <div class="reward-card">
-          <div class="reward-name">WARDOG</div>
-          <div class="reward-meta">Watch 30m</div>
-        </div>
-        <div class="reward-card">
-          <div class="reward-name">WARLORD</div>
-          <div class="reward-meta">1 sub</div>
-        </div>
-        </body></html>
-        """
-
-        rewards = client._extract_game_rewards_from_page(fake_html)
-
-        self.assertEqual(len(rewards), 2)
-        self.assertIn("WARDOG", {item["name"] for item in rewards})
-        self.assertIn("WARLORD", {item["name"] for item in rewards})
-        self.assertTrue(any(item.get("requires_subscription") for item in rewards if item["name"] == "WARLORD"))
-        self.assertTrue(any(item.get("required_minutes", 0) > 0 for item in rewards if item["name"] == "WARDOG"))
-
     def test_dashboard_game_names_ignore_synthetic_numeric_suffixes(self):
         """Synthetic variants like 'Game 3' should collapse to the real game name when a base entry exists."""
         duplicates = ["Don't Starve Together", "Don't Starve Together 3", "World of Warcraft"]
