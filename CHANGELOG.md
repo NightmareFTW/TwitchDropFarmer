@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.57] - 2026-11-11
+
+### Fixed
+
+- **O diagnóstico dava sempre «Twitch API Connectivity: FAILED»** (e «1 critical issue»)
+  mesmo com tudo a funcionar — apanhado ao testar o botão. O teste enviava de propósito
+  uma consulta inventada (`GetUser` com um hash de 32 zeros; um SHA-256 tem 64), a Twitch
+  respondia HTTP 400 e a app tratava essa resposta como «API unreachable», quando uma
+  resposta, mesmo uma recusa, prova que o servidor está acessível. Agora faz uma pergunta
+  real e barata (o *slug* da categoria «Just Chatting») e distingue: **a funcionar**
+  (SUCCESS, com a latência), **acessível mas a recusar** (FAILED com o código HTTP) e
+  **inacessível** (FAILED); uma resposta com erros GraphQL (por exemplo
+  `PersistedQueryNotFound`, que quer dizer que a Twitch mudou uma consulta interna) é um
+  aviso que o explica.
+- **O teste «Heartbeat System» não verificava nada** — dizia «Heartbeat system ready» em
+  0,0 ms, sempre. Passa a «Watch Pipeline (HLS)»: faz o que a vigilância faz, de forma
+  passiva e anónima — obtém o token de reprodução de um canal em directo, lê a playlist e
+  pede um segmento — e falha com o motivo se algum passo não responder. Não envia nenhum
+  evento de visualização, por isso não credita tempo ao canal escolhido.
+
 ## [2.2.56] - 2026-11-10
 
 ### Fixed

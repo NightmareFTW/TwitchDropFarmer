@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
+import requests
+
+from .stream_watcher import playlist_segment_urls
+
 if TYPE_CHECKING:
     from .twitch_client import TwitchClient
 
@@ -155,35 +159,50 @@ class DiagnosticEngine:
         self.report.add_result(result)
 
     async def _test_twitch_api_connectivity(self) -> None:
-        """Test Twitch API connectivity."""
-        result = DiagnosticResult(
-            name="Twitch API Connectivity",
-            status=DiagnosticStatus.RUNNING,
-        )
-        start = time.time()
+        """Ask Twitch's GraphQL API a real, cheap question and judge the answer.
 
+        The old test sent a deliberately fake query (a hash of 32 zeros) and counted the
+        HTTP 400 Twitch answers to that as "API unreachable", so it could never pass: an
+        answer, even a refusal, proves the server is reachable. This asks for the slug of a
+        category that always exists, and tells reachable-and-working, reachable-but-refusing
+        and unreachable apart.
+        """
+        from .twitch_client import GAME_REDIRECT_QUERY
+
+        result = DiagnosticResult(name="Twitch API Connectivity", status=DiagnosticStatus.RUNNING)
+        start = time.time()
         try:
-            # Simple GraphQL query to test connectivity
-            await asyncio.to_thread(
-                self.client._post_gql,
-                {
-                    "operationName": "GetUser",
-                    "variables": {},
-                    "extensions": {
-                        "persistedQuery": {
-                            "version": 1,
-                            "sha256Hash": "00000000000000000000000000000000",
-                        }
-                    },
-                },
-            )
+            payload = self.client._clone_query(GAME_REDIRECT_QUERY)
+            payload["variables"]["name"] = "Just Chatting"
+            response = await asyncio.to_thread(self.client._post_gql, payload)
             result.duration_ms = (time.time() - start) * 1000
-            result.status = DiagnosticStatus.SUCCESS
-            result.message = f"API reachable ({result.duration_ms:.0f}ms latency)"
-        except Exception as exc:
+            errors = self.client._graphql_error_messages(response)
+            game = ((response.get("data") or {}).get("game") or {}) if isinstance(response, dict) else {}
+            if game.get("slug"):
+                result.status = DiagnosticStatus.SUCCESS
+                result.message = f"Twitch GraphQL API reachable and answering ({result.duration_ms:.0f} ms)."
+            elif errors:
+                result.status = DiagnosticStatus.WARNING
+                result.message = (
+                    f"Twitch answered but rejected a basic query: {errors[0]}. If this says "
+                    "PersistedQueryNotFound, Twitch changed an internal query and the app needs an update."
+                )
+            else:
+                result.status = DiagnosticStatus.WARNING
+                result.message = "Twitch answered but returned no data for a basic query (it may be throttling this connection)."
+        except requests.HTTPError as exc:
+            result.duration_ms = (time.time() - start) * 1000
+            code = getattr(exc.response, "status_code", "?")
+            result.status = DiagnosticStatus.FAILED
+            result.message = f"Twitch is reachable but refused the request (HTTP {code})."
+        except (requests.ConnectionError, requests.Timeout) as exc:
             result.duration_ms = (time.time() - start) * 1000
             result.status = DiagnosticStatus.FAILED
             result.message = f"API unreachable: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            result.duration_ms = (time.time() - start) * 1000
+            result.status = DiagnosticStatus.FAILED
+            result.message = f"API check failed: {exc}"
 
         self.report.add_result(result)
 
@@ -217,21 +236,51 @@ class DiagnosticEngine:
         self.report.add_result(result)
 
     async def _test_heartbeat_system(self) -> None:
-        """Test heartbeat/stream keeping system."""
-        result = DiagnosticResult(
-            name="Heartbeat System",
-            status=DiagnosticStatus.RUNNING,
-        )
-        start = time.time()
+        """Check the path the farm uses to count as a viewer: playback token, playlist, segment.
 
+        This used to report "Heartbeat system ready" without checking anything (0.0 ms). It
+        now does what the watcher does for a live channel, passively and anonymously (no
+        minute-watched event is sent, so no watch time is credited to the channel it picks):
+        gets a playback token, reads the media playlist and requests one segment.
+        """
+        result = DiagnosticResult(name="Watch Pipeline (HLS)", status=DiagnosticStatus.RUNNING)
+        start = time.time()
         try:
-            # Check if heartbeat infrastructure is available (simplified check)
-            result.duration_ms = (time.time() - start) * 1000
-            result.status = DiagnosticStatus.SUCCESS
-            result.message = "Heartbeat system ready."
-        except Exception as exc:
+            login = await asyncio.to_thread(self._any_live_channel)
+            if not login:
+                result.duration_ms = (time.time() - start) * 1000
+                result.status = DiagnosticStatus.WARNING
+                result.message = "Could not find a live channel to test the video path with."
+            else:
+                text, base_url = await asyncio.to_thread(self.client.hls_playlist_snapshot, login)
+                urls = playlist_segment_urls(text, base_url)
+                if not urls:
+                    result.status = DiagnosticStatus.WARNING
+                    result.message = "The playlist of a live channel came back with no segments."
+                else:
+                    await asyncio.to_thread(self.client.hls_touch_segment, login, urls[-1])
+                    result.status = DiagnosticStatus.SUCCESS
+                    result.message = f"Playback token, playlist ({len(urls)} segments) and a segment all answered."
+                result.duration_ms = (time.time() - start) * 1000
+        except Exception as exc:  # noqa: BLE001
             result.duration_ms = (time.time() - start) * 1000
             result.status = DiagnosticStatus.FAILED
-            result.message = f"Heartbeat check failed: {exc}"
+            result.message = f"The video path failed: {exc}"
 
         self.report.add_result(result)
+
+    def _any_live_channel(self) -> str:
+        """The login of some live channel (the top one of a busy category), or ""."""
+        from .twitch_client import GAME_DIRECTORY_QUERY
+
+        payload = self.client._clone_query(GAME_DIRECTORY_QUERY)
+        payload["variables"]["slug"] = "just-chatting"
+        payload["variables"]["limit"] = 1
+        payload["variables"]["options"]["systemFilters"] = []
+        response = self.client._post_gql(payload)
+        game = ((response.get("data") or {}).get("game") or {}) if isinstance(response, dict) else {}
+        for edge in (game.get("streams") or {}).get("edges") or []:
+            login = (((edge or {}).get("node") or {}).get("broadcaster") or {}).get("login") or ""
+            if login:
+                return str(login)
+        return ""
