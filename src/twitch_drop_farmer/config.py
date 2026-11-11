@@ -48,6 +48,7 @@ class AppConfig:
     auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
     check_updates_on_startup: bool = True
     dashboard_hide_subscription_required: bool = False
+    dashboard_hide_inactive: bool = False  # hide the games whose card says INATIVO
     remember_session: bool = False  # The user agreed to keep the session JSON so "Log in" can restore it
     # The game the farm was last on (kept up to date as the farm moves on, not only when the user picks one),
     # so the next start continues there instead of on whatever the sort order puts first.

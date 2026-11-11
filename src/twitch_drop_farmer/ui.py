@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import re
 import sys
+import textwrap
 import time
 import traceback
 import weakref
@@ -140,6 +141,16 @@ TOAST_DURATION_MS = 3000
 
 # The on-screen log is capped: a farm can run for days and the widget keeps every line in memory.
 LOG_MAX_LINES = 5000
+
+
+def _wrap_tooltip(text: str, width: int = 76) -> str:
+    """Break the long lines of a plain-text tooltip (Qt does not wrap those, so a long paragraph
+    makes a tooltip as wide as the screen). Blank lines stay; a bullet's continuation is indented."""
+    wrapped: list[str] = []
+    for line in text.split("\n"):
+        indent = "  " if line.startswith("• ") else ""
+        wrapped.extend(textwrap.wrap(line, width, subsequent_indent=indent, break_long_words=False) or [""])
+    return "\n".join(wrapped)
 
 
 def _minutes_text(seconds: int) -> str:
@@ -819,26 +830,42 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_filters": "Filtros",
         "tab_settings": "Definições",
         "dashboard_group": "Jogos da whitelist",
-        "dashboard_hint": "Clica num jogo para o tornar alvo manual de farm.",
         "dashboard_refresh": "Actualizar dashboard",
         "dashboard_refresh_drops": "Actualizar drops",
-        "dashboard_refresh_drops_tooltip": "Vai percorrer os jogos da whitelist e recarrega os drops activos de cada um usando os dados do site público e o fallback do browser.",
+        "dashboard_refresh_drops_tooltip": "Recarrega a lista de campanhas e tenta obter os drops detalhados de todos os jogos, começando pelo que está a farmar. Pode demorar alguns minutos.",
         "dashboard_full_scan_started": "A fazer scan completo da whitelist (pode demorar alguns minutos)...",
         "dashboard_full_scan_done": "Scan completo da whitelist concluído.",
         "dashboard_drop_refresh_started": "A actualizar drops de {count} jogo(s) da whitelist...",
         "dashboard_drop_refresh_done": "Actualização de drops concluída para {count} jogo(s).",
         "dashboard_drop_refresh_empty": "Não há jogos na whitelist para actualizar drops.",
         "dashboard_hide_sub_only": "Ocultar jogos com drops de subscrição",
-        "dashboard_hide_sub_only_help": "Esconde jogos cujas campanhas disponíveis exigem subscrição para resgatar drops.",
-        "dashboard_drops_notice": (
-            "ℹ Um jogo recém-seleccionado pode mostrar «0/0 min» ou «Sem drops activos» "
-            "durante uns segundos. Se não carregar, clica em «Actualizar dashboard» para "
-            "forçar um scan completo de todos os jogos da whitelist (pode demorar alguns minutos)."
+        "dashboard_hide_inactive": "Ocultar jogos inactivos",
+        "dashboard_hide_inactive_help": "Esconde os jogos sem campanha activa neste momento (etiqueta INATIVO): campanhas já terminadas ou que ainda não começaram. O número é quantos jogos da whitelist estão assim.",
+        "dashboard_all_hidden": "Todos os jogos estão ocultos pelos filtros acima.",
+        "dashboard_hide_sub_only_help": "Esconde os jogos cujos drops activos exigem todos uma subscrição (não se conseguem farmar a ver). Os que também têm drops por tempo de visualização não são escondidos. O número é quantos jogos da whitelist são assim.",
+        "dashboard_help": (
+            "Clica num cartão para tornar esse jogo o alvo manual da farm.\n"
+            "\n"
+            "Etiquetas dos cartões:\n"
+            "• FARMING – é o jogo em que a farm está agora\n"
+            "• LIVE – há canais com drops em directo, pronto a farmar\n"
+            "• A VERIFICAR – os canais ainda não foram consultados\n"
+            "• SEM CANAIS – não há nenhum canal elegível em directo\n"
+            "• LIGAR CONTA – a conta do jogo ainda não está ligada à tua conta Twitch\n"
+            "• SUBSCRIÇÃO – os drops exigem subscrição (não se farmam a ver)\n"
+            "• CONCLUÍDO – já tens todos os drops\n"
+            "• INATIVO – sem campanha activa neste momento (já terminou ou ainda não começou)\n"
+            "\n"
+            "Actualizar drops: recarrega a lista de campanhas e tenta obter os drops detalhados de todos "
+            "os jogos, começando pelo que está a farmar.\n"
+            "Actualizar dashboard: faz o mesmo e volta a descarregar as capas dos jogos.\n"
+            "Os dois correm com a janela parada e podem demorar alguns minutos. Se a Twitch os bloquear "
+            "(verificação de integridade), não trazem mais detalhe.\n"
+            "\n"
+            "Um jogo que ainda não começaste a farmar pode mostrar «0/0 min» e «Sem drops activos» "
+            "até a Twitch registar o primeiro minuto de visualização."
         ),
-        "dashboard_refresh_tooltip": (
-            "Faz um scan completo da whitelist e obtém os drops reais de todos os jogos, "
-            "não só do que está a ser farmado. Pode demorar alguns minutos."
-        ),
+        "dashboard_refresh_tooltip": "Faz o mesmo que «Actualizar drops» e volta a descarregar as capas dos jogos. Pode demorar alguns minutos.",
         "dashboard_count_all": "A mostrar {shown} jogo(s).",
         "dashboard_count_whitelist": "A mostrar {shown}/{total} jogos da whitelist.",
         "dashboard_loading": "A carregar campanhas...",
@@ -1209,26 +1236,42 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "tab_filters": "Filters",
         "tab_settings": "Settings",
         "dashboard_group": "Whitelisted games",
-        "dashboard_hint": "Click a game to make it your manual farming target.",
         "dashboard_refresh": "Refresh dashboard",
         "dashboard_refresh_drops": "Refresh drops",
-        "dashboard_refresh_drops_tooltip": "Walks the whitelist games and refreshes each game's active drops using the public registry and browser fallback data.",
+        "dashboard_refresh_drops_tooltip": "Reloads the campaign list and tries to get the detailed drops of every game, starting with the one being farmed. It can take a few minutes.",
         "dashboard_full_scan_started": "Running a full whitelist scan (can take a few minutes)...",
         "dashboard_full_scan_done": "Full whitelist scan complete.",
         "dashboard_drop_refresh_started": "Refreshing drops for {count} whitelist game(s)...",
         "dashboard_drop_refresh_done": "Drop refresh completed for {count} game(s).",
         "dashboard_drop_refresh_empty": "There are no games in the whitelist to refresh.",
         "dashboard_hide_sub_only": "Hide games with subscription-only drops",
-        "dashboard_hide_sub_only_help": "Hide games whose available campaigns require an active subscription to redeem drops.",
-        "dashboard_drops_notice": (
-            "ℹ A just-selected game may show \"0/0 min\" or \"No active drops\" for a few "
-            "seconds. If it doesn't load, click \"Refresh dashboard\" to force a full scan "
-            "of every whitelisted game (this can take a few minutes)."
+        "dashboard_hide_inactive": "Hide inactive games",
+        "dashboard_hide_inactive_help": "Hides the games with no active campaign right now (INATIVO label): campaigns that have ended or have not started yet. The number is how many whitelist games are like that.",
+        "dashboard_all_hidden": "All games are hidden by the filters above.",
+        "dashboard_hide_sub_only_help": "Hides the games whose active drops all need a subscription (they cannot be farmed by watching). Games that also have watch-time drops are not hidden. The number is how many whitelist games are like that.",
+        "dashboard_help": (
+            "Click a card to make that game the manual farming target.\n"
+            "\n"
+            "Card labels:\n"
+            "• FARMING – the game the farm is on right now\n"
+            "• LIVE – channels with drops are live, ready to farm\n"
+            "• A VERIFICAR (checking) – the channels have not been looked up yet\n"
+            "• SEM CANAIS (no channels) – no eligible channel is live\n"
+            "• LIGAR CONTA (link account) – the game account is not linked to your Twitch account yet\n"
+            "• SUBSCRIÇÃO (subscription) – the drops need a subscription (they cannot be farmed by watching)\n"
+            "• CONCLUÍDO (done) – you already have all the drops\n"
+            "• INATIVO (inactive) – no active campaign right now (it has ended or not started yet)\n"
+            "\n"
+            "Refresh drops: reloads the campaign list and tries to get the detailed drops of every game, "
+            "starting with the one being farmed.\n"
+            "Refresh dashboard: does the same and downloads the game covers again.\n"
+            "Both run with the window frozen and can take a few minutes. If Twitch blocks them "
+            "(integrity check), they bring no more detail.\n"
+            "\n"
+            "A game you have not started farming yet can show \"0/0 min\" and \"No active drops\" "
+            "until Twitch registers the first minute of watching."
         ),
-        "dashboard_refresh_tooltip": (
-            "Runs a full whitelist scan and fetches real drop data for every game, "
-            "not just the one being farmed. Can take a few minutes."
-        ),
+        "dashboard_refresh_tooltip": "Does the same as \"Refresh drops\" and downloads the game covers again. It can take a few minutes.",
         "dashboard_count_all": "Showing {shown} game(s).",
         "dashboard_count_whitelist": "Showing {shown}/{total} whitelisted games.",
         "dashboard_loading": "Loading campaigns...",
@@ -2577,8 +2620,12 @@ class MainWindow(QMainWindow):
         self.dashboard_group = QGroupBox()
         self.dashboard_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         dashboard_group_layout = QVBoxLayout(self.dashboard_group)
-        self.dashboard_hint_label = QLabel()
-        self.dashboard_hint_label.setWordWrap(True)
+        # The explanations live in the "?" tooltip, so the header is two short rows:
+        # [?] how many games are shown + the refresh buttons / the two "hide" filters.
+        self.dashboard_help_icon = QLabel("?")
+        self.dashboard_help_icon.setObjectName("HelpIcon")
+        self.dashboard_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dashboard_help_icon.setFixedSize(18, 18)
         self.dashboard_loading_label = QLabel()
         self.dashboard_loading_label.setVisible(False)
         self.dashboard_loading_label.setWordWrap(True)
@@ -2588,25 +2635,24 @@ class MainWindow(QMainWindow):
             bool(getattr(self.config, "dashboard_hide_subscription_required", False))
         )
         self.dashboard_hide_sub_only_checkbox.toggled.connect(self.handle_dashboard_hide_sub_only_toggle)
+        self.dashboard_hide_inactive_checkbox = QCheckBox()
+        self.dashboard_hide_inactive_checkbox.setChecked(bool(self.config.dashboard_hide_inactive))
+        self.dashboard_hide_inactive_checkbox.toggled.connect(self.handle_dashboard_hide_inactive_toggle)
         self.dashboard_count_label = QLabel()
         self.btn_dashboard_refresh = QPushButton()
         self.btn_dashboard_refresh.clicked.connect(self.handle_dashboard_refresh)
         self.btn_dashboard_refresh_drops = QPushButton()
         self.btn_dashboard_refresh_drops.clicked.connect(self.handle_dashboard_drop_refresh)
-        # Notice explaining what to do when a game's drops don't load (helps new
-        # users understand why a just-selected game can show "0/0 min" at first).
-        self.dashboard_drops_notice = QLabel()
-        self.dashboard_drops_notice.setObjectName("DashboardDropsNotice")
-        self.dashboard_drops_notice.setWordWrap(True)
-        # Muted mid-grey reads acceptably on both the dark and light themes; an
-        # inline stylesheet keeps it as a secondary hint without per-theme QSS.
-        self.dashboard_drops_notice.setStyleSheet("color: #8a8f98; font-size: 11px;")
-        dashboard_actions_layout = QHBoxLayout()
-        dashboard_actions_layout.addWidget(self.dashboard_hide_sub_only_checkbox)
-        dashboard_actions_layout.addStretch(1)
-        dashboard_actions_layout.addWidget(self.dashboard_count_label)
-        dashboard_actions_layout.addWidget(self.btn_dashboard_refresh_drops)
-        dashboard_actions_layout.addWidget(self.btn_dashboard_refresh)
+        dashboard_top_row = QHBoxLayout()
+        dashboard_top_row.addWidget(self.dashboard_help_icon)
+        dashboard_top_row.addWidget(self.dashboard_count_label)
+        dashboard_top_row.addStretch(1)
+        dashboard_top_row.addWidget(self.btn_dashboard_refresh_drops)
+        dashboard_top_row.addWidget(self.btn_dashboard_refresh)
+        dashboard_filter_row = QHBoxLayout()
+        dashboard_filter_row.addWidget(self.dashboard_hide_sub_only_checkbox)
+        dashboard_filter_row.addWidget(self.dashboard_hide_inactive_checkbox)
+        dashboard_filter_row.addStretch(1)
         self.dashboard_games_scroll = QScrollArea()
         self.dashboard_games_scroll.setWidgetResizable(True)
         self.dashboard_games_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -2620,10 +2666,9 @@ class MainWindow(QMainWindow):
         self.dashboard_no_games = QLabel()
         self.dashboard_no_games.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dashboard_no_games.setWordWrap(True)
-        dashboard_group_layout.addWidget(self.dashboard_hint_label)
+        dashboard_group_layout.addLayout(dashboard_top_row)
+        dashboard_group_layout.addLayout(dashboard_filter_row)
         dashboard_group_layout.addWidget(self.dashboard_loading_label)
-        dashboard_group_layout.addLayout(dashboard_actions_layout)
-        dashboard_group_layout.addWidget(self.dashboard_drops_notice)
         dashboard_group_layout.addWidget(self.dashboard_games_scroll, 1)
         self.dashboard_target_label = QLabel()
         self.dashboard_target_label.setWordWrap(True)
@@ -3143,7 +3188,6 @@ class MainWindow(QMainWindow):
     def _refresh_dashboard_games(self) -> None:
         # Render dashboard using the original GameCard visual format.
         self._refresh_dashboard()
-        self._refresh_dashboard_hide_sub_only_label()
 
         whitelist_games = self._dashboard_whitelist_games()
         if not whitelist_games:
@@ -3154,20 +3198,18 @@ class MainWindow(QMainWindow):
             return
         self.dashboard_target_label.setText(self._t("dashboard_unset"))
 
-    def _refresh_dashboard_hide_sub_only_label(self) -> None:
-        base = self._t("dashboard_hide_sub_only")
-        count = 0
-        if self.latest_snapshot is not None:
-            selected_games = self._dashboard_whitelist_games()
-            selected_tokens = {game.casefold() for game in selected_games}
-            count = sum(
-                1
-                for campaign in self.latest_snapshot.campaigns
-                if campaign.game_name.casefold() in selected_tokens
-                and self._campaign_matches_hide_sub_only(campaign)
-                and not campaign.all_drops_claimed
-            )
-        self.dashboard_hide_sub_only_checkbox.setText(f"{base} ({count})")
+    def _refresh_dashboard_filter_labels(self) -> None:
+        """Put the number of games each "hide" filter would hide in its label.
+
+        The numbers are the games of the whitelist, whether or not the filter is on (they are
+        counted while the cards are built, see _refresh_dashboard).
+        """
+        self.dashboard_hide_sub_only_checkbox.setText(
+            f"{self._t('dashboard_hide_sub_only')} ({getattr(self, '_dashboard_sub_only_games', 0)})"
+        )
+        self.dashboard_hide_inactive_checkbox.setText(
+            f"{self._t('dashboard_hide_inactive')} ({getattr(self, '_dashboard_inactive_games', 0)})"
+        )
 
     def _refresh_campaigns_label(self) -> None:
         count = len(self._filtered_decisions()) if self.latest_snapshot else 0
@@ -3190,15 +3232,15 @@ class MainWindow(QMainWindow):
         self.version_corner_label.setText(self._t("version_corner", version=__version__))
 
         self.dashboard_group.setTitle(self._t("dashboard_group"))
-        self.dashboard_hint_label.setText(self._t("dashboard_hint"))
+        self.dashboard_help_icon.setToolTip(_wrap_tooltip(self._t("dashboard_help")))
         self.dashboard_loading_label.setText(self._t("dashboard_loading"))
-        self._refresh_dashboard_hide_sub_only_label()
-        self.dashboard_hide_sub_only_checkbox.setToolTip(self._t("dashboard_hide_sub_only_help"))
+        self._refresh_dashboard_filter_labels()
+        self.dashboard_hide_sub_only_checkbox.setToolTip(_wrap_tooltip(self._t("dashboard_hide_sub_only_help")))
+        self.dashboard_hide_inactive_checkbox.setToolTip(_wrap_tooltip(self._t("dashboard_hide_inactive_help")))
         self.btn_dashboard_refresh.setText(self._t("dashboard_refresh"))
-        self.btn_dashboard_refresh.setToolTip(self._t("dashboard_refresh_tooltip"))
+        self.btn_dashboard_refresh.setToolTip(_wrap_tooltip(self._t("dashboard_refresh_tooltip")))
         self.btn_dashboard_refresh_drops.setText(self._t("dashboard_refresh_drops"))
-        self.btn_dashboard_refresh_drops.setToolTip(self._t("dashboard_refresh_drops_tooltip"))
-        self.dashboard_drops_notice.setText(self._t("dashboard_drops_notice"))
+        self.btn_dashboard_refresh_drops.setToolTip(_wrap_tooltip(self._t("dashboard_refresh_drops_tooltip")))
 
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
@@ -4301,6 +4343,8 @@ class MainWindow(QMainWindow):
             ]
 
         if not filtered_games:
+            self._dashboard_sub_only_games = self._dashboard_inactive_games = 0
+            self._refresh_dashboard_filter_labels()
             self.dashboard_no_games.setText(self._t("dashboard_empty"))
             self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
             self._refresh_dashboard_count_label(
@@ -4356,6 +4400,10 @@ class MainWindow(QMainWindow):
         # Popula a grelha (3 colunas)
         columns = 3
         visible_index = 0
+        sub_only_total = 0
+        inactive_total = 0
+        hide_sub_only = self.dashboard_hide_sub_only_checkbox.isChecked()
+        hide_inactive = self.dashboard_hide_inactive_checkbox.isChecked()
         for entry in sorted(filtered_games, key=lambda e: e.label.casefold()):
 
             game_key = _dashboard_game_key(entry.label, known_names=known_game_names)
@@ -4371,12 +4419,6 @@ class MainWindow(QMainWindow):
                 if not self._campaign_matches_hide_sub_only(item)
             ]
             subscription_only_game = bool(actionable_campaigns) and not non_subscription_actionable_campaigns
-            if self.dashboard_hide_sub_only_checkbox.isChecked() and subscription_only_game:
-                continue
-
-            row = visible_index // columns
-            col = visible_index % columns
-            visible_index += 1
 
             is_farming = (game_key == active_game_key and active_decision is not None)
             has_live   = game_key in farmable_game_keys
@@ -4410,6 +4452,18 @@ class MainWindow(QMainWindow):
             else:
                 # Fallback: jogo na whitelist mas sem nenhuma decisão no snapshot actual.
                 ribbon = RIBBON_INACTIVE
+
+            # Both numbers count every game of the whitelist, shown or not.
+            sub_only_total += int(subscription_only_game)
+            inactive_total += int(ribbon == RIBBON_INACTIVE)
+            if hide_sub_only and subscription_only_game:
+                continue
+            if hide_inactive and ribbon == RIBBON_INACTIVE:
+                continue
+
+            row = visible_index // columns
+            col = visible_index % columns
+            visible_index += 1
 
             # Box art: prefere URL da campanha se disponível
             best_decision = None
@@ -4447,8 +4501,12 @@ class MainWindow(QMainWindow):
             )
 
         if visible_index == 0:
-            self.dashboard_no_games.setText(self._t("dashboard_empty"))
+            # Games exist but the filters hid them all: say so, not "add games to the whitelist".
+            self.dashboard_no_games.setText(self._t("dashboard_all_hidden"))
             self.dashboard_games_grid.addWidget(self.dashboard_no_games, 0, 0)
+        self._dashboard_sub_only_games = sub_only_total
+        self._dashboard_inactive_games = inactive_total
+        self._refresh_dashboard_filter_labels()
         self._refresh_dashboard_count_label(
             shown=visible_index, total_whitelist=(len(selected_tokens) if selected_tokens else None)
         )
@@ -5160,6 +5218,11 @@ class MainWindow(QMainWindow):
         """Handle hide subscription-only games toggle."""
         self.config.dashboard_hide_subscription_required = checked
         self._refresh_dashboard_games()
+
+    def handle_dashboard_hide_inactive_toggle(self, checked: bool) -> None:
+        """Handle hide inactive games toggle."""
+        self.config.dashboard_hide_inactive = checked
+        self._refresh_dashboard_games()
         if checked and self.latest_snapshot is not None:
             has_sub_only = any(
                 self._campaign_matches_hide_sub_only(campaign) and not campaign.all_drops_claimed
@@ -5549,6 +5612,7 @@ class MainWindow(QMainWindow):
         self.config.auto_claim_drops = self.auto_claim_checkbox.isChecked()
         self.config.resume_farming_on_start = self.resume_checkbox.isChecked()
         self.config.dashboard_hide_subscription_required = self.dashboard_hide_sub_only_checkbox.isChecked()
+        self.config.dashboard_hide_inactive = self.dashboard_hide_inactive_checkbox.isChecked()
 
     def _do_save_config(self) -> None:
         """The "Save settings" button: save everything now and confirm it."""
@@ -5602,6 +5666,7 @@ class MainWindow(QMainWindow):
             self.auto_claim_checkbox,
             self.resume_checkbox,
             self.dashboard_hide_sub_only_checkbox,
+            self.dashboard_hide_inactive_checkbox,
             self.watchdog_checkbox,
             self.autoupdate_checkbox,
             *self.alert_checkboxes.values(),

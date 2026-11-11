@@ -6,6 +6,41 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.65] - 2026-11-11
+
+### Added
+
+- **«Ocultar jogos inactivos (N)»** no cabeçalho dos jogos da whitelist, ao lado do filtro de
+  subscrição. Esconde os jogos cuja etiqueta é INATIVO (campanha já terminada ou que ainda não
+  começou) e o número diz quantos jogos da whitelist estão assim, com o filtro ligado ou não.
+  Fica guardado como as restantes opções.
+
+### Changed
+
+- **Cabeçalho reorganizado:** a primeira linha tem o «?», a contagem («A mostrar 83/83 jogos») e
+  os dois botões de actualizar; a segunda tem os dois filtros. Os dois textos soltos («Clica num
+  jogo…» e a nota cinzenta com o «ℹ») passaram para o balão do **«?»**, que agora também explica
+  **todas** as etiquetas dos cartões (FARMING, LIVE, A VERIFICAR, SEM CANAIS, LIGAR CONTA,
+  SUBSCRIÇÃO, CONCLUÍDO, INATIVO — um teste falha se uma etiqueta nova não for explicada). Os
+  balões têm as linhas quebradas, porque o Qt não o faz sozinho e um parágrafo comprido dava um
+  balão tão largo como o ecrã.
+- **O texto foi revisto contra o que a app faz hoje**, e duas frases estavam desactualizadas:
+  - «pode mostrar 0/0 min durante uns segundos»: um jogo que ainda não começaste a farmar mostra
+    isso **até a Twitch registar o primeiro minuto** de visualização (sem os detalhes da Twitch,
+    que ficam bloqueados pela verificação de integridade, não há mais dados antes disso);
+  - «scan completo de todos os jogos»: os dois botões fazem o mesmo — recarregam as campanhas e
+    tentam obter os drops detalhados com o browser invisível, **com a janela parada** e a pedir
+    mais pedidos à Twitch — e só diferem em que o «Actualizar dashboard» também descarrega as
+    capas outra vez e o «Actualizar drops» põe o jogo farmado à frente. Se a Twitch os bloquear,
+    não trazem mais detalhe. As dicas dos botões e dos filtros dizem agora isto.
+
+### Fixed
+
+- **O contador «Ocultar jogos com drops de subscrição (N)» contava campanhas e o filtro esconde
+  jogos**: um jogo com duas campanhas só de subscrição contava 2 e escondia 1. Passa a contar jogos.
+- Quando os filtros escondem **todos** os jogos, a mensagem já não diz «Adiciona jogos na
+  whitelist» (que só faz sentido sem jogos): diz que estão ocultos pelos filtros.
+
 ## [2.2.64] - 2026-11-11
 
 ### Added

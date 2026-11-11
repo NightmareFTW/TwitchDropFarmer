@@ -1519,6 +1519,262 @@ class TestResumeLastGame(_WindowCase):
         start.assert_not_called()
 
 
+class TestDashboardHeader(_WindowCase):
+    """The whitelist header: a "?" with the explanations, and the two "hide" filters."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        w = self.window
+        w.config.dashboard_hide_subscription_required = False
+        w.config.dashboard_hide_inactive = False
+        for box in (w.dashboard_hide_sub_only_checkbox, w.dashboard_hide_inactive_checkbox):
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
+        w.language_picker.setCurrentIndex(w.language_picker.findData("pt_PT"))
+        w._retranslate_ui()
+
+    def show_games(self) -> None:
+        """Live Game (LIVE), Quiet Game (not started), Old Game (ended), Sub Game (subscription only)."""
+        w = self.window
+        live, quiet, old, sub = (_campaign(n) for n in ("Live Game", "Quiet Game", "Old Game", "Sub Game"))
+        decisions = [
+            _decision(live),
+            FarmDecision(campaign=quiet, stream=None, reason_code="campaign_upcoming"),
+            FarmDecision(campaign=old, stream=None, reason_code="campaign_expired"),
+            FarmDecision(campaign=sub, stream=None, reason_code="subscription_required"),
+        ]
+        sub.source = "external_registry"
+        sub.requires_subscription, sub.has_watchable_drops = True, False
+        sub.drops, sub.required_minutes = [], 0
+        names = ["Live Game", "Quiet Game", "Old Game", "Sub Game"]
+        w.config.whitelist_games = names
+        w.available_game_entries = w._compose_game_entries(names)
+        w.latest_snapshot = FarmSnapshot(campaigns=[live, quiet, old, sub], decisions=decisions,
+                                         available_games=names, available_channels=[])
+        w._refresh_filter_lists()
+        w.games_whitelist_list.select_all()  # all four are on the whitelist, as selected by the user
+        w._refresh_dashboard_games()
+
+    def cards(self) -> list[str]:
+        grid = self.window.dashboard_games_grid
+        found = []
+        for index in range(grid.count()):
+            widget = grid.itemAt(index).widget()
+            if isinstance(widget, ui.GameCard):
+                found.append(widget.game_label)
+        return sorted(found)
+
+    def ribbon_of(self, game: str) -> str:
+        grid = self.window.dashboard_games_grid
+        for index in range(grid.count()):
+            widget = grid.itemAt(index).widget()
+            if isinstance(widget, ui.GameCard) and widget.game_label == game:
+                return widget._ribbon[0]
+        raise AssertionError(f"no card for {game}")
+
+    # ---------------------------------------------------------------- the "?" and the layout
+    def test_the_explanations_are_in_a_hover_icon_not_in_loose_text(self):
+        w = self.window
+
+        self.assertEqual(w.dashboard_help_icon.text(), "?")
+        self.assertEqual(w.dashboard_help_icon.objectName(), "HelpIcon")
+        self.assertFalse(hasattr(w, "dashboard_hint_label"))
+        self.assertFalse(hasattr(w, "dashboard_drops_notice"))
+        tip = w.dashboard_help_icon.toolTip()
+        for needle in ("alvo manual", "Actualizar drops", "Actualizar dashboard", "«0/0 min»"):
+            self.assertIn(needle, tip)
+
+    def test_the_help_lists_every_label_a_card_can_show(self):
+        """So the text cannot go stale when a label is added."""
+        tip = self.window.dashboard_help_icon.toolTip()
+        for ribbon in (ui.RIBBON_FARMING, ui.RIBBON_LIVE, ui.RIBBON_ACCOUNT_LINK, ui.RIBBON_NO_CHANNELS,
+                       ui.RIBBON_SUB, ui.RIBBON_DONE, ui.RIBBON_INACTIVE, ui.RIBBON_UNCHECKED):
+            self.assertIn(ribbon[0], tip, f"the help does not explain {ribbon[0]}")
+
+    def test_the_help_is_readable_in_both_languages_and_not_as_wide_as_the_screen(self):
+        w = self.window
+        for language in ("pt_PT", "en"):
+            w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+            w._retranslate_ui()
+            with self.subTest(language):
+                lines = w.dashboard_help_icon.toolTip().split("\n")
+                self.assertLessEqual(max(len(line) for line in lines), 80)
+                self.assertGreater(len(lines), 10)
+
+    def test_the_tooltip_wrapper_keeps_blank_lines_and_indents_bullets(self):
+        text = "Short.\n\n• " + "word " * 40 + "\nA " + "long " * 40
+
+        wrapped = ui._wrap_tooltip(text, 40).split("\n")
+
+        self.assertIn("", wrapped)
+        self.assertTrue(all(len(line) <= 40 for line in wrapped))
+        bullet = wrapped.index(next(line for line in wrapped if line.startswith("• ")))
+        self.assertTrue(wrapped[bullet + 1].startswith("  "))
+        self.assertEqual(ui._wrap_tooltip("x" * 90, 20).count("\n"), 0)  # a long word (a URL, say) is not cut
+
+    def test_every_control_of_the_header_is_visible_and_nothing_overlaps(self):
+        w = self.window
+        w.resize(1500, 800)
+        w.show()
+        self.app.processEvents()
+        w.tabs_left.setCurrentIndex(0)
+        self.app.processEvents()
+        widgets = (w.dashboard_help_icon, w.dashboard_count_label, w.btn_dashboard_refresh_drops, w.btn_dashboard_refresh,
+                   w.dashboard_hide_sub_only_checkbox, w.dashboard_hide_inactive_checkbox)
+        for widget in widgets:
+            self.assertTrue(widget.isVisible())
+        rects = [widget.geometry().translated(widget.parentWidget().mapTo(w.dashboard_group, widget.parentWidget().rect().topLeft()))
+                 for widget in widgets]
+        for first in range(len(rects)):
+            for second in range(first + 1, len(rects)):
+                self.assertFalse(rects[first].intersects(rects[second]), f"{widgets[first].text()!r} overlaps {widgets[second].text()!r}")
+        self.assertGreater(w.dashboard_hide_inactive_checkbox.y(), w.dashboard_count_label.y(), "the filters are on their own row")
+
+    # ---------------------------------------------------------------- the inactive filter
+    def test_the_counter_says_how_many_games_are_inactive(self):
+        self.show_games()
+
+        self.assertEqual(self.window.dashboard_hide_inactive_checkbox.text(), "Ocultar jogos inactivos (2)")
+        self.assertEqual(self.window.dashboard_hide_sub_only_checkbox.text(), "Ocultar jogos com drops de subscrição (1)")
+
+    def test_the_cards_show_the_labels_the_filter_goes_by(self):
+        self.show_games()
+
+        self.assertEqual(self.ribbon_of("Live Game"), "FARMING")  # it is the game the farm would be on
+        self.assertEqual(self.ribbon_of("Quiet Game"), "INATIVO")
+        self.assertEqual(self.ribbon_of("Old Game"), "INATIVO")
+        self.assertEqual(self.ribbon_of("Sub Game"), "SUBSCRIÇÃO")
+
+    def test_hiding_inactive_games_removes_only_those_cards(self):
+        self.show_games()
+        self.assertEqual(self.cards(), ["Live Game", "Old Game", "Quiet Game", "Sub Game"])
+
+        self.window.dashboard_hide_inactive_checkbox.click()
+
+        self.assertEqual(self.cards(), ["Live Game", "Sub Game"])
+        self.assertIn("2/4", self.window.dashboard_count_label.text())
+
+    def test_the_counter_does_not_change_when_the_filter_is_switched_on(self):
+        self.show_games()
+        self.window.dashboard_hide_inactive_checkbox.click()
+
+        self.assertTrue(self.window.dashboard_hide_inactive_checkbox.text().endswith("(2)"))
+
+    def test_unchecking_brings_the_cards_back(self):
+        self.show_games()
+        self.window.dashboard_hide_inactive_checkbox.click()
+        self.window.dashboard_hide_inactive_checkbox.click()
+
+        self.assertEqual(len(self.cards()), 4)
+
+    def test_both_filters_work_together(self):
+        self.show_games()
+
+        self.window.dashboard_hide_inactive_checkbox.click()
+        self.window.dashboard_hide_sub_only_checkbox.click()
+
+        self.assertEqual(self.cards(), ["Live Game"])
+        self.assertIn("1/4", self.window.dashboard_count_label.text())
+
+    def test_when_the_filters_hide_everything_it_says_so_instead_of_asking_for_games(self):
+        w = self.window
+        live = _campaign("Only Game")
+        names = ["Only Game"]
+        w.config.whitelist_games = names
+        w.available_game_entries = w._compose_game_entries(names)
+        w.latest_snapshot = FarmSnapshot(campaigns=[live], available_games=names, available_channels=[],
+                                         decisions=[FarmDecision(campaign=live, stream=None, reason_code="campaign_expired")])
+        w._refresh_filter_lists()
+        w.games_whitelist_list.select_all()  # the list keeps what earlier tests selected: say what is selected now
+
+        w.dashboard_hide_inactive_checkbox.click()
+
+        self.assertEqual(self.cards(), [])
+        self.assertEqual(w.dashboard_no_games.text(), self.t("dashboard_all_hidden"))
+        self.assertNotEqual(w.dashboard_no_games.text(), self.t("dashboard_empty"))
+
+    def test_with_no_games_at_all_the_old_message_stays(self):
+        w = self.window
+        w.config.whitelist_games = []
+        w.available_game_entries = []
+        w.latest_snapshot = FarmSnapshot(campaigns=[], decisions=[], available_games=[], available_channels=[])
+        w._refresh_filter_lists()
+        w._refresh_dashboard_games()
+
+        self.assertEqual(w.dashboard_no_games.text(), self.t("dashboard_empty"))
+        self.assertTrue(w.dashboard_hide_inactive_checkbox.text().endswith("(0)"))
+
+    def test_the_subscription_counter_counts_games_not_campaigns(self):
+        w = self.window
+        first, second = _campaign("Sub Game"), _campaign("Sub Game")
+        second.id = "id-second"
+        for campaign in (first, second):
+            campaign.source, campaign.requires_subscription, campaign.has_watchable_drops = "external_registry", True, False
+            campaign.drops, campaign.required_minutes = [], 0
+        names = ["Sub Game"]
+        w.config.whitelist_games = names
+        w.available_game_entries = w._compose_game_entries(names)
+        w.latest_snapshot = FarmSnapshot(campaigns=[first, second], decisions=[], available_games=names, available_channels=[])
+        w._refresh_filter_lists()
+        w.games_whitelist_list.select_all()
+        w._refresh_dashboard_games()
+
+        self.assertTrue(w.dashboard_hide_sub_only_checkbox.text().endswith("(1)"), w.dashboard_hide_sub_only_checkbox.text())
+
+    # ---------------------------------------------------------------- saved like the other options
+    def test_the_choice_is_saved_and_applied_to_the_config(self):
+        w = self.window
+        w._autosave_timer.stop()
+
+        w.dashboard_hide_inactive_checkbox.click()
+        self.assertTrue(w._autosave_timer.isActive(), "the change is scheduled to be saved")
+        w._autosave_timer.stop()
+        w._apply_widgets_to_config()
+
+        self.assertTrue(w.config.dashboard_hide_inactive)
+        w.dashboard_hide_inactive_checkbox.click()
+        w._autosave_timer.stop()
+        w._apply_widgets_to_config()
+        self.assertFalse(w.config.dashboard_hide_inactive)
+
+    def test_saving_copies_the_box_into_the_config_even_without_a_click(self):
+        """The autosave and "Save settings" copy what the widgets show; that path must carry this option too."""
+        w = self.window
+        w.dashboard_hide_inactive_checkbox.blockSignals(True)
+        w.dashboard_hide_inactive_checkbox.setChecked(True)  # no click, so the click handler never ran
+        w.dashboard_hide_inactive_checkbox.blockSignals(False)
+        w.config.dashboard_hide_inactive = False
+
+        w._apply_widgets_to_config()
+
+        self.assertTrue(w.config.dashboard_hide_inactive)
+
+    def test_a_new_start_up_remembers_the_choice(self):
+        Path(config_module.CONFIG_FILE).parent.mkdir(parents=True, exist_ok=True)
+        config_module.save_config(config_module.AppConfig(dashboard_hide_inactive=True))
+        self.addCleanup(lambda: Path(config_module.CONFIG_FILE).unlink(missing_ok=True))
+        window = ui.MainWindow()
+
+        def close() -> None:
+            window.client.segment_watcher.stop()
+            for timer in (window.timer, window.streamless_timer, window._autosave_timer):
+                timer.stop()
+            window.executor.shutdown(wait=False)
+
+        self.addCleanup(close)
+
+        self.assertTrue(window.dashboard_hide_inactive_checkbox.isChecked())
+
+    def test_the_new_texts_are_translated(self):
+        w = self.window
+        self.assertTrue(w.dashboard_hide_inactive_checkbox.text().startswith("Ocultar jogos inactivos"))
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        w._retranslate_ui()
+        self.assertTrue(w.dashboard_hide_inactive_checkbox.text().startswith("Hide inactive games"))
+        self.assertIn("INATIVO", w.dashboard_hide_inactive_checkbox.toolTip())
+
+
 class TestSubscriptionOnlyGames(_WindowCase):
     """What the dashboard shows once the registry has said which games need a subscription."""
 
@@ -1544,7 +1800,7 @@ class TestSubscriptionOnlyGames(_WindowCase):
         w.available_game_entries = w._compose_game_entries(names)
         w.latest_snapshot = FarmSnapshot(campaigns=campaigns, decisions=[], available_games=names, available_channels=[])
         w._refresh_filter_lists()
-        w._refresh_dashboard_hide_sub_only_label()
+        w._refresh_dashboard_games()  # the counter is worked out while the cards are built
 
     def test_the_counter_counts_the_subscription_only_games_and_not_the_mixed_ones(self):
         elden = self.registry_campaign("ELDEN RING", "elden-ring")
