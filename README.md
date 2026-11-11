@@ -171,6 +171,11 @@ Notas:
 
 ## Como autenticar
 
+Carrega em **Iniciar sessão** (canto superior direito): a janela explica cada passo. Se
+marcares «Lembrar a sessão neste computador», nas próximas vezes o botão entra sozinho.
+
+Em alternativa, na aba Conta:
+
 1. Inicia sessão na Twitch no teu browser.
 2. Abre a app e vai a Conta.
 3. Cola o valor do cookie `auth-token` (apenas o valor).

@@ -35,12 +35,12 @@ if __package__ in {None, ""}:
     package_root = Path(__file__).resolve().parents[1]
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
-    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
+    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, SESSION_FILE
     from twitch_drop_farmer.game_names import clean_game_name, loose_game_key
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
     from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
-    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR
+    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, SESSION_FILE
     from .game_names import clean_game_name, loose_game_key
     from .models import DropCampaign, StreamCandidate
     from .stream_watcher import SegmentWatcher
@@ -699,30 +699,98 @@ class TwitchClient:
         return json.dumps(export_data, indent=2)
 
     def import_session_json(self, session_json: str) -> None:
-        """Importa uma sessão completa de JSON (modo duradouro)."""
+        """Importa uma sessão completa de JSON (modo duradouro).
+
+        Accepts what this app exports (an object with a "cookies" list) and also the plain
+        list of cookies that browser cookie extensions export. It does not talk to Twitch:
+        call validate_oauth_token() afterwards to find out whether the session works.
+        """
         try:
             data = json.loads(session_json)
-            for cookie in data.get("cookies", []):
-                self.session.cookies.set(
-                    cookie["name"], 
-                    cookie["value"], 
-                    domain=cookie.get("domain")
-                )
-            self.login_state.user_id = data.get("user_id", "")
-            self.login_state.login_name = data.get("login_name", "")
-            self.device_id = data.get("device_id", "")
-            self.session_id = data.get("session_id", self.session_id)
-            
-            # Se houver auth-token nos cookies, usá-lo como fallback
-            auth_token = self.session.cookies.get("auth-token", domain=".twitch.tv")
-            if auth_token and not self.login_state.oauth_token:
-                self.login_state.oauth_token = auth_token
-                self._apply_oauth_token(auth_token)
-            
-            self._note("Session imported successfully from browser export.")
-            self.save_cookies()
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            raise ValueError(f"Invalid session JSON format: {e}")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid session JSON format: {exc}") from exc
+        if isinstance(data, list):
+            data = {"cookies": data}
+        if not isinstance(data, dict):
+            raise ValueError("Invalid session JSON format: expected an object or a list of cookies.")
+        cookies = data.get("cookies", [])
+        if not isinstance(cookies, list):
+            raise ValueError("Invalid session JSON format: \"cookies\" must be a list.")
+        try:
+            for cookie in cookies:
+                self.session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"))
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise ValueError(f"Invalid session JSON format: each cookie needs a name and a value ({exc}).") from exc
+
+        self.login_state.user_id = str(data.get("user_id", "") or "")
+        self.login_state.login_name = str(data.get("login_name", "") or "")
+        self.device_id = data.get("device_id", "") or self.device_id
+        self.session_id = data.get("session_id", self.session_id)
+
+        # The login token travels as the "auth-token" cookie. Use it unless a token that
+        # was already confirmed by Twitch is in place.
+        auth_token = ""
+        for cookie in cookies:
+            if cookie.get("name") == "auth-token" and cookie.get("value"):
+                auth_token = str(cookie["value"])
+                if cookie.get("domain") in {".twitch.tv", "twitch.tv", "www.twitch.tv"}:
+                    break
+        if auth_token and (not self.login_state.oauth_token or not self.login_state.token_valid):
+            if auth_token != self.login_state.oauth_token:
+                self.login_state.token_valid = False
+            self.login_state.oauth_token = auth_token
+            self._apply_oauth_token(auth_token)
+
+        self._note("Session imported successfully from browser export.")
+        self.save_cookies()
+
+    # ---- the session the user agreed to keep, so "Log in" can restore it in one go ----
+
+    def session_copy_path(self) -> Path:
+        return SESSION_FILE
+
+    def has_session_copy(self) -> bool:
+        return SESSION_FILE.exists()
+
+    def save_session_copy(self) -> None:
+        """Keep the current session in SESSION_FILE (call only with the user's consent)."""
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = SESSION_FILE.with_suffix(".tmp")
+        tmp.write_text(self.export_session_json(), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)  # best effort: on Windows this only toggles the read-only flag
+        except OSError:
+            pass
+        os.replace(tmp, SESSION_FILE)
+
+    def forget_session_copy(self) -> bool:
+        """Delete the kept session. True when there was one."""
+        try:
+            SESSION_FILE.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def login_from_session_copy(self, progress: Callable[[int, int], None] | None = None) -> LoginState:
+        """Read the kept session (1/3), import it (2/3) and validate it with Twitch (3/3).
+
+        The copy is refreshed once the session is confirmed, so cookies Twitch rotated stay current.
+        """
+        def step(number: int) -> None:
+            if progress is not None:
+                progress(number, 3)
+
+        step(1)
+        try:
+            text = SESSION_FILE.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"The saved session could not be read: {exc}") from exc
+        step(2)
+        self.import_session_json(text)
+        step(3)
+        state = self.validate_oauth_token()
+        self.save_session_copy()
+        return state
 
     def _apply_oauth_token(self, token: str) -> None:
         self.session.headers["Authorization"] = f"OAuth {token}"

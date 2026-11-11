@@ -6,6 +6,49 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.59] - 2026-11-11
+
+### Added
+
+- **Botão «Iniciar sessão»** no canto superior direito (ao lado de «A farmar agora» /
+  «Campanhas»). Um clique usa o que já existe e só pergunta quando não há nada utilizável,
+  por esta ordem: (1) confirma o token que a app já tem (se já estás com a sessão iniciada
+  só confirma, sem refazer a actualização das campanhas); (2) se aprovaste guardar a
+  sessão, restaura-a sozinho em **3 passos seguidos** — ler, importar e validar — e
+  escreve cada passo no log; (3) se nada disto funcionar, abre a janela abaixo com o
+  motivo. Sem ligação à internet diz isso mesmo e não deita fora os dados. Quando a sessão
+  está iniciada o botão mostra o nome da conta.
+- **Janela «Iniciar sessão na Twitch»** com os dois métodos explicados passo a passo para
+  quem nunca usou a app:
+  - *Sessão Duradoura*, na ordem certa: **1 Importar** (só carrega os dados), **2 Validar**
+    (confirma junto da Twitch; só aqui a sessão fica iniciada), **3 Exportar** (opcional,
+    cópia de segurança; fica também na área de transferência, com o aviso de que quem
+    tiver o texto entra na conta);
+  - *Token Rápido*, com o caminho completo para encontrar o `auth-token` (F12 →
+    Application/Storage → Cookies → twitch.tv), o que **não** copiar (o nome do cookie, o
+    prefixo `OAuth`, o `api_token`), um botão que abre o twitch.tv e o token escondido
+    até pedires para o ver. O token não fica na janela depois de a usares.
+  Os erros aparecem dentro da janela, não em pop-ups; cada separador tem scroll para
+  caber em ecrãs de 768 px de altura.
+- **«Lembrar a sessão neste computador»** (opção do utilizador, desligada por omissão):
+  só depois de confirmares num aviso que explica que o ficheiro
+  (`~/.twitch-drop-farmer/session.json`) fica em texto simples com o teu token, a app
+  guarda o JSON da sessão — e actualiza-o sempre que a sessão é confirmada, para os
+  cookies que a Twitch renova não ficarem velhos. Desligar a opção apaga o ficheiro. O
+  token nunca é escrito no log.
+
+### Fixed
+
+- **«Portugues (Portugal)» sem acento** no seletor de idioma → «Português (Portugal)».
+- **Importar sessão** aceitava só o JSON exportado pela própria app e rebentava com a lista
+  de cookies que uma extensão do browser exporta. Passa a aceitar as duas formas e, para
+  tudo o que não seja uma sessão, devolve um erro claro em vez de uma excepção. Também
+  deixou de apagar o `device_id` quando o JSON não o traz, e um token já confirmado pela
+  Twitch deixou de ser substituído por engano (um por confirmar é).
+- A aba «Conta» e a janela novas partilham o mesmo código; as mensagens «Sessão importada»
+  e «Tens de colar o JSON» passaram a respeitar o idioma. Exportar sem haver sessão diz
+  que não há nada para exportar (antes dava um JSON vazio).
+
 ## [2.2.58] - 2026-11-11
 
 ### Fixed

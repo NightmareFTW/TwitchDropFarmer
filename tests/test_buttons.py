@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton  # noqa: E402
 
 import twitch_drop_farmer.ui as ui  # noqa: E402
 from twitch_drop_farmer import config as config_module  # noqa: E402
@@ -63,6 +63,8 @@ class _WindowCase(unittest.TestCase):
         enter(patch.object(config_module, "CONFIG_FILE", base / "config.json"))
         enter(patch.object(config_module, "COOKIE_FILE", base / "cookies.json"))
         enter(patch.object(config_module, "CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"))
+        enter(patch.object(config_module, "SESSION_FILE", base / "session.json"))
+        enter(patch.object(tc, "SESSION_FILE", base / "session.json"))
         enter(patch.object(tc, "CONFIG_DIR", base))
         enter(patch.object(tc, "COOKIE_FILE", base / "cookies.json"))
         enter(patch.object(tc, "CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"))
@@ -141,7 +143,16 @@ class TestAccountButtons(_WindowCase):
 
         self.assertFalse(self.window.btn_edit_oauth.isEnabled())
 
+    def test_export_session_without_a_session_says_there_is_nothing_to_export(self):
+        self.window.client.login_state.oauth_token = ""
+
+        self.window.btn_export_session.click()
+
+        self.msgbox.critical.assert_called_once()
+        self.assertIn(self.t("login_export_needs_session"), self.msgbox.critical.call_args.args)
+
     def test_export_session_fills_the_box_with_a_json_and_says_so(self):
+        self.window.client.login_state.oauth_token = "e" * 30
         self.window.session_input.clear()
 
         self.window.btn_export_session.click()
@@ -158,6 +169,7 @@ class TestAccountButtons(_WindowCase):
         self.msgbox.critical.assert_called_once()
 
     def test_import_session_takes_back_what_was_exported(self):
+        self.window.client.login_state.oauth_token = "e" * 30
         self.window.client.login_state.login_name = "someone"
         self.window.btn_export_session.click()
         self.window.client.login_state.login_name = ""
@@ -863,6 +875,402 @@ class TestDashboardButtons(_WindowCase):
         self.assertTrue(w.btn_dashboard_refresh.isEnabled())
         self.assertTrue(w.btn_dashboard_refresh_drops.isEnabled())
         self.assertEqual(self.msgbox.critical.call_count, 2)
+
+
+class TestLoginButton(_WindowCase):
+    """The "Log in" button in the corner of the right tabs and the window it opens."""
+
+    TOKEN = "k" * 30
+
+    def setUp(self) -> None:
+        super().setUp()
+        w = self.window
+        w.client.login_state = tc.LoginState()
+        w.config.remember_session = False
+        w.client.forget_session_copy()
+        w.language_picker.setCurrentIndex(w.language_picker.findData("pt_PT"))
+        w._retranslate_ui()
+        self._refresh = patch.object(w, "refresh_snapshot")
+        self.refresh = self._refresh.start()
+        self.addCleanup(self._refresh.stop)
+        self.addCleanup(self.close_dialog)
+
+    def close_dialog(self) -> None:
+        dialog = self.window._login_dialog
+        if dialog is not None:
+            dialog.close()
+        self.window._login_dialog = None
+
+    def dialog(self):
+        dialog = self.window._login_dialog
+        self.assertIsNotNone(dialog, "the login window did not open")
+        self.assertTrue(dialog.isVisible())
+        return dialog
+
+    def twitch_confirms(self, login: str = "someone") -> None:
+        def validate():
+            state = self.window.client.login_state
+            state.token_valid = True
+            state.login_name = login
+            state.user_id = "42"
+            return state
+
+        patcher = patch.object(self.window.client, "validate_oauth_token", side_effect=validate)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def twitch_rejects(self) -> None:
+        patcher = patch.object(self.window.client, "validate_oauth_token",
+                               side_effect=ValueError("The provided auth-token is invalid or expired."))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def keep_a_session(self) -> None:
+        self.window.client.import_session_json(json.dumps([{"name": "auth-token", "value": self.TOKEN, "domain": ".twitch.tv"}]))
+        self.window.client.save_session_copy()
+        self.window.client.login_state = tc.LoginState()
+        self.window.client.session.cookies.clear()
+        self.window.config.remember_session = True
+
+    # ---------------------------------------------------------------- the button itself
+    def test_the_button_sits_in_the_free_corner_next_to_the_right_tabs(self):
+        self.assertIs(self.window.tabs_right.cornerWidget(Qt.Corner.TopRightCorner), self.window.btn_smart_login)
+
+    def test_the_button_says_log_in_and_then_who_is_signed_in(self):
+        w = self.window
+        self.assertEqual(w.btn_smart_login.text(), "Iniciar sessão")
+
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="example_user", token_valid=True)
+        w._update_auth_status()
+        self.assertEqual(w.btn_smart_login.text(), "Sessão: example_user")
+        self.assertIn("example_user", w.btn_smart_login.toolTip())
+
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        w._retranslate_ui()
+        self.assertEqual(w.btn_smart_login.text(), "Signed in: example_user")
+
+    def test_the_language_picker_spells_portugues_with_its_accent(self):
+        labels = [self.window.language_picker.itemText(i) for i in range(self.window.language_picker.count())]
+
+        self.assertIn("Português (Portugal)", labels)
+        self.assertNotIn("Portugues (Portugal)", labels)
+
+    def test_with_nothing_saved_the_button_opens_the_window_and_asks_nothing_of_twitch(self):
+        with patch.object(self.window.client, "validate_oauth_token") as validate:
+            self.window.btn_smart_login.click()
+
+        self.dialog()
+        validate.assert_not_called()
+        self.refresh.assert_not_called()
+
+    def test_with_a_token_the_app_already_has_it_just_validates_it_and_refreshes(self):
+        w = self.window
+        w.client.login_state.oauth_token = self.TOKEN
+        self.twitch_confirms("someone")
+
+        w.btn_smart_login.click()
+
+        self.assertIsNone(w._login_dialog)
+        self.assertTrue(w.client.login_state.logged_in)
+        self.assertEqual(w.btn_smart_login.text(), "Sessão: someone")
+        self.assertIn("someone", w._toast.text())
+        self.refresh.assert_called_once_with(force=True)
+
+    def test_when_already_signed_in_it_only_confirms_and_does_not_refresh_again(self):
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="someone", token_valid=True)
+        self.twitch_confirms("someone")
+
+        w.btn_smart_login.click()
+
+        self.assertIsNone(w._login_dialog)
+        self.assertIn(self.t("login_confirmed", login="someone"), self.log_text())
+        self.refresh.assert_not_called()
+
+    def test_a_token_twitch_rejects_opens_the_window_with_the_reason(self):
+        self.window.client.login_state.oauth_token = self.TOKEN
+        self.twitch_rejects()
+
+        self.window.btn_smart_login.click()
+
+        self.assertIn("invalid or expired", self.dialog().message_label.text())
+        self.refresh.assert_not_called()
+
+    def test_with_no_connection_it_says_so_and_does_not_throw_the_data_away(self):
+        w = self.window
+        w.client.login_state.oauth_token = self.TOKEN
+        with patch.object(w.client, "validate_oauth_token", side_effect=requests.ConnectionError("offline")):
+            w.btn_smart_login.click()
+
+        self.assertIsNone(w._login_dialog)
+        self.assertIn(self.t("login_network_error"), self.log_text())
+        self.assertEqual(w.client.login_state.oauth_token, self.TOKEN)
+
+    def test_a_kept_session_is_restored_in_three_steps_without_opening_anything(self):
+        w = self.window
+        self.keep_a_session()
+        self.twitch_confirms("someone")
+
+        w.btn_smart_login.click()
+
+        self.assertIsNone(w._login_dialog)
+        self.assertTrue(w.client.login_state.logged_in)
+        log = self.log_text()
+        positions = [log.index(self.t("login_progress", n=n, total=3, what=self.t(f"login_progress_{n}"))) for n in (1, 2, 3)]
+        self.assertEqual(positions, sorted(positions))
+        self.refresh.assert_called_once_with(force=True)
+
+    def test_a_stale_token_falls_back_to_the_kept_session_before_giving_up(self):
+        w = self.window
+        self.keep_a_session()
+        w.client.login_state.oauth_token = "x" * 30  # what the app still had: no longer accepted
+        calls: list[str] = []
+
+        def validate():
+            calls.append(w.client.login_state.oauth_token)
+            if w.client.login_state.oauth_token != self.TOKEN:
+                raise ValueError("The provided auth-token is invalid or expired.")
+            w.client.login_state.token_valid = True
+            w.client.login_state.login_name = "someone"
+            return w.client.login_state
+
+        with patch.object(w.client, "validate_oauth_token", side_effect=validate):
+            w.btn_smart_login.click()
+
+        self.assertEqual(calls, ["x" * 30, self.TOKEN])
+        self.assertIsNone(w._login_dialog)
+        self.assertTrue(w.client.login_state.logged_in)
+
+    def test_a_kept_session_that_no_longer_works_opens_the_window_with_the_reason(self):
+        self.keep_a_session()
+        self.twitch_rejects()
+
+        self.window.btn_smart_login.click()
+
+        self.assertIn("invalid or expired", self.dialog().message_label.text())
+
+    def test_the_kept_session_is_ignored_when_the_user_did_not_agree_to_keep_it(self):
+        self.keep_a_session()
+        self.window.config.remember_session = False
+
+        self.window.btn_smart_login.click()
+
+        self.dialog()  # nothing usable: it asks
+
+    # ---------------------------------------------------------------- the window: instructions
+    def test_the_window_explains_the_steps_in_order_and_where_to_find_the_token(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        session = " ".join(label.text() for label in (dialog.step1_label, dialog.step2_label, dialog.step3_label))
+        self.assertLess(session.index("Passo 1"), session.index("Passo 2"))
+        self.assertLess(session.index("Passo 2"), session.index("Passo 3"))
+        self.assertIn("Importar", dialog.step1_label.text())
+        self.assertIn("Validar", dialog.step2_label.text())
+        self.assertIn("Exportar", dialog.step3_label.text())
+        token_help = dialog.token_intro.text()
+        for needle in ("F12", "auth-token", "Cookies", "twitch.tv", "Value"):
+            self.assertIn(needle, token_help)
+        self.assertEqual(dialog.tabs.tabText(0), self.t("auth_session_export"))
+        self.assertEqual(dialog.tabs.tabText(1), self.t("auth_quick_token"))
+
+    def test_the_window_is_in_english_when_the_app_is(self):
+        self.window.language_picker.setCurrentIndex(self.window.language_picker.findData("en"))
+        self.window._retranslate_ui()
+
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        self.assertEqual(dialog.windowTitle(), "Log in to Twitch")
+        self.assertIn("Step 1", dialog.step1_label.text())
+        self.assertIn("Application", dialog.token_intro.text())
+
+    def test_the_open_twitch_button_opens_the_site(self):
+        self.window.btn_smart_login.click()
+
+        self.dialog().btn_open_twitch.click()
+
+        self.desktop.openUrl.assert_called_once()
+        self.assertIn("twitch.tv", self.desktop.openUrl.call_args.args[0].toString())
+
+    # ---------------------------------------------------------------- the window: session JSON tab
+    def test_import_with_nothing_pasted_asks_for_the_json_inside_the_window(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        dialog.btn_import.click()
+
+        self.assertIn(self.t("login_paste_first"), dialog.message_label.text())
+        self.msgbox.critical.assert_not_called()
+
+    def test_importing_garbage_shows_the_reason_and_keeps_the_window_open(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+        dialog.session_input.setPlainText("this is not json")
+
+        dialog.btn_import.click()
+
+        self.assertIn("Invalid session JSON", dialog.message_label.text())
+        self.assertTrue(dialog.isVisible())
+
+    def test_import_then_validate_signs_in_and_closes_the_window(self):
+        w = self.window
+        w.btn_smart_login.click()
+        dialog = self.dialog()
+        dialog.session_input.setPlainText(json.dumps([{"name": "auth-token", "value": self.TOKEN, "domain": ".twitch.tv"}]))
+        self.twitch_confirms("someone")
+
+        dialog.btn_import.click()
+        self.assertIn(self.t("login_import_ok"), dialog.message_label.text())
+        self.assertFalse(w.client.login_state.logged_in)  # importing alone does not sign in
+        self.assertTrue(dialog.isVisible())
+        dialog.btn_validate.click()
+
+        self.assertFalse(dialog.isVisible())
+        self.assertTrue(w.client.login_state.logged_in)
+        self.refresh.assert_called_once_with(force=True)
+
+    def test_validate_before_importing_says_what_to_do_first(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        dialog.btn_validate.click()
+
+        self.assertIn(self.t("login_nothing_to_validate"), dialog.message_label.text())
+
+    def test_export_puts_the_json_in_the_box_and_on_the_clipboard(self):
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="someone", token_valid=True)
+        w.client._apply_oauth_token(self.TOKEN)
+        w.btn_smart_login.click()  # signed in: confirms instead of opening
+        self.twitch_confirms()
+        dialog = w.open_login_dialog()
+
+        dialog.btn_export.click()
+
+        exported = json.loads(dialog.session_input.toPlainText())
+        self.assertIn("auth-token", [cookie["name"] for cookie in exported["cookies"]])
+        self.assertEqual(QApplication.clipboard().text(), dialog.session_input.toPlainText())
+
+    def test_export_without_a_session_says_there_is_nothing_to_export(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        dialog.btn_export.click()
+
+        self.assertIn(self.t("login_export_needs_session"), dialog.message_label.text())
+
+    # ---------------------------------------------------------------- the window: quick token tab
+    def test_a_good_token_signs_in_and_closes_the_window(self):
+        w = self.window
+        w.btn_smart_login.click()
+        dialog = self.dialog()
+        dialog.tabs.setCurrentIndex(1)
+        dialog.token_input.setText(self.TOKEN)
+        self.twitch_confirms("someone")
+
+        dialog.btn_token.click()  # the real set_oauth_token runs; only Twitch's answer is simulated
+
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(w.client.login_state.oauth_token, self.TOKEN)
+        self.assertTrue(w.client.login_state.logged_in)
+        self.assertEqual(dialog.token_input.text(), "")  # the token is not left lying in the window
+
+    def test_a_rejected_token_stays_in_the_window_with_the_reason(self):
+        w = self.window
+        w.btn_smart_login.click()
+        dialog = self.dialog()
+        dialog.token_input.setText("nope")
+
+        with patch.object(w.client, "set_oauth_token", side_effect=ValueError("The provided auth-token is invalid or expired.")):
+            dialog.btn_token.click()
+
+        self.assertTrue(dialog.isVisible())
+        self.assertIn("invalid or expired", dialog.message_label.text())
+
+    def test_an_empty_token_asks_for_it(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+
+        dialog.btn_token.click()
+
+        self.assertIn(self.t("token_required"), dialog.message_label.text())
+
+    def test_the_token_is_hidden_until_the_user_asks_to_see_it(self):
+        self.window.btn_smart_login.click()
+        dialog = self.dialog()
+        self.assertEqual(dialog.token_input.echoMode(), QLineEdit.EchoMode.Password)
+
+        dialog.token_show.setChecked(True)
+
+        self.assertEqual(dialog.token_input.echoMode(), QLineEdit.EchoMode.Normal)
+
+    # ---------------------------------------------------------------- keeping the session (needs a yes)
+    def test_keeping_the_session_asks_first_and_a_no_keeps_nothing(self):
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="someone", token_valid=True)
+        w.btn_smart_login.click()
+        self.twitch_confirms()
+        dialog = w.open_login_dialog()
+        self.msgbox.question.return_value = self.msgbox.StandardButton.No
+
+        dialog.remember_checkbox.setChecked(True)
+
+        self.msgbox.question.assert_called_once()
+        self.assertIn(str(w.client.session_copy_path()), self.msgbox.question.call_args.args[2])
+        self.assertFalse(dialog.remember_checkbox.isChecked())
+        self.assertFalse(w.config.remember_session)
+        self.assertFalse(w.client.has_session_copy())
+
+    def test_a_yes_keeps_the_session_now_and_remembers_the_choice(self):
+        w = self.window
+        w.client.login_state = tc.LoginState(oauth_token=self.TOKEN, login_name="someone", token_valid=True)
+        w.client._apply_oauth_token(self.TOKEN)
+        dialog = w.open_login_dialog()
+        self.msgbox.question.return_value = self.msgbox.StandardButton.Yes
+
+        dialog.remember_checkbox.setChecked(True)
+
+        self.assertTrue(dialog.remember_checkbox.isChecked())
+        self.assertTrue(w.config.remember_session)
+        self.assertTrue(w.client.has_session_copy())
+        self.assertTrue(json.loads(config_module.CONFIG_FILE.read_text(encoding="utf-8"))["remember_session"])
+
+    def test_turning_it_off_deletes_the_kept_session(self):
+        w = self.window
+        self.keep_a_session()
+        dialog = w.open_login_dialog()
+        self.assertTrue(dialog.remember_checkbox.isChecked())
+
+        dialog.remember_checkbox.setChecked(False)
+
+        self.assertFalse(w.config.remember_session)
+        self.assertFalse(w.client.has_session_copy())
+        self.msgbox.question.assert_not_called()  # taking it back needs no confirmation
+
+    def test_a_successful_login_refreshes_the_kept_copy_only_if_the_user_agreed(self):
+        w = self.window
+        w.client.login_state.oauth_token = self.TOKEN
+        self.twitch_confirms()
+
+        w.btn_smart_login.click()
+        self.assertFalse(w.client.has_session_copy())
+
+        w.config.remember_session = True
+        w.client.login_state.token_valid = False
+        w.btn_smart_login.click()
+        self.assertTrue(w.client.has_session_copy())
+
+    def test_the_token_never_reaches_the_log_during_any_of_this(self):
+        w = self.window
+        self.keep_a_session()
+        self.twitch_confirms()
+        w.btn_smart_login.click()
+        w.client.login_state.token_valid = False
+        w.btn_smart_login.click()
+
+        self.assertNotIn(self.TOKEN, self.log_text())
+        self.assertNotIn(self.TOKEN, w.btn_smart_login.text() + w.btn_smart_login.toolTip())
 
 
 class TestNoButtonIsLeftOut(_WindowCase):

@@ -144,7 +144,10 @@ Notes:
 
 ## Authentication
 
-Use your Twitch auth-token cookie value inside the app (Account tab).
+Click **Log in** (top right): the window explains each step. If you tick “Remember the
+session on this computer”, the button signs you in by itself next time.
+
+Or use your Twitch auth-token cookie value inside the app (Account tab).
 
 - Paste only the cookie value
 - Do not include the cookie name

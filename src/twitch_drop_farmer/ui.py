@@ -87,6 +87,7 @@ from .config import CONFIG_DIR, load_config, save_config
 from .farm_health import Action, FarmHealth, LEVEL_CHANNEL
 from .game_names import clean_game_name, loose_game_key, preferred_game_name
 from .log_export import save_log
+from .login_dialog import LoginDialog
 from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
 from .twitch_client import TwitchClient, is_placeholder_box_art
@@ -722,7 +723,7 @@ THEMES: dict[str, str] = {
 }
 
 LANGUAGE_OPTIONS: list[tuple[str, str]] = [
-    ("pt_PT", "Portugues (Portugal)"),
+    ("pt_PT", "Português (Portugal)"),
     ("en", "English"),
 ]
 
@@ -975,6 +976,71 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_import_error": "Erro ao importar sessão: {error}",
         "session_export_success": "Sessão exportada. Copia o JSON abaixo e guarda-o num local seguro.",
         "session_export_copied": "JSON da sessão copiado para a área de transferência.",
+        "login_button": "Iniciar sessão",
+        "login_button_logged": "Sessão: {login}",
+        "login_button_tip_out": "Entra na tua conta Twitch. Usa os dados da aba «Conta» (ou a sessão que deixaste guardada); se ainda não existirem, abre uma janela para os preencheres.",
+        "login_button_tip_in": "Sessão iniciada como {login}. Clica para confirmar a sessão outra vez.",
+        "login_dialog_title": "Iniciar sessão na Twitch",
+        "login_dialog_intro": (
+            "A app precisa de uma sessão da tua conta Twitch para que o tempo que passas a farmar conte para os teus drops. "
+            "<b>Escolhe um dos dois métodos</b> (separadores abaixo). Se é a primeira vez, o mais simples é o <b>Token Rápido</b>."
+        ),
+        "login_state_out": "Estado: sem sessão iniciada.",
+        "login_state_in": "Estado: sessão iniciada como <b>{login}</b>.",
+        "login_session_intro": (
+            "Usa este método se já tens um <b>JSON de sessão</b>: uma cópia que esta app exportou antes (por exemplo noutro computador) "
+            "ou a que exporta uma extensão de cookies do browser com a sessão iniciada em twitch.tv. "
+            "Se não tens nenhum, usa o <b>Token Rápido</b>."
+        ),
+        "login_step1": "<b>Passo 1 — Importar.</b> Cola aqui o JSON e carrega em «Importar Sessão». Isto só carrega os dados para a app; ainda não confirma que funcionam.",
+        "login_step2": "<b>Passo 2 — Validar.</b> Confirma junto da Twitch que a sessão importada está activa. Só depois deste passo a app fica com a sessão iniciada.",
+        "login_step3": (
+            "<b>Passo 3 — Exportar (opcional).</b> Com a sessão já validada, cria uma cópia de segurança em JSON (fica também copiada para a área de transferência). "
+            "<b>Guarda-a em privado: quem tiver este texto entra na tua conta.</b>"
+        ),
+        "login_session_placeholder": "Cola aqui o JSON da sessão...",
+        "login_token_intro": (
+            "O <b>auth-token</b> é uma chave que a Twitch guarda no teu browser quando tens a sessão iniciada. <b>Não é a tua palavra-passe.</b> Para o encontrar:"
+            "<ol>"
+            "<li>Abre <b>twitch.tv</b> no browser e inicia sessão (podes usar o botão abaixo).</li>"
+            "<li>Carrega em <b>F12</b> para abrir as ferramentas de programador.</li>"
+            "<li>No <b>Chrome/Edge</b>: separador <b>Application</b> (Aplicação) → <b>Cookies</b> → <b>https://www.twitch.tv</b>. "
+            "No <b>Firefox</b>: separador <b>Storage</b> (Armazenamento) → <b>Cookies</b>.</li>"
+            "<li>Procura a linha <b>auth-token</b> (podes usar o filtro) e copia <b>só o valor</b> da coluna «Value» (duplo clique no valor, Ctrl+C). "
+            "Não copies o nome «auth-token», nem o prefixo «OAuth», nem o cookie «api_token».</li>"
+            "<li>Cola o valor abaixo e carrega em «Guardar e validar».</li>"
+            "</ol>"
+        ),
+        "login_open_twitch": "Abrir twitch.tv",
+        "login_token_warning": "O token dá acesso à tua conta: não o partilhes com ninguém. Se deixar de funcionar (por exemplo, depois de terminares a sessão no site da Twitch), copia um novo.",
+        "login_token_show": "Mostrar o token",
+        "login_token_button": "Guardar e validar",
+        "login_remember": "Lembrar a sessão neste computador",
+        "login_remember_help": "Guarda o JSON da sessão para que o botão «Iniciar sessão» a restaure sozinho (importar e validar), sem teres de repetir os passos. Fica em texto simples na pasta de dados da app.",
+        "login_remember_confirm_title": "Guardar a sessão?",
+        "login_remember_confirm": (
+            "Vais guardar neste computador o JSON da tua sessão da Twitch, que inclui o teu token de acesso, em:\n\n{path}\n\n"
+            "O ficheiro fica em texto simples: quem tiver acesso a esta pasta (ou a uma cópia de segurança do computador) pode entrar na tua conta Twitch. "
+            "Podes apagá-lo quando quiseres, desligando esta opção.\n\nQueres continuar?"
+        ),
+        "login_remember_saved": "Sessão guardada neste computador.",
+        "login_remember_forgotten": "Sessão guardada apagada deste computador.",
+        "login_copy_failed": "Não foi possível guardar a cópia da sessão: {error}",
+        "login_close": "Fechar",
+        "login_failed": "Não foi possível iniciar sessão: {error}",
+        "login_network_error": "Sem ligação à Twitch. Verifica a internet e tenta outra vez.",
+        "login_import_ok": "Sessão importada. Falta o passo 2: validar.",
+        "login_paste_first": "Cola primeiro o JSON da sessão.",
+        "login_nothing_to_validate": "Ainda não há nada para validar: faz primeiro o passo 1 (ou usa o Token Rápido).",
+        "login_export_needs_session": "Ainda não há sessão para exportar: inicia sessão primeiro.",
+        "login_export_ok": "Sessão exportada e copiada para a área de transferência. Guarda-a em privado.",
+        "login_success": "Sessão iniciada como {login}.",
+        "login_confirmed": "Sessão confirmada: {login}.",
+        "login_progress": "A iniciar sessão ({n}/{total}): {what}...",
+        "login_progress_1": "a ler a sessão guardada",
+        "login_progress_2": "a importar",
+        "login_progress_3": "a validar na Twitch",
+        "session_import_done": "Sessão importada com sucesso!",
         "auto_claim_checkbox": "Redimir drops automaticamente",
         "settings_tab_basic": "Básico",
         "settings_tab_advanced": "Avançado",
@@ -1295,6 +1361,71 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "session_import_error": "Error importing session: {error}",
         "session_export_success": "Session exported. Copy the JSON below and save it securely.",
         "session_export_copied": "Session JSON copied to clipboard.",
+        "login_button": "Log in",
+        "login_button_logged": "Signed in: {login}",
+        "login_button_tip_out": "Sign in to your Twitch account. It uses the data from the “Account” tab (or the session you chose to keep); if there is none yet, it opens a window to fill it in.",
+        "login_button_tip_in": "Signed in as {login}. Click to check the session again.",
+        "login_dialog_title": "Log in to Twitch",
+        "login_dialog_intro": (
+            "The app needs a session from your Twitch account so the time you spend farming counts towards your drops. "
+            "<b>Pick one of the two methods</b> (tabs below). If this is your first time, the simplest is the <b>Quick Token</b>."
+        ),
+        "login_state_out": "Status: not signed in.",
+        "login_state_in": "Status: signed in as <b>{login}</b>.",
+        "login_session_intro": (
+            "Use this method if you already have a <b>session JSON</b>: a copy this app exported earlier (for example on another computer) "
+            "or the one a browser cookie extension exports while you are signed in to twitch.tv. "
+            "If you have none, use the <b>Quick Token</b>."
+        ),
+        "login_step1": "<b>Step 1 — Import.</b> Paste the JSON here and click “Import Session”. This only loads the data into the app; it does not yet confirm that it works.",
+        "login_step2": "<b>Step 2 — Validate.</b> Checks with Twitch that the imported session is active. Only after this step is the app signed in.",
+        "login_step3": (
+            "<b>Step 3 — Export (optional).</b> Once the session is validated, create a JSON backup (it is also copied to the clipboard). "
+            "<b>Keep it private: anyone with this text can sign in to your account.</b>"
+        ),
+        "login_session_placeholder": "Paste the session JSON here...",
+        "login_token_intro": (
+            "The <b>auth-token</b> is a key Twitch keeps in your browser while you are signed in. <b>It is not your password.</b> To find it:"
+            "<ol>"
+            "<li>Open <b>twitch.tv</b> in your browser and sign in (you can use the button below).</li>"
+            "<li>Press <b>F12</b> to open the developer tools.</li>"
+            "<li>In <b>Chrome/Edge</b>: <b>Application</b> tab → <b>Cookies</b> → <b>https://www.twitch.tv</b>. "
+            "In <b>Firefox</b>: <b>Storage</b> tab → <b>Cookies</b>.</li>"
+            "<li>Find the <b>auth-token</b> row (you can use the filter) and copy <b>only the value</b> in the “Value” column (double-click the value, Ctrl+C). "
+            "Do not copy the name “auth-token”, the “OAuth” prefix, or the “api_token” cookie.</li>"
+            "<li>Paste the value below and click “Save and validate”.</li>"
+            "</ol>"
+        ),
+        "login_open_twitch": "Open twitch.tv",
+        "login_token_warning": "The token gives access to your account: do not share it with anyone. If it stops working (for example after you sign out on the Twitch site), copy a new one.",
+        "login_token_show": "Show the token",
+        "login_token_button": "Save and validate",
+        "login_remember": "Remember the session on this computer",
+        "login_remember_help": "Keeps the session JSON so the “Log in” button can restore it by itself (import and validate) without repeating the steps. It is stored as plain text in the app's data folder.",
+        "login_remember_confirm_title": "Keep the session?",
+        "login_remember_confirm": (
+            "You are about to keep your Twitch session JSON, which includes your access token, on this computer at:\n\n{path}\n\n"
+            "The file is plain text: anyone with access to this folder (or to a backup of the computer) can sign in to your Twitch account. "
+            "You can delete it at any time by turning this option off.\n\nDo you want to continue?"
+        ),
+        "login_remember_saved": "Session kept on this computer.",
+        "login_remember_forgotten": "Kept session deleted from this computer.",
+        "login_copy_failed": "Could not keep a copy of the session: {error}",
+        "login_close": "Close",
+        "login_failed": "Could not sign in: {error}",
+        "login_network_error": "No connection to Twitch. Check the internet and try again.",
+        "login_import_ok": "Session imported. Step 2 is left: validate.",
+        "login_paste_first": "Paste the session JSON first.",
+        "login_nothing_to_validate": "There is nothing to validate yet: do step 1 first (or use the Quick Token).",
+        "login_export_needs_session": "There is no session to export yet: sign in first.",
+        "login_export_ok": "Session exported and copied to the clipboard. Keep it private.",
+        "login_success": "Signed in as {login}.",
+        "login_confirmed": "Session confirmed: {login}.",
+        "login_progress": "Signing in ({n}/{total}): {what}...",
+        "login_progress_1": "reading the kept session",
+        "login_progress_2": "importing it",
+        "login_progress_3": "validating with Twitch",
+        "session_import_done": "Session imported successfully!",
         "auto_claim_checkbox": "Redeem drops automatically",
         "settings_tab_basic": "Basic",
         "settings_tab_advanced": "Advanced",
@@ -1942,6 +2073,7 @@ class MainWindow(QMainWindow):
         self._autosave_timer.timeout.connect(self._autosave_now)
         self._autosave_reasons: set[str] = set()
         self._ui_ready = False  # True once the window is built (see handle_energy_profile_change)
+        self._login_dialog: LoginDialog | None = None  # the open "Log in" window, if any
         self._farm_health = FarmHealth(self.config.watchdog_stall_timeout_min)
         self._heartbeat_failures = 0
         self._api_error_announced = False
@@ -2667,6 +2799,10 @@ class MainWindow(QMainWindow):
 
         self.tabs_right.addTab(farming_tab, "")
         self.tabs_right.addTab(campaigns_tab, "")
+        # The free corner next to the tabs: one click signs in (or opens the window that explains how).
+        self.btn_smart_login = QPushButton()
+        self.btn_smart_login.clicked.connect(self.handle_smart_login)
+        self.tabs_right.setCornerWidget(self.btn_smart_login, Qt.Corner.TopRightCorner)
         vbox.addWidget(self.tabs_right, 3)
         log_row = QHBoxLayout()
         log_row.addWidget(self.log_label)
@@ -2804,7 +2940,18 @@ class MainWindow(QMainWindow):
             self.btn_login.setEnabled(True)
         self.btn_edit_oauth.setEnabled(bool(self.client.login_state.oauth_token))
 
+    def _refresh_login_button(self) -> None:
+        state = self.client.login_state
+        if state.logged_in:
+            name = self.login_account_name()
+            self.btn_smart_login.setText(self._t("login_button_logged", login=name))
+            self.btn_smart_login.setToolTip(self._t("login_button_tip_in", login=name))
+        else:
+            self.btn_smart_login.setText(self._t("login_button"))
+            self.btn_smart_login.setToolTip(self._t("login_button_tip_out"))
+
     def _update_auth_status(self) -> None:
+        self._refresh_login_button()
         state = self.client.login_state
         if state.logged_in:
             self.auth_status_label.setText(
@@ -5122,19 +5269,159 @@ class MainWindow(QMainWindow):
             self._t("about_body", version=__version__),
         )
 
+    # ---- signing in: the "Log in" button, its window and the "Account" tab all use these ----
+
+    def login_account_name(self) -> str:
+        return self.client.login_state.login_name or "?"
+
+    def login_status_text(self) -> str:
+        if self.client.login_state.logged_in:
+            return self._t("login_state_in", login=self.login_account_name())
+        return self._t("login_state_out")
+
+    def login_remember_enabled(self) -> bool:
+        return bool(self.config.remember_session)
+
+    def login_set_remember(self, enabled: bool) -> bool:
+        """Turn "keep the session" on (only after the user says yes) or off (deletes the file).
+
+        Returns the state that ended up in force, so a "no" can put the check box back.
+        """
+        if enabled == bool(self.config.remember_session):
+            return enabled
+        if enabled:
+            answer = QMessageBox.question(
+                self,
+                self._t("login_remember_confirm_title"),
+                self._t("login_remember_confirm", path=str(self.client.session_copy_path())),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+            self.config.remember_session = True
+            save_config(self.config)
+            if self.client.login_state.logged_in:
+                self._keep_session_copy()
+            self._log(self._t("login_remember_saved"))
+            return True
+        self.config.remember_session = False
+        save_config(self.config)
+        self.client.forget_session_copy()
+        self._log(self._t("login_remember_forgotten"))
+        return False
+
+    def _keep_session_copy(self) -> None:
+        try:
+            self.client.save_session_copy()
+        except OSError as exc:
+            self._log(self._t("login_copy_failed", error=str(exc)))
+
+    def login_open_twitch(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://www.twitch.tv"))
+
+    def login_import_session(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            raise ValueError(self._t("login_paste_first"))
+        self.client.import_session_json(text)
+        self._update_auth_status()
+        self._log(self._t("session_import_done"))
+
+    def login_validate_session(self) -> None:
+        if not self.client.login_state.oauth_token:
+            raise ValueError(self._t("login_nothing_to_validate"))
+        self.client.validate_oauth_token()
+        self._on_login_success()
+
+    def login_export_session(self) -> str:
+        if not self.client.login_state.oauth_token:
+            raise ValueError(self._t("login_export_needs_session"))
+        session_json = self.client.export_session_json()
+        self._log(self._t("session_export_success"))
+        return session_json
+
+    def login_with_token(self, token: str) -> None:
+        token = token.strip()
+        if not token:
+            raise ValueError(self._t("token_required"))
+        self.client.set_oauth_token(token)  # also validates it with Twitch
+        self._log(self._t("oauth_saved"))
+        self._on_login_success()
+
+    def _on_login_success(self, *, refresh: bool = True) -> None:
+        """Everything that follows a confirmed login."""
+        self._set_oauth_hidden(True)
+        self._update_auth_status()
+        if self.config.remember_session:
+            self._keep_session_copy()
+        name = self.login_account_name()
+        self._log(self._t("login_success" if refresh else "login_confirmed", login=name))
+        self._toast.show_message(
+            self._t("login_success" if refresh else "login_confirmed", login=name), duration_ms=TOAST_DURATION_MS
+        )
+        if refresh:
+            self._log(self._t("oauth_refreshing"))
+            self.refresh_snapshot(force=True)
+
+    def handle_smart_login(self) -> None:
+        """The "Log in" button: use what is already there, and only ask when there is nothing usable.
+
+        In order: confirm the token the app already has; else restore the session the user agreed
+        to keep (import and validate); else open the window that explains how to sign in.
+        """
+        state = self.client.login_state
+        was_logged_in = state.logged_in
+        attempts: list[Callable[[], None]] = []
+        if state.oauth_token:
+            attempts.append(lambda: self._attempt_current_token(was_logged_in))
+        if self.config.remember_session and self.client.has_session_copy():
+            attempts.append(self._attempt_kept_session)
+
+        error = ""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for attempt in attempts:
+                try:
+                    attempt()
+                    return
+                except OSError:
+                    # No connection (requests' errors are OSErrors): the data is fine, so do not ask for it again.
+                    message = self._t("login_network_error")
+                    self._log(message)
+                    self._toast.show_message(message, ok=False, duration_ms=TOAST_DURATION_MS)
+                    return
+                except Exception as exc:  # noqa: BLE001 - shown in the window below
+                    error = str(exc)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.open_login_dialog(error)
+
+    def _attempt_current_token(self, was_logged_in: bool) -> None:
+        self.client.validate_oauth_token()
+        self._on_login_success(refresh=not was_logged_in)
+
+    def _login_progress(self, number: int, total: int) -> None:
+        self._log(self._t("login_progress", n=number, total=total, what=self._t(f"login_progress_{number}")))
+
+    def _attempt_kept_session(self) -> None:
+        self.client.login_from_session_copy(progress=self._login_progress)
+        self._on_login_success()
+
+    def open_login_dialog(self, error: str = "") -> LoginDialog:
+        prefix = self._t("login_failed", error=error) if error else ""
+        dialog = LoginDialog(self, self, error=prefix)
+        self._login_dialog = dialog
+        dialog.open()
+        return dialog
+
+    # ---- the "Account" tab ----
+
     def handle_login(self) -> None:
         self._with_errors(self._do_login)
 
     def _do_login(self) -> None:
-        token = self.token_input.text().strip()
-        if not token:
-            raise ValueError(self._t("token_required"))
-        self.client.set_oauth_token(token)
-        self._set_oauth_hidden(True)
-        self._update_auth_status()
-        self._log(self._t("oauth_saved"))
-        self._log(self._t("oauth_refreshing"))
-        self.refresh_snapshot(force=True)
+        self.login_with_token(self.token_input.text())
 
     def handle_edit_oauth(self) -> None:
         self._set_oauth_hidden(False)
@@ -5145,31 +5432,19 @@ class MainWindow(QMainWindow):
         self._with_errors(self._do_export_session)
 
     def _do_export_session(self) -> None:
-        session_json = self.client.export_session_json()
-        self.session_input.setText(session_json)
-        self._log(self._t("session_export_success"))
+        self.session_input.setText(self.login_export_session())
 
     def handle_import_session(self) -> None:
         self._with_errors(self._do_import_session)
 
     def _do_import_session(self) -> None:
-        session_json = self.session_input.toPlainText().strip()
-        if not session_json:
-            raise ValueError("Tens de colar o JSON da sessão antes de importar.")
-        self.client.import_session_json(session_json)
-        self._update_auth_status()
-        self._log("Sessão importada com sucesso!")
+        self.login_import_session(self.session_input.toPlainText())
 
     def handle_validate_session(self) -> None:
         self._with_errors(self._do_validate_session)
 
     def _do_validate_session(self) -> None:
-        if not self.client.login_state.oauth_token:
-            raise ValueError("Nenhuma sessão importada para validar.")
-        self.client.validate_oauth_token()
-        self._update_auth_status()
-        self._log(self._t("oauth_refreshing"))
-        self.refresh_snapshot(force=True)
+        self.login_validate_session()
 
     def handle_save_config(self) -> None:
         self._with_errors(self._do_save_config)

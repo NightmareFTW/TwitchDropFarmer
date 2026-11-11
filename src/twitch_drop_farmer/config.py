@@ -11,6 +11,9 @@ from .game_names import clean_game_names
 CONFIG_DIR = Path.home() / ".twitch-drop-farmer"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 COOKIE_FILE = CONFIG_DIR / "cookies.json"
+# The session the user agreed to keep (see AppConfig.remember_session). It holds the login
+# token in plain text, exactly like cookies.json, so it only exists after an explicit "yes".
+SESSION_FILE = CONFIG_DIR / "session.json"
 # Cached campaign catalog (non-secret metadata) so the full game list survives
 # app restarts, instead of being empty until a browser-fallback fetch succeeds.
 CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
@@ -43,6 +46,7 @@ class AppConfig:
     auto_update_restart_delay_sec: int = 30  # Wait before auto-restart
     check_updates_on_startup: bool = True
     dashboard_hide_subscription_required: bool = False
+    remember_session: bool = False  # The user agreed to keep the session JSON so "Log in" can restore it
 
 
 def load_config() -> AppConfig:
