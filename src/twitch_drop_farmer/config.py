@@ -49,6 +49,11 @@ class AppConfig:
     check_updates_on_startup: bool = True
     dashboard_hide_subscription_required: bool = False
     remember_session: bool = False  # The user agreed to keep the session JSON so "Log in" can restore it
+    # The game the farm was last on (kept up to date as the farm moves on, not only when the user picks one),
+    # so the next start continues there instead of on whatever the sort order puts first.
+    last_farm_game: str = ""
+    farming_when_closed: bool = False  # the farm was running when the app was closed
+    resume_farming_on_start: bool = True  # start farming again at launch if it was running when closed
 
 
 def load_config() -> AppConfig:

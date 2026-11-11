@@ -1296,6 +1296,229 @@ class TestLoginButton(_WindowCase):
         self.assertNotIn(self.TOKEN, w.btn_smart_login.text() + w.btn_smart_login.toolTip())
 
 
+class TestResumeLastGame(_WindowCase):
+    """Continue with the game the farm was last on, not with the one the sort order puts first (The Quinfall)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        w = self.window
+        w.timer.stop()
+        w.config.last_farm_game = ""
+        w.config.farming_when_closed = False
+        w.config.resume_farming_on_start = True
+        w.engine.set_preferred_game("")
+        for name in ("_sticky_campaign_id", "_forced_farm_game", "_forced_farm_campaign_id", "_forced_farm_channel",
+                     "_streamless_campaign_id", "_streamless_game"):
+            setattr(w, name, "")
+        self.quinfall, self.elden = _campaign("The Quinfall"), _campaign("ELDEN RING")
+        self.decisions = [_decision(self.quinfall), _decision(self.elden)]  # the sort order puts The Quinfall first
+        w.latest_snapshot = FarmSnapshot(campaigns=[self.quinfall, self.elden], decisions=self.decisions,
+                                         available_games=[], available_channels=[])
+        self.addCleanup(self.remove_files)
+
+    def remove_files(self) -> None:
+        for path in (config_module.CONFIG_FILE, tc.COOKIE_FILE):
+            Path(path).unlink(missing_ok=True)
+
+    def saved_config(self) -> dict:
+        return json.loads(Path(config_module.CONFIG_FILE).read_text(encoding="utf-8"))
+
+    def picked(self) -> str:
+        return self.window._pick_farm_decision().campaign.game_name
+
+    # ---------------------------------------------------------------- which game is chosen
+    def test_with_nothing_remembered_the_first_in_the_sort_order_is_chosen(self):
+        self.assertEqual(self.picked(), "The Quinfall")
+
+    def test_the_remembered_game_is_chosen_instead(self):
+        self.window.config.last_farm_game = "ELDEN RING"
+
+        self.assertEqual(self.picked(), "ELDEN RING")
+
+    def test_the_match_ignores_case_accents_and_punctuation(self):
+        self.window.config.last_farm_game = "elden-ring"
+
+        self.assertEqual(self.picked(), "ELDEN RING")
+
+    def test_a_remembered_game_with_nothing_farmable_falls_back_to_the_normal_choice(self):
+        self.window.config.last_farm_game = "A Game That Ended"
+
+        self.assertEqual(self.picked(), "The Quinfall")
+
+    def test_a_remembered_game_that_is_not_farmable_now_is_skipped(self):
+        self.window.config.last_farm_game = "ELDEN RING"
+        self.decisions[1].stream = None  # no live channel for it right now
+
+        self.assertEqual(self.picked(), "The Quinfall")
+
+    def test_a_game_that_is_already_being_farmed_is_not_swapped_for_the_remembered_one(self):
+        self.window.config.last_farm_game = "ELDEN RING"
+        self.window._sticky_campaign_id = self.quinfall.id
+
+        self.assertEqual(self.picked(), "The Quinfall")
+
+    def test_a_manual_pick_still_wins_over_the_remembered_game(self):
+        self.window.config.last_farm_game = "ELDEN RING"
+        self.window._forced_farm_game = "The Quinfall"
+
+        self.assertEqual(self.picked(), "The Quinfall")
+
+    # ---------------------------------------------------------------- what gets remembered
+    def test_picking_a_game_remembers_it_tells_the_engine_and_writes_the_config(self):
+        w = self.window
+
+        w._select_dashboard_game("Albion Online")
+
+        self.assertEqual(w.config.last_farm_game, "Albion Online")
+        self.assertEqual(w.engine.preferred_game, "Albion Online")
+        self.assertEqual(self.saved_config()["last_farm_game"], "Albion Online")
+
+    def test_when_the_farm_moves_on_what_is_remembered_is_where_it_really_is(self):
+        """Picked Sea of Thieves, it finished, the farm went to Albion Online: remember Albion Online."""
+        w = self.window
+        sea, albion = _campaign("Sea of Thieves"), _campaign("Albion Online")
+        w._select_dashboard_game("Sea of Thieves")
+        w._note_target_switch(_decision(sea))
+        self.assertEqual(w.config.last_farm_game, "Sea of Thieves")
+
+        w._note_target_switch(_decision(albion))  # the running farm picked another campaign by itself
+
+        self.assertEqual(w.config.last_farm_game, "Albion Online")
+        self.assertEqual(self.saved_config()["last_farm_game"], "Albion Online")
+
+    def test_just_displaying_the_default_does_not_overwrite_what_is_remembered(self):
+        """At start-up the window shows the default pick before any farming: that must not be remembered."""
+        w = self.window
+        w.config.last_farm_game = "A Game That Ended"
+
+        shown = w._current_farm_decision()
+
+        self.assertEqual(shown.campaign.game_name, "The Quinfall")
+        self.assertEqual(w.config.last_farm_game, "A Game That Ended")
+
+    def test_nothing_is_written_when_the_game_did_not_change(self):
+        w = self.window
+        w._remember_farm_game("ELDEN RING")
+        Path(config_module.CONFIG_FILE).unlink()
+
+        w._remember_farm_game("ELDEN RING")
+
+        self.assertFalse(Path(config_module.CONFIG_FILE).exists())
+
+    def test_a_failure_to_save_does_not_crash_the_farm(self):
+        with patch.object(ui, "save_config", side_effect=OSError("disk full")):
+            self.window._remember_farm_game("ELDEN RING")
+
+        self.assertEqual(self.window.config.last_farm_game, "ELDEN RING")  # still kept for this session
+
+    # ---------------------------------------------------------------- "it was farming when I closed it"
+    def test_starting_the_farm_notes_it_and_stopping_it_clears_it(self):
+        w = self.window
+        w._streamless_heartbeat_tick = MagicMock()
+        self.addCleanup(w.handle_stop)
+
+        w.handle_start()
+        self.assertTrue(w.config.farming_when_closed)
+        self.assertTrue(self.saved_config()["farming_when_closed"])
+
+        w.handle_stop()
+        self.assertFalse(w.config.farming_when_closed)
+        self.assertFalse(self.saved_config()["farming_when_closed"])
+
+    def test_closing_the_window_does_not_count_as_stopping_the_farm(self):
+        """If it did, the app would never remember that it was farming when it was closed."""
+        import inspect
+
+        self.assertNotIn("handle_stop", inspect.getsource(ui.MainWindow.closeEvent))
+
+    # ---------------------------------------------------------------- resuming at launch
+    def resume(self, *, token: str = "k" * 30, running: bool = False, **config) -> MagicMock:
+        w = self.window
+        defaults = dict(resume_farming_on_start=True, farming_when_closed=True, last_farm_game="ELDEN RING")
+        for key, value in {**defaults, **config}.items():
+            setattr(w.config, key, value)
+        w.client.login_state = tc.LoginState(oauth_token=token)
+        with patch.object(w.timer, "isActive", return_value=running), patch.object(w, "handle_start") as start:
+            w._maybe_resume_farming()
+        return start
+
+    def test_it_resumes_when_it_was_farming_when_closed(self):
+        start = self.resume()
+
+        start.assert_called_once()
+        self.assertIn("ELDEN RING", self.log_text())
+
+    def test_it_does_not_resume_when_the_option_is_off(self):
+        self.resume(resume_farming_on_start=False).assert_not_called()
+
+    def test_it_does_not_resume_when_the_farm_was_stopped_before_closing(self):
+        self.resume(farming_when_closed=False).assert_not_called()
+
+    def test_it_does_not_resume_without_a_remembered_game(self):
+        self.resume(last_farm_game="").assert_not_called()
+
+    def test_it_does_not_resume_without_a_session_to_farm_with(self):
+        self.resume(token="").assert_not_called()
+
+    def test_it_does_not_start_a_farm_that_is_already_running(self):
+        self.resume(running=True).assert_not_called()
+
+    def test_the_option_is_a_checkbox_that_is_saved(self):
+        w = self.window
+        before = w.config.resume_farming_on_start
+        w._autosave_timer.stop()
+
+        w.resume_checkbox.click()
+        self.assertTrue(w._autosave_timer.isActive())
+        w._autosave_timer.stop()
+        w._apply_widgets_to_config()
+
+        self.assertEqual(w.config.resume_farming_on_start, not before)
+        w.resume_checkbox.click()  # put it back
+
+    def test_the_option_is_translated(self):
+        w = self.window
+        self.assertEqual(w.resume_checkbox.text(), "Retomar a farm ao abrir a app")
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        w._retranslate_ui()
+        self.assertEqual(w.resume_checkbox.text(), "Resume farming when the app opens")
+        w.language_picker.setCurrentIndex(w.language_picker.findData("pt_PT"))
+        w._retranslate_ui()
+
+    # ---------------------------------------------------------------- a real start-up
+    def new_window(self, *, token: str) -> tuple["ui.MainWindow", MagicMock]:
+        Path(config_module.CONFIG_FILE).parent.mkdir(parents=True, exist_ok=True)
+        config_module.save_config(config_module.AppConfig(last_farm_game="ELDEN RING", farming_when_closed=True))
+        if token:
+            Path(tc.COOKIE_FILE).write_text(json.dumps({"cookies": [], "oauth_token": token, "session_id": "s"}), encoding="utf-8")
+        with patch.object(ui.MainWindow, "handle_start") as start:
+            window = ui.MainWindow()
+            for _ in range(3):
+                self.app.processEvents()
+
+        def close() -> None:
+            window.client.segment_watcher.stop()
+            for timer in (window.timer, window.streamless_timer, window._autosave_timer):
+                timer.stop()
+            window.executor.shutdown(wait=False)
+
+        self.addCleanup(close)
+        return window, start
+
+    def test_a_new_start_up_tells_the_engine_and_resumes_the_farm(self):
+        window, start = self.new_window(token="k" * 30)
+
+        self.assertEqual(window.engine.preferred_game, "ELDEN RING")
+        self.assertEqual(window.client._priority_game_name, "elden ring")
+        start.assert_called_once()
+
+    def test_a_new_start_up_without_a_session_does_not_start_the_farm(self):
+        window, start = self.new_window(token="")
+
+        self.assertEqual(window.engine.preferred_game, "ELDEN RING")
+        start.assert_not_called()
+
+
 class TestSubscriptionOnlyGames(_WindowCase):
     """What the dashboard shows once the registry has said which games need a subscription."""
 

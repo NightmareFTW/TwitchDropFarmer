@@ -1044,6 +1044,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "login_progress_3": "a validar na Twitch",
         "session_import_done": "Sessão importada com sucesso!",
         "auto_claim_checkbox": "Redimir drops automaticamente",
+        "resume_checkbox": "Retomar a farm ao abrir a app",
+        "resume_tooltip": "Se a farm estava a correr quando fechaste a app, volta a arrancar sozinha no último jogo em que estava (o jogo em que ela realmente ficou, mesmo que tenha passado para outro quando um terminou). Se parares a farm antes de fechar, não arranca.",
+        "resume_farming": "A retomar a farm em {game} (estava a correr quando a app foi fechada).",
         "settings_tab_basic": "Básico",
         "settings_tab_advanced": "Avançado",
         "settings_tab_alerts": "Alertas",
@@ -1431,6 +1434,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "login_progress_3": "validating with Twitch",
         "session_import_done": "Session imported successfully!",
         "auto_claim_checkbox": "Redeem drops automatically",
+        "resume_checkbox": "Resume farming when the app opens",
+        "resume_tooltip": "If the farm was running when you closed the app, it starts again by itself on the game it was last on (the game it really ended up on, even if it moved on when one finished). If you stop the farm before closing, it does not start.",
+        "resume_farming": "Resuming the farm on {game} (it was running when the app was closed).",
         "settings_tab_basic": "Basic",
         "settings_tab_advanced": "Advanced",
         "settings_tab_alerts": "Alerts",
@@ -2020,6 +2026,9 @@ class MainWindow(QMainWindow):
 
         self.client = TwitchClient()
         self.engine = FarmEngine(self.client, self.config)
+        if self.config.last_farm_game:
+            self.engine.set_preferred_game(self.config.last_farm_game)
+            self.client.set_priority_game(self.config.last_farm_game)
         self.latest_snapshot: FarmSnapshot | None = None
         # Games the user added by hand (Filters tab) that may not be in any current
         # campaign yet — kept so they stay selectable even when Twitch withholds the
@@ -2126,6 +2135,7 @@ class MainWindow(QMainWindow):
         self._update_auth_status()
         self._wire_autosave()
         self._ui_ready = True
+        QTimer.singleShot(0, self._maybe_resume_farming)
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -2201,6 +2211,9 @@ class MainWindow(QMainWindow):
         self.auto_claim_checkbox = QCheckBox()
         self.auto_claim_checkbox.setChecked(bool(self.config.auto_claim_drops))
         basic_layout.addWidget(self.auto_claim_checkbox)
+        self.resume_checkbox = QCheckBox()
+        self.resume_checkbox.setChecked(bool(self.config.resume_farming_on_start))
+        basic_layout.addWidget(self.resume_checkbox)
         basic_layout.addStretch()
         
         # ========== TAB 2: AVANÇADO ==========
@@ -3209,6 +3222,8 @@ class MainWindow(QMainWindow):
         self.sort_label.setText(self._t("sort_label"))
         self.auto_claim_checkbox.setText(self._t("auto_claim_checkbox"))
         self.auto_claim_checkbox.setToolTip(self._t("auto_claim_tooltip"))
+        self.resume_checkbox.setText(self._t("resume_checkbox"))
+        self.resume_checkbox.setToolTip(self._t("resume_tooltip"))
         self._repopulate_language_picker()
         self._repopulate_theme_picker()
         self._repopulate_sort_picker()
@@ -3558,7 +3573,38 @@ class MainWindow(QMainWindow):
                 return forced_by_campaign
         return candidates[0]
 
+    def _remember_farm_game(self, game_name: str) -> None:
+        """Keep the game the farm is on, so the next start continues there.
+
+        Called when the user picks a game and whenever a running farm moves to another one (a
+        campaign finished, say), so what is kept is where the farm really is, not what was picked.
+        """
+        game = (game_name or "").strip()
+        if not game or game == self.config.last_farm_game:
+            return
+        self.config.last_farm_game = game
+        self.engine.set_preferred_game(game)
+        self._save_config_quietly()
+
+    def _save_config_quietly(self) -> None:
+        """Write the config without the "saved" message: for state the app keeps by itself."""
+        try:
+            save_config(self.config)
+        except OSError as exc:
+            logger.warning("Could not save the config: %s", exc)
+
+    def _maybe_resume_farming(self) -> None:
+        """At launch, carry on farming the last game if the farm was running when the app was closed."""
+        config = self.config
+        if not (config.resume_farming_on_start and config.farming_when_closed and config.last_farm_game):
+            return
+        if self.timer.isActive() or not self.client.login_state.oauth_token:
+            return  # already running, or there is no session to farm with
+        self._log(self._t("resume_farming", game=config.last_farm_game))
+        self.handle_start()
+
     def _select_dashboard_game(self, game_name: str) -> None:
+        self._remember_farm_game(game_name)
         self._forced_farm_game = game_name
         self._forced_farm_campaign_id = ""
         self._forced_farm_channel = ""
@@ -4454,6 +4500,7 @@ class MainWindow(QMainWindow):
             return
 
         # Força o farm deste jogo
+        self._remember_farm_game(game_label)
         self._forced_farm_game = game_label
         self._forced_farm_campaign_id = best_decision.campaign.id
         self._forced_farm_channel = best_decision.stream.login
@@ -4637,6 +4684,16 @@ class MainWindow(QMainWindow):
             )
             if current is not None:
                 return current
+        # Nothing is being farmed yet (just started): continue with the game the farm was last on
+        # instead of whatever the sort order puts first.
+        if self.config.last_farm_game:
+            wanted = loose_game_key(self.config.last_farm_game)
+            resumed = next(
+                (decision for decision in candidates if loose_game_key(decision.campaign.game_name) == wanted),
+                None,
+            )
+            if resumed is not None:
+                return resumed
         return candidates[0]
 
     def handle_next_game(self) -> None:
@@ -4683,6 +4740,7 @@ class MainWindow(QMainWindow):
         campaign = decision.campaign
         previous_id, previous_game = self._streamless_campaign_id, self._streamless_game
         self._streamless_campaign_id, self._streamless_game = campaign.id, campaign.game_name
+        self._remember_farm_game(campaign.game_name)
         if not previous_id or previous_id == campaign.id:
             return
         if self._forced_farm_campaign_id == campaign.id or self._forced_farm_game:
@@ -5489,6 +5547,7 @@ class MainWindow(QMainWindow):
         self.config.theme = self._current_theme()
         self.config.sort_mode = self._current_sort_mode()
         self.config.auto_claim_drops = self.auto_claim_checkbox.isChecked()
+        self.config.resume_farming_on_start = self.resume_checkbox.isChecked()
         self.config.dashboard_hide_subscription_required = self.dashboard_hide_sub_only_checkbox.isChecked()
 
     def _do_save_config(self) -> None:
@@ -5541,6 +5600,7 @@ class MainWindow(QMainWindow):
             combo.activated.connect(lambda _index: self._schedule_autosave("settings"))
         for checkbox in (
             self.auto_claim_checkbox,
+            self.resume_checkbox,
             self.dashboard_hide_sub_only_checkbox,
             self.watchdog_checkbox,
             self.autoupdate_checkbox,
@@ -5574,6 +5634,9 @@ class MainWindow(QMainWindow):
         self._streamless_heartbeat_tick()
         self._log(self._t("farming_started"))
         self._log(self._t("streamless_running"))
+        if not self.config.farming_when_closed:
+            self.config.farming_when_closed = True
+            self._save_config_quietly()
 
     def handle_stop(self) -> None:
         self.timer.stop()
@@ -5587,6 +5650,9 @@ class MainWindow(QMainWindow):
         self._streamless_no_target_logged = False
         self._heartbeat_no_progress_cycles = 0
         self._log(self._t("farming_stopped"))
+        if self.config.farming_when_closed:
+            self.config.farming_when_closed = False
+            self._save_config_quietly()
 
     def handle_campaign_selection_changed(self) -> None:
         self._refresh_campaign_details()

@@ -131,6 +131,8 @@ class FarmEngine:
         self._campaigns_fetched_at: float | None = None
         self._stream_cache: dict[str, tuple[float, list[StreamCandidate]]] = {}
         self.focus_campaign_ids: set[str] = set()
+        # The game to continue with after a restart (see set_preferred_game).
+        self.preferred_game = ""
         # The channel being watched right now is kept while it stays valid (see
         # _channel_priority), and a channel that stopped crediting progress is skipped for a
         # while (see penalize_channel). Stall detection itself lives in farm_health.py.
@@ -279,6 +281,28 @@ class FarmEngine:
         self.front_ttl_sec = float(profile.front_ttl_sec)
         self.background_ttl_sec = float(profile.background_ttl_sec)
         logger.info(f"FarmEngine com o perfil de energia: {profile.name}")
+
+    def set_preferred_game(self, game_name: str) -> None:
+        """The game the farm was last on. Its channels are looked up in the first poll, so it can be
+        chosen straight away instead of the game the sort order happens to put first."""
+        self.preferred_game = (game_name or "").strip()
+
+    def _preferred_campaign_ids(self, streamable: list[DropCampaign]) -> set[str]:
+        """At most two campaigns of the preferred game, unless the farm is already looking at that game."""
+        key = loose_game_key(self.preferred_game)
+        if not key:
+            return set()
+        same = [item for item in streamable if loose_game_key(item.game_name) == key]
+        if not same or any(item.id in self.focus_campaign_ids for item in same):
+            return set()
+        same.sort(
+            key=lambda item: (
+                item.progress_minutes <= 0,
+                not (item.drops or item.required_minutes > 0),
+                *self._phase_and_sort_key(item),
+            )
+        )
+        return {item.id for item in same[:2]}
 
     def set_focus(self, *campaign_ids: str) -> None:
         """Campaigns whose channel must be re-checked on every poll (the farmed one)."""
@@ -482,9 +506,10 @@ class FarmEngine:
         # the campaigns being farmed, then the ones already in progress (what the user is
         # most likely to want to continue), then the ones with real drop data, then the
         # rest in the user's sort order.
+        focus_ids = self.focus_campaign_ids | self._preferred_campaign_ids(streamable)
         streamable.sort(
             key=lambda item: (
-                item.id not in self.focus_campaign_ids,
+                item.id not in focus_ids,
                 item.progress_minutes <= 0,
                 not (item.drops or item.required_minutes > 0),
                 *self._phase_and_sort_key(item),
@@ -499,7 +524,7 @@ class FarmEngine:
         for campaign in streamable:
             cached = self._stream_cache.get(campaign.id)
             age = float("inf") if cached is None else now - cached[0]
-            focus = campaign.id in self.focus_campaign_ids
+            focus = campaign.id in focus_ids
             in_front = front_live < self.FRONT_LIVE_WANTED and front_lookups < self.MAX_FRONT_LOOKUPS
             if focus:
                 refresh = True

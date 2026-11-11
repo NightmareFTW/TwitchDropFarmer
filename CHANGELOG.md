@@ -6,6 +6,28 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.64] - 2026-11-11
+
+### Added
+
+- **A farm continua no último jogo em que estava, em vez de ir para «The Quinfall».** Ao
+  arrancar não havia alvo manual nem campanha em curso, por isso a app usava o primeiro da
+  ordenação — com a prioridade «Terminam mais cedo», sempre o «The Quinfall», cujo fim aparece
+  como «0 minutos». Agora a app lembra o jogo e repõe-no:
+  - **o que fica lembrado é onde a farm realmente está**, não só o que escolheste: se clicas
+    num jogo, fica esse; se esse terminar e a farm passar sozinha a outro, passa a ficar o
+    outro. O simples facto de a janela mostrar o alvo por omissão antes de a farm arrancar
+    **não** apaga o que estava lembrado;
+  - **o jogo lembrado tem o canal verificado logo no primeiro ciclo** (até 2 das suas campanhas,
+    e só se a farm ainda não estiver nesse jogo; o total de pedidos não aumenta). Sem isto ele
+    ficava «por verificar», não era farmável e a farm caía outra vez no primeiro da fila;
+  - se o jogo lembrado já não tiver nada para farmar (terminou, sem canais, só subscrição),
+    cai na escolha normal, e uma escolha manual tua continua a mandar sobre ele.
+- **Retomar a farm ao abrir a app** (opção no separador Definições → Básico, ligada por
+  omissão): se a farm estava a correr quando fechaste a app, volta a arrancar sozinha nesse
+  jogo, desde que haja sessão. Se carregares em «Parar farm» antes de fechar, não arranca.
+  Fechar a janela não conta como parar. O log diz quando retoma.
+
 ## [2.2.63] - 2026-11-11
 
 ### Fixed
