@@ -35,7 +35,10 @@ if __package__ in {None, ""}:
     package_root = Path(__file__).resolve().parents[1]
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
-    from twitch_drop_farmer.config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE
+    from twitch_drop_farmer.config import (
+        CAMPAIGN_CACHE_FILE, COMPLETED_CAMPAIGNS_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE,
+    )
+    from twitch_drop_farmer.completions import REASON_COMPLETED, CompletionMemory
     from twitch_drop_farmer.game_names import clean_game_name, loose_game_key
     from twitch_drop_farmer.models import DropCampaign, StreamCandidate
     from twitch_drop_farmer.registry_rewards import (
@@ -43,7 +46,10 @@ if __package__ in {None, ""}:
     )
     from twitch_drop_farmer.stream_watcher import SegmentWatcher
 else:
-    from .config import CAMPAIGN_CACHE_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE
+    from .config import (
+        CAMPAIGN_CACHE_FILE, COMPLETED_CAMPAIGNS_FILE, COOKIE_FILE, CONFIG_DIR, REGISTRY_REWARDS_FILE, SESSION_FILE,
+    )
+    from .completions import REASON_COMPLETED, CompletionMemory
     from .game_names import clean_game_name, loose_game_key
     from .models import DropCampaign, StreamCandidate
     from .registry_rewards import (
@@ -593,6 +599,9 @@ class TwitchClient:
         self._box_art_clock: Callable[[], float] = time.monotonic
         # What the registry says each game's drops need (subscription or watch time), kept on disk.
         self._registry_rewards = RewardCache(REGISTRY_REWARDS_FILE)
+        # The campaigns the app saw finished, and the ones that credited nothing (see completions.py).
+        self._completions = CompletionMemory(COMPLETED_CAMPAIGNS_FILE)
+        self._inventory_ok_at: float | None = None  # when the Inventory last answered (see inventory_recently_ok)
         self._registry_lock = threading.Lock()
         self._registry_pending: dict[str, str] = {}  # slug -> signature still to be read
         self._registry_thread: threading.Thread | None = None
@@ -2362,6 +2371,7 @@ class TwitchClient:
                         timestamp_source=timestamp_source,
                     )
                     campaign.required_minutes = 0
+                    campaign.declared_drop_count = parse_card_window(tag + text_chunk).drops
                     campaigns.append(campaign)
 
             if campaigns:
@@ -2430,6 +2440,52 @@ class TwitchClient:
             # No dates yet: placeholders that keep it "not started" until the card gets real ones.
             return now + timedelta(days=30), now + timedelta(days=60), "UPCOMING", ""
         return now - timedelta(hours=1), now + timedelta(days=30), "ACTIVE", ""
+
+    def inventory_recently_ok(self, max_age_sec: float = 180.0) -> bool:
+        """True if the Inventory answered lately. "No campaign of mine is in it" only means something then."""
+        return self._inventory_ok_at is not None and time.monotonic() - self._inventory_ok_at <= max_age_sec
+
+    def remember_completed(self, campaign: DropCampaign, reason: str = REASON_COMPLETED) -> bool:
+        """Keep a finished campaign so it is not taken for a new one once Twitch stops listing it.
+
+        Only campaigns with a real end date can be matched again, so the others are not kept.
+        """
+        if campaign.timestamps_are_synthetic or campaign.timestamp_source not in {"campaign", "registry"}:
+            return False
+        drops = len(campaign.drops) or campaign.declared_drop_count
+        if not self._completions.record(campaign.game_name, ends_at=campaign.ends_at, drops=drops, reason=reason):
+            return False
+        try:
+            self._completions.save()
+        except OSError as exc:
+            self._note(f"Não foi possível guardar as campanhas concluídas ({exc}).")
+        return True
+
+    def apply_completions(self, campaigns: list[DropCampaign]) -> int:
+        """Mark the registry campaigns that are one the app saw finished. Returns how many.
+
+        The registry campaign has no drops and 0 minutes, so nothing else tells it from a new one.
+        """
+        marked = 0
+        for campaign in campaigns:
+            if campaign.source != "external_registry" or campaign.timestamp_source != "registry" or campaign.all_drops_claimed:
+                continue
+            if self._completions.is_completed(
+                campaign.game_name, ends_at=campaign.ends_at, drops=campaign.declared_drop_count
+            ):
+                campaign.all_drops_claimed = True
+                marked += 1
+        return marked
+
+    def forget_unproductive_campaigns(self) -> int:
+        """The user asks to try again: forget the campaigns that were only *inferred* to be finished."""
+        removed = self._completions.forget_no_credit()
+        if removed:
+            try:
+                self._completions.save()
+            except OSError:
+                pass
+        return removed
 
     def apply_registry_rewards(self, campaigns: list[DropCampaign]) -> int:
         """Mark the registry's campaigns whose active drops all need a subscription.
@@ -3974,6 +4030,7 @@ class TwitchClient:
                 continue
             progress_by_campaign[campaign.id] = campaign
 
+        self._inventory_ok_at = time.monotonic()
         self._note(
             f"Inventory progress refresh: {len(progress_by_campaign)} campanha(s) em progresso."
         )

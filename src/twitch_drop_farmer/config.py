@@ -19,6 +19,9 @@ SESSION_FILE = CONFIG_DIR / "session.json"
 CAMPAIGN_CACHE_FILE = CONFIG_DIR / "campaign_cache.json"
 # What the public registry says each game's active drops need (watch time or a subscription).
 REGISTRY_REWARDS_FILE = CONFIG_DIR / "registry_rewards.json"
+# Campaigns the app saw finished (see completions.py): a claimed campaign leaves the Inventory's "in progress"
+# list, and the public registry would otherwise list it as new.
+COMPLETED_CAMPAIGNS_FILE = CONFIG_DIR / "completed_campaigns.json"
 
 
 @dataclass(slots=True)

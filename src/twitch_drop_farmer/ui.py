@@ -84,6 +84,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .completions import REASON_NO_CREDIT
 from .config import CONFIG_DIR, load_config, save_config
 from .farm_health import Action, FarmHealth, LEVEL_CHANNEL
 from .game_names import clean_game_name, loose_game_key, preferred_game_name
@@ -840,6 +841,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_drop_refresh_empty": "Não há jogos na whitelist para actualizar drops.",
         "dashboard_hide_sub_only": "Ocultar jogos com drops de subscrição",
         "dashboard_hide_inactive": "Ocultar jogos inactivos",
+        "campaign_no_credit": "{game}: sem nenhum crédito após {minutes} min de farm e de recuperação (a campanha já deve estar concluída). Fica como concluída até aparecer uma campanha nova do jogo ou passarem 48 h; «Actualizar dashboard» volta a tentar.",
+        "no_credit_forgotten": "{count} campanha(s) dadas como concluídas sem crédito vão ser tentadas de novo.",
         "dashboard_hide_inactive_help": "Esconde os jogos sem campanha activa neste momento (etiqueta INATIVO): campanhas já terminadas ou que ainda não começaram. O número é quantos jogos da whitelist estão assim.",
         "dashboard_all_hidden": "Todos os jogos estão ocultos pelos filtros acima.",
         "dashboard_hide_sub_only_help": "Esconde os jogos cujos drops activos exigem todos uma subscrição (não se conseguem farmar a ver). Os que também têm drops por tempo de visualização não são escondidos. O número é quantos jogos da whitelist são assim.",
@@ -853,19 +856,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "• SEM CANAIS – não há nenhum canal elegível em directo\n"
             "• LIGAR CONTA – a conta do jogo ainda não está ligada à tua conta Twitch\n"
             "• SUBSCRIÇÃO – os drops exigem subscrição (não se farmam a ver)\n"
-            "• CONCLUÍDO – já tens todos os drops\n"
+            "• CONCLUÍDO – já tens todos os drops, ou a farm viu que a campanha já não dá crédito (fica assim até haver uma campanha nova do jogo)\n"
             "• INATIVO – sem campanha activa neste momento (já terminou ou ainda não começou)\n"
             "\n"
             "Actualizar drops: recarrega a lista de campanhas e tenta obter os drops detalhados de todos "
             "os jogos, começando pelo que está a farmar.\n"
-            "Actualizar dashboard: faz o mesmo e volta a descarregar as capas dos jogos.\n"
+            "Actualizar dashboard: faz o mesmo, volta a descarregar as capas e volta a tentar os jogos que a farm deu por concluídos sem crédito.\n"
             "Os dois correm com a janela parada e podem demorar alguns minutos. Se a Twitch os bloquear "
             "(verificação de integridade), não trazem mais detalhe.\n"
             "\n"
             "Um jogo que ainda não começaste a farmar pode mostrar «0/0 min» e «Sem drops activos» "
             "até a Twitch registar o primeiro minuto de visualização."
         ),
-        "dashboard_refresh_tooltip": "Faz o mesmo que «Actualizar drops» e volta a descarregar as capas dos jogos. Pode demorar alguns minutos.",
+        "dashboard_refresh_tooltip": "Faz o mesmo que «Actualizar drops», volta a descarregar as capas e volta a tentar os jogos que a farm deu por concluídos sem crédito. Pode demorar alguns minutos.",
         "dashboard_count_all": "A mostrar {shown} jogo(s).",
         "dashboard_count_whitelist": "A mostrar {shown}/{total} jogos da whitelist.",
         "dashboard_loading": "A carregar campanhas...",
@@ -1246,6 +1249,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dashboard_drop_refresh_empty": "There are no games in the whitelist to refresh.",
         "dashboard_hide_sub_only": "Hide games with subscription-only drops",
         "dashboard_hide_inactive": "Hide inactive games",
+        "campaign_no_credit": "{game}: no credit at all after {minutes} min of farming and recovery (the campaign must already be finished). It stays as finished until a new campaign of the game appears or 48 h pass; \"Refresh dashboard\" tries again.",
+        "no_credit_forgotten": "{count} campaign(s) taken as finished for giving no credit will be tried again.",
         "dashboard_hide_inactive_help": "Hides the games with no active campaign right now (INATIVO label): campaigns that have ended or have not started yet. The number is how many whitelist games are like that.",
         "dashboard_all_hidden": "All games are hidden by the filters above.",
         "dashboard_hide_sub_only_help": "Hides the games whose active drops all need a subscription (they cannot be farmed by watching). Games that also have watch-time drops are not hidden. The number is how many whitelist games are like that.",
@@ -1259,19 +1264,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "• SEM CANAIS (no channels) – no eligible channel is live\n"
             "• LIGAR CONTA (link account) – the game account is not linked to your Twitch account yet\n"
             "• SUBSCRIÇÃO (subscription) – the drops need a subscription (they cannot be farmed by watching)\n"
-            "• CONCLUÍDO (done) – you already have all the drops\n"
+            "• CONCLUÍDO (done) – you already have all the drops, or the farm found that the campaign no longer gives credit (it stays so until the game has a new campaign)\n"
             "• INATIVO (inactive) – no active campaign right now (it has ended or not started yet)\n"
             "\n"
             "Refresh drops: reloads the campaign list and tries to get the detailed drops of every game, "
             "starting with the one being farmed.\n"
-            "Refresh dashboard: does the same and downloads the game covers again.\n"
+            "Refresh dashboard: does the same, downloads the covers again and retries the games the farm took as finished for giving no credit.\n"
             "Both run with the window frozen and can take a few minutes. If Twitch blocks them "
             "(integrity check), they bring no more detail.\n"
             "\n"
             "A game you have not started farming yet can show \"0/0 min\" and \"No active drops\" "
             "until Twitch registers the first minute of watching."
         ),
-        "dashboard_refresh_tooltip": "Does the same as \"Refresh drops\" and downloads the game covers again. It can take a few minutes.",
+        "dashboard_refresh_tooltip": "Does the same as \"Refresh drops\", downloads the covers again and retries the games the farm took as finished for giving no credit. It can take a few minutes.",
         "dashboard_count_all": "Showing {shown} game(s).",
         "dashboard_count_whitelist": "Showing {shown}/{total} whitelisted games.",
         "dashboard_loading": "Loading campaigns...",
@@ -4585,6 +4590,39 @@ class MainWindow(QMainWindow):
         if action is not Action.NONE:
             self._run_recovery(action, campaign_id, game, channel)
 
+    def _feed_unreconciled_heartbeat(
+        self, campaign_id: str, game: str, channel: str, current_drop_session: object
+    ) -> None:
+        """A heartbeat went well but no campaign of the Inventory matches the one being farmed.
+
+        That used to be silent: only reconciled campaigns fed the stall monitor, so a campaign that
+        credits nothing (finished and claimed, say, which Twitch then stops listing) was farmed for
+        hours (4 in one night). Now it counts as "no progress" like any other, unless Twitch's own
+        CurrentDrop says credit is being earned, or the Inventory itself failed (then nothing is known).
+        """
+        if not campaign_id or not channel or not self.client.inventory_recently_ok():
+            return
+        minutes = 0
+        if isinstance(current_drop_session, dict) and current_drop_session.get("drop_id"):
+            minutes = int(current_drop_session.get("current_minutes", 0) or 0)
+        self._watch_farm_health(campaign_id, game, channel, minutes)
+
+    def _mark_no_credit(self, campaign_id: str, game: str, minutes: int) -> None:
+        """The recovery gave up on a registry campaign that never credited a minute: keep it as finished.
+
+        Only a campaign the Inventory never showed (a registry one with no progress) is marked; a real
+        campaign that stalls is not finished, it is held back as before.
+        """
+        decision = self._decision_for_campaign(campaign_id)
+        campaign = decision.campaign if decision is not None else None
+        if campaign is None or campaign.source != "external_registry" or campaign.progress_minutes > 0:
+            return
+        if not self.client.remember_completed(campaign, REASON_NO_CREDIT):
+            return
+        campaign.all_drops_claimed = True  # the card says CONCLUÍDO now, without waiting for a refresh
+        self._log(self._t("campaign_no_credit", game=game, minutes=minutes))
+        self._refresh_dashboard_games()
+
     def _announce_recovered(self, game: str, level: int) -> None:
         if level >= LEVEL_CHANNEL:  # a channel or campaign switch deserves a notice
             get_alert_manager().raise_alert(
@@ -4640,6 +4678,7 @@ class MainWindow(QMainWindow):
                 hold=int(CAMPAIGN_HOLD_SEC // 60),
             )
             self._campaign_hold[campaign_id] = time.monotonic() + CAMPAIGN_HOLD_SEC
+            self._mark_no_credit(campaign_id, game, int(health.campaign_stalled_minutes()))
             if self._sticky_campaign_id == campaign_id:
                 self._sticky_campaign_id = ""
             if self._forced_farm_campaign_id == campaign_id:
@@ -5120,6 +5159,9 @@ class MainWindow(QMainWindow):
                         f"canal_id={pending_channel_id or '-'} | drop={current_drop_id}"
                         f" | minutos={current_drop_minutes}"
                     )
+            self._feed_unreconciled_heartbeat(
+                pending_campaign_id, pending_game_name, pending_channel, current_drop_session
+            )
 
         if self._heartbeat_no_progress_cycles >= 3:
             self._heartbeat_no_progress_cycles = 0
@@ -5751,6 +5793,9 @@ class MainWindow(QMainWindow):
         self._thumb_inflight.clear()
         self._generated_thumb_cache.clear()
         self.client.clear_box_art_caches()
+        forgotten = self.client.forget_unproductive_campaigns()
+        if forgotten:
+            self._log(self._t("no_credit_forgotten", count=forgotten))
         self._do_dashboard_full_scan()
 
     def _do_dashboard_full_scan(self) -> None:

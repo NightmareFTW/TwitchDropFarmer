@@ -6,6 +6,35 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.66] - 2026-11-12
+
+Da análise do log da noite: das 06:00 às 10:11 a farm esteve **mais de 4 horas** no MARVEL SNAP, uma
+campanha que já estava concluída e reivindicada, sem receber um único minuto de crédito.
+
+### Fixed
+
+- **Uma campanha concluída voltava como «nova» e entrava no conjunto de escolha.** Quando todos os
+  drops são obtidos e reivindicados, a Twitch deixa de a listar em «em progresso». O registo público,
+  que não sabe nada sobre ti, continua a listá-la como activa e sem dados (0/0 min), e a app não tinha
+  como a distinguir de uma campanha a sério. Agora a app **lembra, em disco**
+  (`completed_campaigns.json`), as campanhas que viu concluídas no Inventory, e o cartão do registo
+  que corresponde a uma delas (mesmo jogo, mesma data de fim, e não mais drops do que os concluídos)
+  fica com a etiqueta **CONCLUÍDO** e fora das escolhas da farm. **Uma campanha nova do mesmo jogo
+  não é escondida**: tem outra data de fim, ou mais drops, e volta a ser escolhível.
+- **A farm podia ficar horas numa campanha que não rende nada.** O monitor de estagnação só era
+  alimentado quando o Inventory reconhecia a campanha; no caso contrário («Heartbeat sem campanha
+  reconciliada no Inventory», 256 vezes nessa noite) o ramo só escrevia no log. Agora também conta:
+  se a recuperação completa (reiniciar a vigilância aos 20 % do tempo limite, trocar de canal aos
+  50 %, desistir aos 100 %) não vê **nenhum** crédito, a farm desiste da campanha. Não conta como
+  estagnação se o próprio Inventory falhou (aí não se sabe nada) nem se o `CurrentDrop` da Twitch
+  mostra que há crédito a ser ganho.
+- Quando a farm desiste de uma campanha **do registo que nunca teve progresso**, guarda-a também como
+  concluída («sem crédito»), pelo mesmo critério de data e de drops. Isto é uma **dedução** (o registo
+  não diz o que fizeste), por isso só dura 48 h e **«Actualizar dashboard» volta a tentá-las**; as que a
+  app viu concluídas mesmo, essas duram até a campanha acabar. Uma campanha real que estagna continua
+  só a ser posta de parte, nunca é dada como concluída.
+- O texto do «?» do dashboard explica a nova etiqueta CONCLUÍDO e o novo comportamento do botão.
+
 ## [2.2.65] - 2026-11-11
 
 ### Added

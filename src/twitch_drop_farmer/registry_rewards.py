@@ -132,6 +132,7 @@ class CardWindow:
     ends_at: datetime | None = None
     expired: bool = False  # a "Campaign history" card: no dates, nothing to farm
     upcoming: bool = False  # "Coming soon" with no dates (a game that has not launched yet)
+    drops: int = 0  # how many drops the card says the game has (0 = not said)
 
     @property
     def known(self) -> bool:
@@ -144,6 +145,14 @@ def _parse_utc(value: str) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _int_attribute(card: str, name: str) -> int:
+    found = _ATTRIBUTE[name].search(card)
+    try:
+        return max(0, int(found.group(1))) if found else 0
+    except ValueError:
+        return 0
 
 
 def parse_card_window(card: str) -> CardWindow:
@@ -160,6 +169,7 @@ def parse_card_window(card: str) -> CardWindow:
         ends_at=_parse_utc(found["end"].group(1)) if found["end"] else None,
         expired="game-card--expired" in card or "status-expired" in card,
         upcoming="status-upcoming" in card,
+        drops=_int_attribute(card, "drops"),
     )
 
 

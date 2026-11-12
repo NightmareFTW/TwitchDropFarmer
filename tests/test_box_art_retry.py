@@ -33,6 +33,7 @@ class BoxArtRetryCase(unittest.TestCase):
         for name, value in (
             ("CONFIG_DIR", base), ("COOKIE_FILE", base / "cookies.json"), ("SESSION_FILE", base / "session.json"),
             ("CAMPAIGN_CACHE_FILE", base / "c.json"), ("REGISTRY_REWARDS_FILE", base / "r.json"),
+            ("COMPLETED_CAMPAIGNS_FILE", base / "done.json"),
         ):
             patcher = patch.object(tc, name, value)
             patcher.start()

@@ -67,6 +67,8 @@ class _WindowCase(unittest.TestCase):
         enter(patch.object(tc, "SESSION_FILE", base / "session.json"))
         enter(patch.object(config_module, "REGISTRY_REWARDS_FILE", base / "registry_rewards.json"))
         enter(patch.object(tc, "REGISTRY_REWARDS_FILE", base / "registry_rewards.json"))
+        enter(patch.object(config_module, "COMPLETED_CAMPAIGNS_FILE", base / "completed_campaigns.json"))
+        enter(patch.object(tc, "COMPLETED_CAMPAIGNS_FILE", base / "completed_campaigns.json"))
         enter(patch.object(tc, "CONFIG_DIR", base))
         enter(patch.object(tc, "COOKIE_FILE", base / "cookies.json"))
         enter(patch.object(tc, "CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"))
@@ -1517,6 +1519,187 @@ class TestResumeLastGame(_WindowCase):
 
         self.assertEqual(window.engine.preferred_game, "ELDEN RING")
         start.assert_not_called()
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TestDeadCampaignIsGivenUp(_WindowCase):
+    """MARVEL SNAP was already finished: the farm sat on it for 4 hours because nothing fed the stall monitor."""
+
+    CHANNEL = "unhlpfulyoda"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from twitch_drop_farmer.farm_health import FarmHealth
+
+        w = self.window
+        self.clock = _FakeClock()
+        w._farm_health = FarmHealth(30, clock=self.clock)
+        w._campaign_hold.clear()
+        for name in ("_sticky_campaign_id", "_forced_farm_game", "_forced_farm_campaign_id", "_forced_farm_channel"):
+            setattr(w, name, "")
+        w.config.last_farm_game = ""
+        w.client._completions._entries.clear()
+        self.end = datetime.now(UTC) + timedelta(days=3)
+        self.snap = self.registry_campaign("MARVEL SNAP", declared=3)
+        self.other = self.registry_campaign("Other Game", declared=1)
+        names = ["MARVEL SNAP", "Other Game"]
+        w.config.whitelist_games = names
+        w.available_game_entries = w._compose_game_entries(names)
+        w.latest_snapshot = FarmSnapshot(campaigns=[self.snap, self.other], available_games=names, available_channels=[],
+                                         decisions=[_decision(self.snap), _decision(self.other)])
+        w._refresh_filter_lists()
+        w.games_whitelist_list.select_all()
+        for patcher in (
+            patch.object(w.client, "inventory_recently_ok", return_value=True),
+            patch.object(w.client, "reset_watch_session"),
+            patch.object(w.client, "segment_watcher"),
+            patch.object(w, "_streamless_heartbeat_tick"),
+            patch.object(w, "refresh_snapshot"),
+            patch.object(w, "_watchdog_alert"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def registry_campaign(self, name: str, declared: int) -> DropCampaign:
+        campaign = _campaign(name)
+        campaign.source, campaign.timestamp_source, campaign.declared_drop_count = "external_registry", "registry", declared
+        campaign.ends_at, campaign.starts_at = self.end, datetime.now(UTC) - timedelta(days=1)
+        campaign.required_minutes = campaign.progress_minutes = 0
+        campaign.drops = []
+        return campaign
+
+    def feed(self, minutes: int, *, signal=None) -> None:
+        for _ in range(minutes):
+            self.clock.now += 60
+            self.window._feed_unreconciled_heartbeat(self.snap.id, "MARVEL SNAP", self.CHANNEL, signal)
+
+    def ribbon_of(self, game: str) -> str:
+        grid = self.window.dashboard_games_grid
+        for index in range(grid.count()):
+            widget = grid.itemAt(index).widget()
+            if isinstance(widget, ui.GameCard) and widget.game_label == game:
+                return widget._ribbon[0]
+        raise AssertionError(f"no card for {game}")
+
+    # ---------------------------------------------------------------- the monitor is fed
+    def test_a_heartbeat_with_no_matching_campaign_now_feeds_the_stall_monitor(self):
+        """The bug: that branch only logged, so the monitor never saw the campaign and never gave up."""
+        w = self.window
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        future.set_result((True, [], None, None))  # ok, nothing reconciled, no CurrentDrop
+        w._heartbeat_future = future
+        w._heartbeat_pending_channel = self.CHANNEL
+        w._heartbeat_pending_campaign_id = self.snap.id
+        w._heartbeat_pending_game_name = "MARVEL SNAP"
+
+        w._poll_heartbeat_future()
+
+        self.assertEqual(w._farm_health._key, (self.snap.id, self.CHANNEL))
+
+    # ---------------------------------------------------------------- giving up
+    def test_nothing_is_decided_before_the_stall_timeout(self):
+        self.feed(14)
+
+        self.assertFalse(self.snap.all_drops_claimed)
+        self.assertEqual(len(self.window.client._completions), 0)
+
+    def test_after_the_whole_recovery_a_campaign_that_never_credited_is_kept_as_finished(self):
+        w = self.window
+
+        self.feed(32)  # restart at 6 min, other channel at 15, give up at 30
+
+        self.assertTrue(self.snap.all_drops_claimed)
+        self.assertTrue(w._campaign_on_hold(self.snap.id))
+        self.assertTrue(w.client._completions.is_completed("MARVEL SNAP", ends_at=self.end, drops=3))
+        self.assertIn("MARVEL SNAP", self.log_text())
+        self.assertIn("sem nenhum crédito", self.log_text())
+
+    def test_the_card_says_finished_at_once_and_the_farm_goes_to_another_game(self):
+        w = self.window
+        w._sticky_campaign_id = self.snap.id
+
+        self.feed(32)
+
+        self.assertEqual(self.ribbon_of("MARVEL SNAP"), "CONCLUÍDO")
+        self.assertEqual(w._pick_farm_decision().campaign.game_name, "Other Game")
+
+    def test_it_is_kept_across_a_restart_so_the_game_does_not_come_back_as_new(self):
+        self.feed(32)
+        self.window.client._completions.save()
+        from twitch_drop_farmer.completions import CompletionMemory
+
+        reloaded = CompletionMemory(Path(tc.COMPLETED_CAMPAIGNS_FILE))
+
+        self.assertTrue(reloaded.is_completed("MARVEL SNAP", ends_at=self.end, drops=3))
+
+    def test_when_the_inventory_itself_did_not_answer_nothing_is_concluded(self):
+        with patch.object(self.window.client, "inventory_recently_ok", return_value=False):
+            self.feed(40)
+
+        self.assertIsNone(self.window._farm_health._key)
+        self.assertFalse(self.snap.all_drops_claimed)
+
+    def test_credit_that_twitch_itself_reports_is_not_a_stall(self):
+        w = self.window
+        for minute in range(1, 41):
+            self.clock.now += 60
+            w._feed_unreconciled_heartbeat(self.snap.id, "MARVEL SNAP", self.CHANNEL,
+                                           {"drop_id": "d1", "current_minutes": minute})
+
+        self.assertFalse(self.snap.all_drops_claimed)
+        self.assertFalse(w._campaign_on_hold(self.snap.id))
+
+    def test_a_real_campaign_that_stalls_is_held_back_but_never_called_finished(self):
+        w = self.window
+        real = _campaign("Real Game")
+        real.progress_minutes = 50  # the Inventory has shown it: it is not a registry ghost
+        real.timestamp_source = "campaign"  # a real end date, so only "it is not a registry ghost" can stop the marking
+        w.latest_snapshot = FarmSnapshot(campaigns=[real], decisions=[_decision(real)], available_games=[], available_channels=[])
+
+        for _ in range(35):
+            self.clock.now += 60
+            w._watch_farm_health(real.id, "Real Game", "somechan", 50)
+
+        self.assertTrue(w._campaign_on_hold(real.id))
+        self.assertFalse(real.all_drops_claimed)
+        self.assertEqual(len(w.client._completions), 0)
+
+    def test_a_campaign_with_no_real_end_date_is_only_held_not_remembered(self):
+        self.snap.timestamp_source = ""  # an invented window could hide the wrong campaign later
+        self.feed(32)
+
+        self.assertTrue(self.window._campaign_on_hold(self.snap.id))
+        self.assertFalse(self.snap.all_drops_claimed)
+        self.assertEqual(len(self.window.client._completions), 0)
+
+    def test_the_message_exists_in_both_languages(self):
+        for language in ("pt_PT", "en"):
+            self.window.config.language = language
+            text = self.window._t("campaign_no_credit", game="MARVEL SNAP", minutes=30)
+            self.assertIn("MARVEL SNAP", text)
+        self.window.config.language = "pt_PT"
+
+    # ---------------------------------------------------------------- "try again"
+    def test_refreshing_the_dashboard_retries_what_was_only_inferred(self):
+        w = self.window
+        self.feed(32)
+        w.client._completions.record("Seen Game", ends_at=self.end, drops=2, reason="completed")
+
+        with patch.object(w, "_do_dashboard_full_scan"):
+            w.btn_dashboard_refresh.click()
+
+        self.assertFalse(w.client._completions.is_completed("MARVEL SNAP", ends_at=self.end, drops=3))
+        self.assertTrue(w.client._completions.is_completed("Seen Game", ends_at=self.end, drops=2))
+        self.assertIn("1 campanha(s)", self.log_text())
 
 
 class TestDashboardHeader(_WindowCase):

@@ -282,6 +282,17 @@ class FarmEngine:
         self.background_ttl_sec = float(profile.background_ttl_sec)
         logger.info(f"FarmEngine com o perfil de energia: {profile.name}")
 
+    def _note_completed(self, campaign: DropCampaign) -> None:
+        """Remember a campaign seen finished, so it stays finished after Twitch stops listing it.
+
+        A registry campaign is only ever marked from what was remembered, never the other way round.
+        """
+        if campaign.source == "external_registry":
+            return
+        remember = getattr(self.client, "remember_completed", None)
+        if callable(remember):
+            remember(campaign)
+
     def set_preferred_game(self, game_name: str) -> None:
         """The game the farm was last on. Its channels are looked up in the first poll, so it can be
         chosen straight away instead of the game the sort order happens to put first."""
@@ -358,6 +369,10 @@ class FarmEngine:
         apply_registry_rewards = getattr(self.client, "apply_registry_rewards", None)
         if callable(apply_registry_rewards):
             apply_registry_rewards(campaigns)
+        # A campaign the app saw finished comes back from the registry as a new one: mark it again.
+        apply_completions = getattr(self.client, "apply_completions", None)
+        if callable(apply_completions):
+            apply_completions(campaigns)
         available_games = sorted({campaign.game_name for campaign in campaigns}, key=str.casefold)
         available_channels: dict[str, ChannelOption] = {}
         decisions: list[FarmDecision] = []
@@ -388,6 +403,7 @@ class FarmEngine:
                 continue
 
             if campaign.all_drops_claimed:
+                self._note_completed(campaign)
                 # Raise completion alert if enabled
                 if self.config.alert_farm_complete:
                     self.alert_manager.raise_alert(
@@ -417,6 +433,7 @@ class FarmEngine:
                 continue
 
             if campaign.required_minutes > 0 and campaign.remaining_minutes <= 0:
+                self._note_completed(campaign)
                 decisions.append(
                     FarmDecision(
                         campaign=campaign,

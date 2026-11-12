@@ -41,6 +41,7 @@ class _ClientCase(unittest.TestCase):
             ("COOKIE_FILE", base / "cookies.json"),
             ("SESSION_FILE", base / "session.json"),
             ("CAMPAIGN_CACHE_FILE", base / "campaign_cache.json"),
+            ("COMPLETED_CAMPAIGNS_FILE", base / "completed_campaigns.json"),
         ):
             patcher = patch.object(tc, name, value)
             patcher.start()

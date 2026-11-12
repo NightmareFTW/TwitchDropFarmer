@@ -30,6 +30,7 @@ class DropCampaign:
     timestamps_are_synthetic: bool = False
     timestamp_source: str = ""  # "campaign" | "drop" | "synthetic"
     source: str = ""  # private diagnostic metadata only; not shown in the UI
+    declared_drop_count: int = 0  # registry campaigns: how many drops the card says (their detail is unknown)
 
     @property
     def completion(self) -> float:
