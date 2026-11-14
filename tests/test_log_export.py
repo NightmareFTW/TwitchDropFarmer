@@ -119,7 +119,9 @@ class TestSaveLogButton(unittest.TestCase):
 
         header = "\n".join(MainWindow._log_report_header(fake))
 
-        self.assertIn("Twitch Drop Farmer 2.", header)
+        from twitch_drop_farmer import __version__
+
+        self.assertIn(f"Twitch Drop Farmer {__version__}", header)
         self.assertIn("Farming: running", header)
         self.assertIn("MARVEL SNAP", header)
         self.assertIn("somechannel", header)

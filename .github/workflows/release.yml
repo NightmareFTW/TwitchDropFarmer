@@ -38,9 +38,19 @@ jobs:
           name: TwitchDropFarmer-win64
           path: dist/TwitchDropFarmer-win64.zip
 
+      - name: Pick the release notes
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          # docs/releases/<tag>.md is the release text; without it GitHub generates one.
+          $file = "docs/releases/${{ github.ref_name }}.md"
+          if (Test-Path $file) { "path=$file" >> $env:GITHUB_OUTPUT } else { "path=" >> $env:GITHUB_OUTPUT }
+
       - name: Publish GitHub release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/TwitchDropFarmer-win64.zip
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}

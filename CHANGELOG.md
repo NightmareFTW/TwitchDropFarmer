@@ -6,6 +6,43 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-14
+
+Primeira release pública desde a 2.2.39. Resume o que mudou nas versões 2.2.40 a 2.2.72, cujo detalhe
+está nas entradas abaixo. As definições existentes continuam a ser lidas; as opções novas arrancam com os
+valores por omissão.
+
+### Destaques
+
+- **Um farm que se mantém e recupera sozinho.** Deixa de saltar de jogo em jogo; segue o fluxo do canal em
+  segundo plano para a Twitch creditar os minutos; um monitor detecta campanhas que não creditam, reinicia, muda
+  de canal e, no limite, desiste. Lembra-se das campanhas já concluídas, do último jogo e, ao abrir, retoma o
+  farm que estava a correr.
+- **Muito menos pedidos à Twitch.** Os perfis de energia (Económico, Balanceado, Agressivo) fazem mesmo o que
+  dizem, e as consultas que a Twitch rejeita com «failed integrity check» já não se repetem a cada ciclo.
+- **Funciona com a verificação de integridade.** O registo público é a alternativa quando a Twitch recusa o
+  dashboard, e os drops que exigem subscrição são reconhecidos e podem ser ocultados.
+- **Iniciar sessão sem esforço**: um botão com uma janela que explica cada passo, e a opção de lembrar a
+  sessão neste computador.
+- **Dashboard** com fitas de estado em cada cartão (`FARMING`, `LIVE`, `CONCLUÍDO`, `SEM CANAIS`...), filtros
+  para ocultar jogos só de subscrição ou inactivos, capas fiáveis e uma mensagem de espera para um jogo que
+  acabou de começar.
+- **Alertas que funcionam**: «Drop pronto», campanha a expirar, farm sem progresso, canal desligado, sessão
+  inválida.
+- **Redimir drops automaticamente vem desligado**, com um «?» a explicar porquê: a Twitch costuma rejeitar o
+  *claim* feito pela app, e cada tentativa falhada só atrai atenção.
+- **Guardar log** grava um ficheiro com tokens e cookies removidos, e o diagnóstico do sistema passou a dizer
+  a verdade.
+- **Definições guardadas automaticamente**, botões auditados um a um, e texto que já não é cortado.
+- **Projecto**: README em PT-PT e EN, capturas de ecrã com dados fictícios, mais de 600 testes automáticos
+  (incluindo um que impede dados pessoais no repositório) e um fluxo de testes no GitHub Actions.
+
+### Conhecido
+
+- O claim feito pela app é frequentemente rejeitado pela Twitch: reivindica em twitch.tv/drops/inventory.
+- «Procurar actualizações» só avisa que há uma versão nova; não a instala.
+- O pacote Windows não está assinado, por isso o SmartScreen pode avisar na primeira execução.
+
 ## [2.2.72] - 2026-11-14
 
 ### Fixed

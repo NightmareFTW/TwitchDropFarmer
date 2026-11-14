@@ -253,7 +253,7 @@ class TestAccountButtons(_WindowCase):
         self.window.btn_about.click()
 
         self.msgbox.about.assert_called_once()
-        self.assertTrue(any("2." in str(arg) for arg in self.msgbox.about.call_args.args))
+        self.assertTrue(any(__import__("twitch_drop_farmer").__version__ in str(arg) for arg in self.msgbox.about.call_args.args))
 
 
 class TestFilterButtons(_WindowCase):
