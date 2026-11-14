@@ -216,7 +216,7 @@ class TestAutoClaimBackoff(unittest.TestCase):
 
     def test_the_setting_explains_the_risk_in_both_languages(self):
         for language in ("pt_PT", "en"):
-            for key in ("auto_claim_tooltip", "auto_claim_gave_up"):
+            for key in ("auto_claim_help", "auto_claim_gave_up"):
                 self.assertIn(key, TRANSLATIONS[language])
 
 

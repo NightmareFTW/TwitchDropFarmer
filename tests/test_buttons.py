@@ -938,7 +938,11 @@ class TestLoginButton(_WindowCase):
 
     # ---------------------------------------------------------------- the button itself
     def test_the_button_sits_in_the_free_corner_next_to_the_right_tabs(self):
-        self.assertIs(self.window.tabs_right.cornerWidget(Qt.Corner.TopRightCorner), self.window.btn_smart_login)
+        w = self.window
+        corner = w.tabs_right.cornerWidget(Qt.Corner.TopRightCorner)
+
+        self.assertIs(corner, w.login_corner)  # a wrapper that centres the button in the tab bar's height
+        self.assertIs(w.btn_smart_login.parentWidget(), corner)
 
     def test_the_button_says_log_in_and_then_who_is_signed_in(self):
         w = self.window
@@ -1387,6 +1391,38 @@ class TestResumeLastGame(_WindowCase):
 
         self.assertEqual(w.config.last_farm_game, "Albion Online")
         self.assertEqual(self.saved_config()["last_farm_game"], "Albion Online")
+
+    def test_the_idle_heartbeats_of_the_campaign_that_was_left_do_not_count_for_the_new_one(self):
+        """Seen in the 2.2.66 log: two idle heartbeats on one campaign, a switch, one idle heartbeat on the
+        next, and the farm forced a full refresh as if it had 3 in a row on it."""
+        w = self.window
+        sea, albion = _campaign("Sea of Thieves"), _campaign("Albion Online")
+        w._note_target_switch(_decision(sea))
+        w._heartbeat_no_progress_cycles = 2
+
+        w._note_target_switch(_decision(albion))
+
+        self.assertEqual(w._heartbeat_no_progress_cycles, 0)
+
+    def test_the_count_is_kept_while_the_same_campaign_goes_on(self):
+        """Without a switch the count must keep growing, or the 3-in-a-row refresh could never happen."""
+        w = self.window
+        sea = _campaign("Sea of Thieves")
+        w._note_target_switch(_decision(sea))
+        w._heartbeat_no_progress_cycles = 2
+
+        w._note_target_switch(_decision(sea))  # the same campaign again, as on every cycle
+
+        self.assertEqual(w._heartbeat_no_progress_cycles, 2)
+
+    def test_the_first_target_of_a_farm_starts_the_count_from_zero(self):
+        w = self.window
+        w._streamless_campaign_id, w._streamless_game = "", ""
+        w._heartbeat_no_progress_cycles = 2
+
+        w._note_target_switch(_decision(_campaign("Sea of Thieves")))
+
+        self.assertEqual(w._heartbeat_no_progress_cycles, 0)
 
     def test_just_displaying_the_default_does_not_overwrite_what_is_remembered(self):
         """At start-up the window shows the default pick before any farming: that must not be remembered."""
@@ -2041,6 +2077,63 @@ class TestButtonsAreNotClipped(_WindowCase):
 
         self.assertGreaterEqual(w.btn_smart_login.height(), w.btn_smart_login.sizeHint().height())
 
+    def settle(self) -> None:
+        """A text change reaches the tab widget through two posted layout requests (button, then wrapper)."""
+        for _ in range(4):
+            self.app.processEvents()
+
+    def corner_geometry(self) -> dict[str, int]:
+        from PySide6.QtCore import QPoint
+
+        w = self.window
+        button, bar = w.btn_smart_login, w.tabs_right.tabBar()
+        top = button.mapTo(w.tabs_right, QPoint(0, 0)).y()
+        bar_top = bar.mapTo(w.tabs_right, QPoint(0, 0)).y()
+        return {
+            "above": bar_top - top,  # > 0: pokes out above the tab bar
+            "below": top + button.height() - (bar_top + bar.height()),  # > 0: pokes out below, onto the pane's frame
+            "right_edge_gap": w.tabs_right.width() - (button.mapTo(w.tabs_right, QPoint(0, 0)).x() + button.width()),
+        }
+
+    def test_the_signed_in_button_stays_inside_the_tab_bar_and_off_the_frame_lines(self):
+        """It was taller than the bar: it stuck out above and below, over the top line of the pane."""
+        self.settle()
+
+        geometry = self.corner_geometry()
+
+        self.assertLessEqual(geometry["above"], 0, geometry)
+        self.assertLessEqual(geometry["below"], 0, geometry)
+        self.assertGreaterEqual(geometry["right_edge_gap"], 0, geometry)
+
+    def test_the_whole_name_is_visible(self):
+        self.settle()
+        w = self.window
+
+        self.assertGreaterEqual(w.btn_smart_login.width(), w.btn_smart_login.sizeHint().width())
+        self.assertGreaterEqual(w.login_corner.width(), w.btn_smart_login.width())
+
+    def test_the_button_stays_inside_the_bar_in_both_states_and_both_languages(self):
+        w = self.window
+        for language in ("en", "pt_PT"):
+            w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+            w._retranslate_ui()
+            for logged in (True, False):
+                w.client.login_state = (
+                    tc.LoginState(oauth_token="k" * 30, login_name="example_user", token_valid=True) if logged else tc.LoginState()
+                )
+                w._update_auth_status()
+                self.settle()
+                geometry = self.corner_geometry()
+                self.assertLessEqual(geometry["above"], 0, (language, logged, geometry))
+                self.assertLessEqual(geometry["below"], 0, (language, logged, geometry))
+
+    def test_the_slimmer_button_is_still_as_tall_as_its_text_needs(self):
+        """Fitting the bar must not bring the clipping back (the bottom of the letters)."""
+        self.settle()
+        w = self.window
+
+        self.assertGreaterEqual(w.btn_smart_login.height(), w.btn_smart_login.sizeHint().height())
+
     def test_it_still_holds_with_a_bigger_font_as_on_another_machine(self):
         """The height a button needs depends on the font of the machine; a fixed number would clip it there.
 
@@ -2068,9 +2161,12 @@ class TestButtonsAreNotClipped(_WindowCase):
         self.app.processEvents()
         self.assertGreater(w.btn_smart_login.sizeHint().height(), needed_before, "the simulated font changed nothing")
         w._update_auth_status()  # the app does this on every refresh
-        self.app.processEvents()
+        self.settle()
 
         self.assertEqual(self.clipped_buttons(), [])
+        geometry = self.corner_geometry()
+        self.assertLessEqual(geometry["above"], 0, geometry)  # the bar grows with the font, the button follows
+        self.assertLessEqual(geometry["below"], 0, geometry)
 
     def test_it_holds_in_english_and_in_every_theme(self):
         w = self.window
@@ -2105,6 +2201,81 @@ class TestNoButtonIsLeftOut(_WindowCase):
         missing = sorted(name for name in names if name not in source)
 
         self.assertEqual(missing, [], "buttons without a test in test_buttons.py")
+
+
+class TestAutoClaimIsOffAndExplained(_WindowCase):
+    """"Redeem drops automatically" starts off, and a "?" next to it says why and what it can cause."""
+
+    def test_a_new_install_starts_with_it_off(self):
+        self.assertIs(config_module.AppConfig().auto_claim_drops, False)
+
+    def test_a_fresh_window_shows_it_unchecked(self):
+        w = self.window  # the harness starts with no config file: this is what a new install sees
+
+        self.assertFalse(w.auto_claim_checkbox.isChecked())
+        self.assertFalse(w.config.auto_claim_drops)
+
+    def test_what_the_user_chose_before_is_kept(self):
+        """Only the default changes: someone who turned it on on purpose keeps it on."""
+        self.assertTrue(config_module.AppConfig(auto_claim_drops=True).auto_claim_drops)
+
+    def test_the_question_mark_follows_the_text_on_the_same_row(self):
+        w = self.window
+        w.show()
+        self.app.processEvents()
+
+        box, icon = w.auto_claim_checkbox.geometry(), w.auto_claim_help_icon.geometry()
+
+        self.assertEqual(w.auto_claim_help_icon.text(), "?")
+        self.assertEqual(w.auto_claim_help_icon.objectName(), "HelpIcon")
+        self.assertIs(w.auto_claim_help_icon.parentWidget(), w.auto_claim_checkbox.parentWidget())
+        self.assertGreaterEqual(icon.left(), box.right())  # after the text, not on top of it
+        self.assertLess(abs(icon.center().y() - box.center().y()), 6)  # and level with it
+
+    def test_the_explanation_covers_the_reason_and_the_problems_in_both_languages(self):
+        w = self.window
+        expected = {
+            "pt_PT": ("desligado", "integrity", "tentar até 3 vezes", "automação", "expirar", "twitch.tv/drops/inventory"),
+            "en": ("off by default", "integrity", "up to 3 times", "automation", "expire", "twitch.tv/drops/inventory"),
+        }
+        for language, phrases in expected.items():
+            w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+            w._retranslate_ui()
+            tip = " ".join(w.auto_claim_help_icon.toolTip().split())  # the wrapping must not matter
+            for phrase in phrases:
+                self.assertIn(phrase, tip, (language, phrase))
+
+    def test_the_numbers_in_the_explanation_come_from_the_real_limits(self):
+        w = self.window
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        with patch.object(ui, "AUTO_CLAIM_MAX_ATTEMPTS", 7), patch.object(ui, "AUTO_CLAIM_RETRY_SEC", 1200):
+            w._retranslate_ui()
+            tip = " ".join(w.auto_claim_help_icon.toolTip().split())
+        w._retranslate_ui()
+
+        self.assertIn("up to 7 times", tip)
+        self.assertIn("the first one 20 min", tip)
+
+    def test_the_tooltip_is_wrapped_and_has_no_leftover_placeholder(self):
+        w = self.window
+        for language in ("pt_PT", "en"):
+            w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+            w._retranslate_ui()
+            tip = w.auto_claim_help_icon.toolTip()
+            self.assertLessEqual(max(len(line) for line in tip.split("\n")), 76, language)
+            self.assertNotIn("{", tip, language)
+
+    def test_the_text_keeps_the_pt_pt_wording_rules(self):
+        text = ui.TRANSLATIONS["pt_PT"]["auto_claim_help"].lower()
+
+        self.assertNotIn("completado", text)
+        self.assertIn("afecte", text)  # pre-1990 spelling ("afecte", not "afete")
+        self.assertNotIn("afete", text)
+
+    def test_the_old_checkbox_tooltip_is_gone_so_the_explanation_lives_in_one_place(self):
+        self.assertNotIn("auto_claim_tooltip", ui.TRANSLATIONS["pt_PT"])
+        self.assertNotIn("auto_claim_tooltip", ui.TRANSLATIONS["en"])
+        self.assertEqual(self.window.auto_claim_checkbox.toolTip(), "")
 
 
 if __name__ == "__main__":

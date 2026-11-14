@@ -6,6 +6,32 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.69] - 2026-11-14
+
+### Changed
+
+- **O botão «Sessão: …» já não fica por cima das linhas do layout.** Era mais alto do que a barra dos
+  separadores (29 px numa barra de 27 px) e invadia, por cima e por baixo, a linha de topo do painel.
+  Passou a ter um *padding* mais fino e a ficar centrado na altura da barra (dentro de um contentor),
+  seja qual for o tipo de letra da máquina. O texto continua sem ser cortado.
+- **«Redimir drops automaticamente» tem agora um «?» ao lado do texto** que explica porque é que vem
+  desligado e que problemas pode causar se for ligado: a Twitch costuma rejeitar o *claim* feito pela
+  app («failed integrity check») e o mesmo clique no site ou no telemóvel funciona; falha quase sempre
+  e o drop fica por reivindicar (a app tenta até 3 vezes, com pausas crescentes, e desiste); cada
+  tentativa falhada é uma rajada de pedidos que a Twitch pode ver como automação; e pode dar a ideia de
+  que o drop está tratado quando não está. Os números do texto vêm das constantes reais. O antigo
+  *tooltip* da caixa foi substituído por este.
+- A opção continua **desligada por omissão** (já estava na configuração); fica agora garantido por
+  testes. Quem a ligou de propósito mantém-na ligada.
+
+### Fixed
+
+- **Contagem de «sem avanço» arrastada entre campanhas.** O contador de heartbeats sem progresso (ao 3.º
+  seguido força-se uma actualização completa) não era reposto ao mudar de campanha, e a campanha nova
+  herdava os heartbeats parados da anterior: no log da 2.2.66, um único heartbeat parado depois de uma
+  mudança já forçava a actualização completa. Passa a recomeçar do zero em cada campanha; três
+  heartbeats parados seguidos na mesma campanha continuam a forçá-la.
+
 ## [2.2.68] - 2026-11-14
 
 Auditoria completa (logs reais, análise estática, *fuzz* e simulação longa). O que se encontrou e corrigiu:

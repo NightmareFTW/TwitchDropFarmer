@@ -128,16 +128,18 @@ def _registry_campaign(game: str, campaign_id: str):
 
 
 class TestInventoryLag(unittest.TestCase):
-    def _beat(self, *, inventory: int, current_drop: int) -> MagicMock:
+    def _beat(self, *, inventory: int, current_drop: int, fake: MagicMock | None = None) -> MagicMock:
         """One heartbeat whose Inventory still says ``inventory`` while CurrentDrop says ``current_drop``."""
-        fake = MagicMock()
+        keep_count = fake is not None
+        fake = fake if fake is not None else MagicMock()
         future = MagicMock()
         future.done.return_value = True
         reconciled = MagicMock(progress_minutes=inventory, required_minutes=360, id="cid")
         future.result.return_value = (True, [], reconciled, {"drop_id": "d1", "current_minutes": current_drop})
         fake._heartbeat_future = future
         fake._heartbeat_pending_campaign_id = "cid"
-        fake._heartbeat_no_progress_cycles = 0
+        if not keep_count:
+            fake._heartbeat_no_progress_cycles = 0
         fake._apply_reconciled_campaign_progress.return_value = (inventory, "cid")
         MainWindow._poll_heartbeat_future(fake)
         return fake
@@ -165,6 +167,42 @@ class TestInventoryLag(unittest.TestCase):
 
         fake.refresh_snapshot.assert_not_called()
         self.assertEqual(fake._heartbeat_no_progress_cycles, 1)
+
+    def _fake_on_campaign(self, campaign_id: str, game: str, idle_beats: int) -> MagicMock:
+        fake = MagicMock()
+        fake._streamless_campaign_id, fake._streamless_game = campaign_id, game
+        fake._forced_farm_campaign_id, fake._forced_farm_game = "", ""
+        fake.latest_snapshot = None
+        fake._heartbeat_no_progress_cycles = idle_beats
+        return fake
+
+    def _switch_to(self, fake: MagicMock, campaign_id: str, game: str) -> None:
+        from twitch_drop_farmer.models import FarmDecision
+
+        decision = MagicMock(spec=FarmDecision)
+        decision.campaign = MagicMock(id=campaign_id, game_name=game)
+        MainWindow._note_target_switch(fake, decision)
+
+    def test_idle_heartbeats_of_the_campaign_that_was_left_do_not_bring_the_refresh_forward_on_the_next(self):
+        """Seen in the 2.2.66 log: 2 idle heartbeats on one campaign, a switch, 1 idle heartbeat on the next, and
+        the farm forced a full refresh as if the new campaign had 3 in a row."""
+        fake = self._fake_on_campaign("old", "Old Game", idle_beats=2)
+        self._switch_to(fake, "new", "New Game")
+
+        self._beat(inventory=40, current_drop=40, fake=fake)
+
+        fake.refresh_snapshot.assert_not_called()
+        self.assertEqual(fake._heartbeat_no_progress_cycles, 1)
+
+    def test_three_idle_heartbeats_on_the_same_campaign_still_force_the_refresh(self):
+        """The safeguard itself must keep working: 3 in a row, no switch in between."""
+        fake = self._fake_on_campaign("same", "Same Game", idle_beats=0)
+
+        for _ in range(3):
+            self._switch_to(fake, "same", "Same Game")  # the app notes the target on every cycle
+            self._beat(inventory=40, current_drop=40, fake=fake)
+
+        fake.refresh_snapshot.assert_called_once_with(force=True)
 
 
 if __name__ == "__main__":

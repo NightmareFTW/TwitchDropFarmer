@@ -1139,7 +1139,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_none": "Nenhum drop pronto para redimir.",
         "redeem_auto_done": "Auto-redimir: {count} botão(ões) de reivindicar clicado(s) (a Twitch pode rejeitar o pedido; confirma no inventário).",
         "auto_claim_gave_up": "Auto-redimir desistiu de «{drop}» ({game}) ao fim de {attempts} tentativas: a Twitch rejeita o claim feito pela app. Reivindica em twitch.tv/drops/inventory.",
-        "auto_claim_tooltip": "A Twitch costuma rejeitar o claim feito por esta app (verificação de integridade), e cada tentativa falhada é um conjunto de pedidos suspeitos. O mais fiável é deixar isto desligado e reivindicar no site ou no telemóvel quando o aviso «Drop pronto» aparecer.",
+        "auto_claim_help": "Porque é que isto vem desligado por omissão\n\nReivindicar um drop a partir desta app é um pedido que a Twitch costuma rejeitar com «failed integrity check» (a verificação anti-automação). O mesmo clique, feito no site ou no telemóvel, funciona.\n\nProblemas que pode causar se o ligares:\n• Falha quase sempre e o drop fica por reivindicar. A app volta a tentar até {attempts} vezes, com pausas cada vez maiores (a primeira de {minutes} min), e depois desiste e avisa no log.\n• Cada tentativa falhada é uma rajada de pedidos que a Twitch vê como automação; não há garantia de que isso não afecte a conta.\n• Dá a ideia de que o drop está tratado quando não está: se ninguém o reivindicar a tempo, pode expirar.\n\nO mais fiável é deixar desligado e reivindicar em twitch.tv/drops/inventory (ou no telemóvel) quando o aviso «Drop pronto» aparecer.",
         "watchdog_title": "Farm sem progresso",
         "watchdog_restart": "{game}: {minutes} min sem progresso em {channel}; a reiniciar a vigilância do canal.",
         "watchdog_switch_channel": "{game}: {minutes} min sem progresso em {channel}; a mudar para outro canal (este fica de parte {penalty} min).",
@@ -1547,7 +1547,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "redeem_none": "No drops are ready to redeem.",
         "redeem_auto_done": "Auto-redeem: {count} claim button(s) clicked (Twitch may reject the request; check your inventory).",
         "auto_claim_gave_up": "Auto-redeem gave up on \"{drop}\" ({game}) after {attempts} attempts: Twitch rejects claims made by the app. Claim it at twitch.tv/drops/inventory.",
-        "auto_claim_tooltip": "Twitch usually rejects claims made by this app (integrity check), and every failed attempt is a burst of suspicious requests. The most reliable choice is to leave this off and claim on the website or your phone when the \"Drop ready\" notice appears.",
+        "auto_claim_help": "Why this is off by default\n\nClaiming a drop from this app is a request Twitch usually rejects with \"failed integrity check\" (its anti-automation check). The same click, made on the website or on your phone, works.\n\nProblems it can cause if you turn it on:\n• It almost always fails and the drop stays unclaimed. The app retries up to {attempts} times, with longer and longer pauses (the first one {minutes} min), and then gives up and says so in the log.\n• Every failed attempt is a burst of requests that Twitch sees as automation; there is no guarantee it cannot affect the account.\n• It gives the impression that the drop is taken care of when it is not: if nobody claims it in time, it can expire.\n\nThe most reliable choice is to leave it off and claim at twitch.tv/drops/inventory (or on your phone) when the \"Drop ready\" notice appears.",
         "watchdog_title": "Farm not progressing",
         "watchdog_restart": "{game}: {minutes} min without progress on {channel}; restarting the channel watch.",
         "watchdog_switch_channel": "{game}: {minutes} min without progress on {channel}; switching to another channel (this one is skipped for {penalty} min).",
@@ -2258,7 +2258,16 @@ class MainWindow(QMainWindow):
         
         self.auto_claim_checkbox = QCheckBox()
         self.auto_claim_checkbox.setChecked(bool(self.config.auto_claim_drops))
-        basic_layout.addWidget(self.auto_claim_checkbox)
+        # Off unless the user turns it on: Twitch usually rejects claims made by the app. The "?" says why.
+        self.auto_claim_help_icon = QLabel("?")
+        self.auto_claim_help_icon.setObjectName("HelpIcon")
+        self.auto_claim_help_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.auto_claim_help_icon.setFixedSize(18, 18)
+        auto_claim_row = QHBoxLayout()
+        auto_claim_row.addWidget(self.auto_claim_checkbox)
+        auto_claim_row.addWidget(self.auto_claim_help_icon)
+        auto_claim_row.addStretch(1)
+        basic_layout.addLayout(auto_claim_row)
         self.resume_checkbox = QCheckBox()
         self.resume_checkbox.setChecked(bool(self.config.resume_farming_on_start))
         basic_layout.addWidget(self.resume_checkbox)
@@ -2876,7 +2885,16 @@ class MainWindow(QMainWindow):
         # The free corner next to the tabs: one click signs in (or opens the window that explains how).
         self.btn_smart_login = QPushButton()
         self.btn_smart_login.clicked.connect(self.handle_smart_login)
-        self.tabs_right.setCornerWidget(self.btn_smart_login, Qt.Corner.TopRightCorner)
+        # A themed button (7px of padding) is a little taller than the tab bar, so it poked out above and
+        # below it and sat on top of the frame lines of the pane. A slimmer padding keeps it inside the bar;
+        # the wrapper centres it vertically in whatever height the bar has on this machine.
+        self.btn_smart_login.setStyleSheet("padding: 3px 12px;")
+        self.login_corner = QWidget()
+        corner_layout = QHBoxLayout(self.login_corner)
+        corner_layout.setContentsMargins(8, 0, 2, 0)
+        corner_layout.setSpacing(0)
+        corner_layout.addWidget(self.btn_smart_login, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.tabs_right.setCornerWidget(self.login_corner, Qt.Corner.TopRightCorner)
         vbox.addWidget(self.tabs_right, 3)
         log_row = QHBoxLayout()
         log_row.addWidget(self.log_label)
@@ -3268,7 +3286,11 @@ class MainWindow(QMainWindow):
         self.theme_label.setText(self._t("theme_label"))
         self.sort_label.setText(self._t("sort_label"))
         self.auto_claim_checkbox.setText(self._t("auto_claim_checkbox"))
-        self.auto_claim_checkbox.setToolTip(self._t("auto_claim_tooltip"))
+        self.auto_claim_help_icon.setToolTip(
+            _wrap_tooltip(
+                self._t("auto_claim_help", attempts=AUTO_CLAIM_MAX_ATTEMPTS, minutes=AUTO_CLAIM_RETRY_SEC // 60)
+            )
+        )
         self.resume_checkbox.setText(self._t("resume_checkbox"))
         self.resume_checkbox.setToolTip(self._t("resume_tooltip"))
         self._repopulate_language_picker()
@@ -4838,6 +4860,10 @@ class MainWindow(QMainWindow):
         previous_id, previous_game = self._streamless_campaign_id, self._streamless_game
         self._streamless_campaign_id, self._streamless_game = campaign.id, campaign.game_name
         self._remember_farm_game(campaign.game_name)
+        if previous_id != campaign.id:
+            # "No progress" was counted on the campaign that was left. Carried over, the first idle
+            # heartbeat of the new one forced a full refresh long before it had its 3 of its own.
+            self._heartbeat_no_progress_cycles = 0
         if not previous_id or previous_id == campaign.id:
             return
         if self._forced_farm_campaign_id == campaign.id or self._forced_farm_game:
