@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.67] - 2026-11-14
+
+### Fixed
+
+- **«Drop completado!» passa a «todos os drops concluídos!»** no alerta «Campanha Concluída». A
+  palavra «completado» não se usa: diz-se «concluído» (ou «completo»). Um teste falha se a palavra
+  voltar a aparecer em qualquer ficheiro da app ou em qualquer tradução.
+
 ## [2.2.66] - 2026-11-12
 
 Da análise do log da noite: das 06:00 às 10:11 a farm esteve **mais de 4 horas** no MARVEL SNAP, uma

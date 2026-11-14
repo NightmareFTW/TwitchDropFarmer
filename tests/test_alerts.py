@@ -66,6 +66,57 @@ class TestExpiringAlertInTheEngine(unittest.TestCase):
         self.assertEqual(self.poll_times([[ended]]), [])
 
 
+class TestWording(unittest.TestCase):
+    """The user does not want "completado": say "concluído" (or "completo")."""
+
+    def test_the_campaign_finished_alert_says_concluido(self):
+        from twitch_drop_farmer.config import AppConfig
+        from twitch_drop_farmer.farmer import FarmEngine
+
+        manager = AlertManager(dedupe_window_sec=3600)
+        delivered: list[tuple[str, str]] = []
+        manager.register_callback(lambda alert: delivered.append((alert.title, alert.message)))
+        now = datetime.now(UTC)
+        finished = DropCampaign(
+            id="done", game_name="Sea of Thieves", title="t", starts_at=now - timedelta(days=3), ends_at=now + timedelta(days=1),
+            status="ACTIVE", required_minutes=120, progress_minutes=120, all_drops_claimed=True, has_watchable_drops=True,
+            drops=[{"id": "d", "name": "r", "required_minutes": 120, "current_minutes": 120, "claimed": True}],
+        )
+        client = MagicMock()
+        client.consume_diagnostics.return_value = []
+        client.fetch_campaigns.return_value = [finished]
+        engine = FarmEngine(client, AppConfig(watchdog_enabled=False, alert_farm_complete=True))
+        engine.alert_manager = manager
+
+        engine.poll(force_campaigns=True)
+
+        self.assertEqual(len(delivered), 1)
+        title, message = delivered[0]
+        self.assertEqual(title, "Campanha Concluída")
+        self.assertIn("Sea of Thieves", message)
+        self.assertIn("concluídos", message)
+        self.assertNotIn("completad", (title + message).casefold())
+
+    def test_no_text_of_the_app_says_completado(self):
+        """Every .py of the app (what it shows, logs and sends), not just the strings someone remembered."""
+        from pathlib import Path
+
+        offenders = [
+            f"{path.name}:{number}"
+            for path in sorted((Path(__file__).resolve().parents[1] / "src").rglob("*.py"))
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if "completad" in line.casefold()
+        ]
+
+        self.assertEqual(offenders, [])
+
+    def test_no_translation_says_completado_in_either_language(self):
+        for language, table in TRANSLATIONS.items():
+            for key, text in table.items():
+                with self.subTest(language=language, key=key):
+                    self.assertNotIn("completad", str(text).casefold())
+
+
 class TestAlertDeduplication(unittest.TestCase):
     def test_an_identical_alert_is_delivered_once_per_window(self):
         manager = AlertManager(dedupe_window_sec=3600)

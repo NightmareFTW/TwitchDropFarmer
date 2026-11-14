@@ -410,7 +410,7 @@ class FarmEngine:
                         AlertType.FARM_COMPLETE,
                         AlertSeverity.INFO,
                         "Campanha Concluída",
-                        f"{campaign.game_name} - Drop completado!"
+                        f"{campaign.game_name} - todos os drops concluídos!"
                     )
                 decisions.append(
                     FarmDecision(
