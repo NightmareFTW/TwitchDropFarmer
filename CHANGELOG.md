@@ -8,6 +8,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [3.0.1] - 2026-11-14
 
+### Changed (licença)
+
+- **A licença passa de MIT para PolyForm Noncommercial 1.0.0**: o código continua público, mas não pode ser
+  usado para fins comerciais (vender, incluir num produto ou serviço pago, monetizar). Uso pessoal, estudo,
+  escolas, organizações sem fins lucrativos e instituições públicas continuam permitidos. O texto é o oficial
+  (conferido com duas fontes) e o `LICENSE` leva a linha `Required Notice` com o direito de autor. As versões
+  até à 3.0.0 foram publicadas sob a MIT e continuam sob ela para quem já as obteve.
+- **O pacote Windows passa a levar a licença**: o `.zip` da 3.0.0 não tinha nenhum ficheiro de licença. Agora
+  leva `LICENSE.txt` e `THIRD_PARTY_NOTICES.md` (as licenças das bibliotecas incluídas: Qt/PySide6 sob a LGPL,
+  requests, urllib3, certifi, etc.), e o fluxo de publicação falha se faltarem.
+
 ### Fixed
 
 - **Dois textos ficavam em português com a interface em inglês**: o texto de ajuda do campo de importação da

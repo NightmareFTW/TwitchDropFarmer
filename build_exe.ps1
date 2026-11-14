@@ -68,6 +68,11 @@ New-Item -ItemType Directory -Path $bundleAssetsDir -Force | Out-Null
 Copy-Item (Join-Path $assetsSource "icon.ico") (Join-Path $bundleAssetsDir "icon.ico") -Force
 Copy-Item (Join-Path $assetsSource "icon.png") (Join-Path $bundleAssetsDir "icon.png") -Force
 
+# The licence texts travel with the program: the zip used to have none, and the libraries inside it
+# (Qt under the LGPL, among others) ask for their notices to be passed on.
+Copy-Item (Join-Path $projectRoot "LICENSE") (Join-Path $bundleDir "LICENSE.txt") -Force
+Copy-Item (Join-Path $projectRoot "THIRD_PARTY_NOTICES.md") (Join-Path $bundleDir "THIRD_PARTY_NOTICES.md") -Force
+
 & tar.exe -a -c -f $archivePath -C $distDir "TwitchDropFarmer"
 
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archivePath)) {

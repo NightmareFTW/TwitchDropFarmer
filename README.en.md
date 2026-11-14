@@ -253,4 +253,18 @@ account. It is provided as is, without warranty, and all responsibility for its 
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+This project uses the **[PolyForm Noncommercial 1.0.0](LICENSE)** license: the code is public and you may use
+it, but **not for commercial purposes**. In short (what counts is the license text, in [LICENSE](LICENSE)):
+
+- **You may** use the app for yourself (as a hobby, for fun or to study), read the code, change it and share it,
+  as long as the sharing is non-commercial and includes the license and the `Required Notice` line of `LICENSE`.
+- **Schools, non-profit organizations, public and research institutions** may use it too.
+- **You may not** sell it, include it in a paid product or service, or use it to make money (for example,
+  offering drop farming as a service, or with ads or subscriptions).
+- **For any commercial use** a separate license is needed: contact the author through GitHub.
+
+This makes the app *source-available* rather than "open source" as the OSI defines it, which does not allow
+restrictions on commercial use. Versions published up to 3.0.0 used the MIT license and stay under it for anyone
+who already got them; from 3.0.1 on, PolyForm Noncommercial applies. The libraries in the package have their own
+licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). A license does not by itself stop misuse; it
+only gives the author a legal basis to act. This is not legal advice.

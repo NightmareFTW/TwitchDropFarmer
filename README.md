@@ -249,4 +249,18 @@ sem aviso, e a utilização de automação pode violar os termos de serviço da 
 
 ## Licença
 
-Licença MIT. Ver [LICENSE](LICENSE).
+Este projecto usa a licença **[PolyForm Noncommercial 1.0.0](LICENSE)**: o código é público e podes usá-lo, mas
+**não para fins comerciais**. Em resumo (o que vale é o texto da licença, em [LICENSE](LICENSE)):
+
+- **Podes** usar a aplicação para ti (por passatempo, diversão ou estudo), ler o código, alterá-lo e partilhá-lo,
+  desde que a partilha seja não comercial e inclua a licença e a linha `Required Notice` do `LICENSE`.
+- **Escolas, organizações sem fins lucrativos, instituições públicas** e de investigação também podem usá-la.
+- **Não podes** vendê-la, incluí-la num produto ou serviço pago, nem usá-la para ganhar dinheiro (por exemplo,
+  oferecer farm de drops como serviço, ou com publicidade ou subscrições).
+- **Para qualquer uso comercial** é preciso uma licença à parte: fala com o autor através do GitHub.
+
+Isto faz da aplicação *código visível* (*source-available*) e não «código aberto» no sentido da definição da OSI,
+que não admite restrições a fins comerciais. As versões publicadas até à 3.0.0 usavam a licença MIT e continuam
+sob ela para quem já as obteve; da 3.0.1 em diante vale a PolyForm Noncommercial. As bibliotecas incluídas no
+pacote têm as suas licenças, listadas em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Uma licença não
+impede por si só um mau uso; só dá ao autor base legal para agir. Isto não é aconselhamento jurídico.

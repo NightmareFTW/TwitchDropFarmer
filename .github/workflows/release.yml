@@ -40,7 +40,9 @@ jobs:
           foreach ($needed in @(
               "TwitchDropFarmer/TwitchDropFarmer.exe",
               "TwitchDropFarmer/_internal/twitch_drop_farmer/assets/icon.ico",
-              "TwitchDropFarmer/_internal/twitch_drop_farmer/assets/icon.png")) {
+              "TwitchDropFarmer/_internal/twitch_drop_farmer/assets/icon.png",
+              "TwitchDropFarmer/LICENSE.txt",
+              "TwitchDropFarmer/THIRD_PARTY_NOTICES.md")) {
             if ($listing -notcontains $needed) { throw "Missing from the zip: $needed" }
           }
           $mb = [math]::Round((Get-Item $zip).Length / 1MB)
