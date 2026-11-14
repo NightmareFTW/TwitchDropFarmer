@@ -2616,5 +2616,53 @@ class TestRibbonsFit(_WindowCase):
                 self.assertEqual(cut, [], "text cut off by the card's top or left edge")
 
 
+class TestNoTextBypassesTheTranslations(_WindowCase):
+    """A hard-coded Portuguese placeholder and tooltip showed up in the English interface."""
+
+    def switch(self, language: str) -> None:
+        w = self.window
+        w.language_picker.setCurrentIndex(w.language_picker.findData(language))
+        w._retranslate_ui()
+
+    def test_the_session_import_field_follows_the_language(self):
+        self.switch("en")
+        english = self.window.session_input.placeholderText()
+        self.switch("pt_PT")
+        portuguese = self.window.session_input.placeholderText()
+
+        self.assertEqual(english, ui.TRANSLATIONS["en"]["session_input_placeholder"])
+        self.assertEqual(portuguese, ui.TRANSLATIONS["pt_PT"]["session_input_placeholder"])
+        self.assertNotEqual(english, portuguese)
+        self.assertNotIn("Colas", english)
+
+    def test_the_energy_profile_tooltips_follow_the_language(self):
+        w = self.window
+        self.assertGreaterEqual(len(w.energy_profile_buttons), 3)
+        for language, word in (("en", "Profile: "), ("pt_PT", "Perfil: ")):
+            self.switch(language)
+            for name, button in w.energy_profile_buttons:
+                self.assertEqual(button.toolTip(), f"{word}{name}", (language, name))
+
+    def test_every_placeholder_and_tooltip_text_has_a_translation(self):
+        for language, table in ui.TRANSLATIONS.items():
+            for key in ("session_input_placeholder", "energy_profile_tooltip"):
+                self.assertIn(key, table, (language, key))
+
+    def test_no_user_visible_text_is_written_into_the_code_instead_of_the_translation_table(self):
+        """Any setText / setToolTip / setPlaceholderText / setTitle with a literal that has words in it is a text
+        that stays in one language. (The part inside {braces} of an f-string is a value, not text.)"""
+        import re
+
+        source = Path(ui.__file__).read_text(encoding="utf-8")
+        literal = re.compile(r'set(?:Text|ToolTip|PlaceholderText|Title|StatusTip)\(f?"((?:[^"\\]|\\.)*)"')
+        offenders = []
+        for match in literal.finditer(source):
+            words = re.sub(r"\{[^}]*\}", "", match.group(1))
+            if re.search(r"[A-Za-zÀ-ÿ]{3,}", words):
+                offenders.append(match.group(0)[:70])
+
+        self.assertEqual(offenders, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-11-14
+
+### Fixed
+
+- **Dois textos ficavam em português com a interface em inglês**: o texto de ajuda do campo de importação da
+  sessão («Colas aqui o JSON da sessão exportada do browser...», na aba Conta) e os *tooltips* dos perfis de
+  energia («Perfil: ...»). Passaram para a tabela de traduções e mudam com o idioma. Um teste falha se algum
+  `setText`, `setToolTip`, `setPlaceholderText` ou `setTitle` voltar a receber um texto escrito à mão.
+
+### Changed
+
+- **README com galeria de capturas de ecrã**, em PT-PT e em inglês (cada README mostra a interface no seu
+  idioma): as quatro vistas principais, a janela «Iniciar sessão» e os três temas. `tools/take_screenshots.py`
+  gera agora os dois conjuntos (em `docs/images/` e `docs/images/en/`), sempre com dados fictícios.
+
 ## [3.0.0] - 2026-11-14
 
 Primeira release pública desde a 2.2.39. Resume o que mudou nas versões 2.2.40 a 2.2.72, cujo detalhe

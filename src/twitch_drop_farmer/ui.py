@@ -793,6 +793,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_group": "OAuth",
         "oauth_token_label": "Token auth-token",
         "oauth_placeholder": "Cola aqui o valor do cookie auth-token",
+        "session_input_placeholder": "Colas aqui o JSON da sessão exportada do browser...",
+        "energy_profile_tooltip": "Perfil: {profile}",
         "oauth_help": (
             "Token necessário: copia o valor do cookie 'auth-token' da sessão em https://www.twitch.tv .\n"
             "Depois de guardado, a app reutiliza este token automaticamente enquanto continuar válido.\n"
@@ -1202,6 +1204,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "oauth_group": "OAuth",
         "oauth_token_label": "auth-token value",
         "oauth_placeholder": "Paste the auth-token cookie value here",
+        "session_input_placeholder": "Paste the session JSON exported from your browser here...",
+        "energy_profile_tooltip": "Profile: {profile}",
         "oauth_help": (
             "Required token: copy the value of the 'auth-token' cookie from https://www.twitch.tv .\n"
             "After saving, the app reuses it automatically while it remains valid.\n"
@@ -2341,7 +2345,6 @@ class MainWindow(QMainWindow):
         for profile in AVAILABLE_PROFILES:
             profile_name = profile.name
             btn = QRadioButton(profile_name)
-            btn.setToolTip(f"Perfil: {profile_name}")
             btn.toggled.connect(lambda checked, pname=profile_name: self.handle_energy_profile_change(pname) if checked else None)
             self.energy_profile_buttons.append((profile_name, btn))
             profiles_buttons_layout.addWidget(btn)
@@ -2507,7 +2510,6 @@ class MainWindow(QMainWindow):
         self.session_import_label = QLabel()
         self.session_import_label.setWordWrap(True)
         self.session_input = QTextEdit()
-        self.session_input.setPlaceholderText("Colas aqui o JSON da sessão exportada do browser...")
         self.session_input.setMaximumHeight(100)
         self.session_auth_status_label = QLabel()
         self.session_auth_status_label.setWordWrap(True)
@@ -3298,6 +3300,9 @@ class MainWindow(QMainWindow):
         self.oauth_group.setTitle(self._t("oauth_group"))
         self.oauth_token_label.setText(self._t("oauth_token_label"))
         self.token_input.setPlaceholderText(self._t("oauth_placeholder"))
+        self.session_input.setPlaceholderText(self._t("session_input_placeholder"))
+        for profile_name, button in self.energy_profile_buttons:
+            button.setToolTip(self._t("energy_profile_tooltip", profile=profile_name))
         self.oauth_help_icon.setToolTip(self._t("oauth_help"))
         self.btn_login.setText(self._t("save_oauth"))
         self.btn_open_login_window.setText(self._t("login_open_window"))

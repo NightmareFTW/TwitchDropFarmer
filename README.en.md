@@ -10,7 +10,7 @@ is ready to claim. Everything runs on your own computer.
 > service, and Twitch can change or block what this app relies on at any time. Use it at your own risk. More in
 > [Known limitations](#known-limitations) and [Disclaimer](#disclaimer).
 
-![Dashboard](docs/images/ui-dashboard.png)
+![Dashboard](docs/images/en/ui-dashboard.png)
 
 *The screenshots use demo data (made-up games and channels), never a real account.*
 
@@ -48,6 +48,46 @@ is ready to claim. Everything runs on your own computer.
 A game that has just started is not in the *Inventory* until Twitch has credited its first minutes (normally 2 to
 3 minutes). Until then "Active drops" says it is **waiting** for the information, and only after 15 minutes
 without data does it say "No active drops".
+
+## Screenshots
+
+*Demo data: made-up games, channels and drops, no real account. The dashboard is at the top of this page.*
+
+### Farming now, with the filters
+
+The live state of the farm (game, campaign, channel, progress and time to the next drop), the active drops and,
+on the left, the game and channel lists.
+
+![Farming now and filters](docs/images/en/ui-farming.png)
+
+### Campaigns and account
+
+Every campaign found, with the state of each one, and the **Account** tab with the sign-in alternatives.
+
+![Campaigns and account](docs/images/en/ui-campaigns.png)
+
+### Settings
+
+Language, theme, farm priority, "Redeem drops automatically" (off by default, with the "?" explaining why) and
+resuming the farm when the app opens.
+
+![Settings](docs/images/en/ui-settings.png)
+
+### Log in
+
+The window that explains each step, with two methods (session JSON or quick token) and the option to remember
+the session on this computer.
+
+![Log in](docs/images/en/ui-login.png)
+
+### Themes
+
+Three themes: Twitch, Black / Red and Light.
+
+![The three themes](docs/images/en/ui-themes.png)
+
+*The status ribbons on the cards (`CONCLUÍDO`, `SEM CANAIS`...) keep their Portuguese names in every language;
+the "?" above the dashboard explains each one in English.*
 
 ## Installation
 

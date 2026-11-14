@@ -48,6 +48,43 @@ Um jogo que acabou de começar só aparece no *Inventory* depois de a Twitch cre
 (2 a 3 minutos, normalmente). Até lá, «Drops activos» diz que está **a aguardar** a informação, e só passados
 15 minutos sem dados é que diz «Sem drops activos».
 
+## Capturas de ecrã
+
+*Dados de exemplo: jogos, canais e drops fictícios, sem nenhuma conta real. O dashboard está no topo desta página.*
+
+### A farmar agora, com os filtros
+
+O estado do farm em directo (jogo, campanha, canal, progresso e tempo até ao próximo drop), os drops activos e,
+à esquerda, as listas de jogos e canais.
+
+![A farmar agora e filtros](docs/images/ui-farming.png)
+
+### Campanhas e conta
+
+Todas as campanhas detectadas, com o estado de cada uma, e a aba **Conta** com as alternativas de sessão.
+
+![Campanhas e conta](docs/images/ui-campaigns.png)
+
+### Definições
+
+Idioma, tema, prioridade do farm, «Redimir drops automaticamente» (desligado por omissão, com o «?» a explicar
+porquê) e retomar o farm ao abrir a app.
+
+![Definições](docs/images/ui-settings.png)
+
+### Iniciar sessão
+
+A janela que explica cada passo, com dois métodos (sessão JSON ou token rápido) e a opção de lembrar a sessão
+neste computador.
+
+![Iniciar sessão](docs/images/ui-login.png)
+
+### Temas
+
+Três temas: Twitch, Preto / Vermelho e Claro.
+
+![Os três temas](docs/images/ui-themes.png)
+
 ## Instalação
 
 ### Pacote Windows (mais simples)

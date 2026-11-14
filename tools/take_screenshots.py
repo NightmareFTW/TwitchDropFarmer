@@ -2,6 +2,9 @@
 
     python tools/take_screenshots.py
 
+Writes the gallery in Portuguese (docs/images/) and in English (docs/images/en/): the four main views, the
+sign-in window and the three themes.
+
 Nothing real can end up in a screenshot:
 
 * the app runs against a throw-away home folder, so your own config, session and cookies are never read;
@@ -107,6 +110,90 @@ def window_filter_entry(game: str):
     return FilterEntry(key=game, label=game)
 
 
+LANGUAGES = (("pt_PT", OUT_DIR), ("en", OUT_DIR / "en"))
+THEMES = (  # (the theme's key in the app, its label in each language)
+    ("twitch", {"pt_PT": "Twitch", "en": "Twitch"}),
+    ("black_red", {"pt_PT": "Preto / Vermelho", "en": "Black / Red"}),
+    ("light", {"pt_PT": "Claro", "en": "Light"}),
+)
+
+
+def settle(app, rounds: int = 6) -> None:
+    """Let the window finish what it was asked to do, including the widgets it replaced: those are deleted with
+    deleteLater(), which only the real event loop performs, so a card from the previous refresh would stay on screen."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    for _ in range(rounds):
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+
+def capture_language(window, app, language: str, out_dir: Path) -> None:
+    """The whole gallery in one language: the four main views, the sign-in window and the three themes."""
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    window.language_picker.setCurrentIndex(window.language_picker.findData(language))
+    window._retranslate_ui()
+    window._apply_theme("twitch")
+    build_demo(window, farm_running=True)
+    settle(app)
+
+    def save(pixmap, name: str) -> None:
+        path = out_dir / name
+        pixmap.save(str(path), "PNG")
+        print(f"  Saved: {path}")
+
+    def views(name: str, left: int, right: int) -> None:
+        window.tabs_left.setCurrentIndex(left)
+        window.tabs_right.setCurrentIndex(right)
+        settle(app)
+        window.log_output.clear()  # the offline run logs connection errors: not for a screenshot
+        settle(app, 2)
+        save(window.grab(), name)
+
+    views("ui-dashboard.png", 0, 0)  # Dashboard + Farming now
+    views("ui-farming.png", 2, 0)  # Filters + Farming now
+    views("ui-campaigns.png", 1, 1)  # Account + Campaigns
+    views("ui-settings.png", 3, 1)  # Settings + Campaigns
+
+    # The sign-in window, as it opens for someone who is not signed in yet (nothing is typed in it).
+    from twitch_drop_farmer.login_dialog import LoginDialog
+
+    dialog = LoginDialog(window, window)
+    dialog.show()
+    settle(app)
+    save(dialog.grab(), "ui-login.png")
+    dialog.close()
+    dialog.deleteLater()
+    settle(app, 2)
+
+    # The three themes side by side: the dashboard of each, shrunk to half size, with its name above.
+    window.tabs_left.setCurrentIndex(0)
+    window.tabs_right.setCurrentIndex(0)
+    cell_w, cell_h, gap, label_h = 640, 400, 12, 32
+    canvas = QPixmap(len(THEMES) * cell_w + (len(THEMES) - 1) * gap, cell_h + label_h)
+    canvas.fill(QColor("#0e0e10"))
+    painter = QPainter(canvas)
+    font = QFont(window.font())
+    font.setBold(True)
+    font.setPixelSize(16)
+    painter.setFont(font)
+    painter.setPen(QColor("#efeff1"))
+    for index, (key, labels) in enumerate(THEMES):
+        window._apply_theme(key)
+        settle(app)
+        window.log_output.clear()
+        shot = window.grab().scaled(cell_w, cell_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        x = index * (cell_w + gap)
+        painter.drawPixmap(x, label_h, shot)
+        painter.drawText(QRect(x, 0, cell_w, label_h), Qt.AlignmentFlag.AlignCenter, labels[language])
+    painter.end()
+    window._apply_theme("twitch")
+    save(canvas, "ui-themes.png")
+
+
 def run() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication(sys.argv)
@@ -116,34 +203,16 @@ def run() -> None:
         window = MainWindow()
         window.resize(WINDOW_W, WINDOW_H)
         window.show()
-        app.processEvents()
-        build_demo(window, farm_running=True)
-        window.log_output.clear()
-        for _ in range(5):
-            app.processEvents()
-
-        def shot(name: str, left: int, right: int) -> None:
-            window.tabs_left.setCurrentIndex(left)
-            window.tabs_right.setCurrentIndex(right)
-            for _ in range(5):
-                app.processEvents()
-            window.log_output.clear()  # the offline run logs connection errors: not for a screenshot
-            app.processEvents()
-            path = OUT_DIR / name
-            window.grab().save(str(path), "PNG")
-            print(f"  Saved: {path}")
-
-        shot("ui-dashboard.png", 0, 0)  # Dashboard + Farming now
-        shot("ui-farming.png", 2, 0)  # Filters + Farming now
-        shot("ui-campaigns.png", 1, 1)  # Account + Campaigns
-        shot("ui-settings.png", 3, 1)  # Settings + Campaigns
+        settle(app)
+        for language, out_dir in LANGUAGES:
+            capture_language(window, app, language, out_dir)
 
         window.timer.stop()
         window.client.segment_watcher.stop()
         window.executor.shutdown(wait=False)
         window.close()
     app.quit()
-    print("\nDone. Screenshots saved to docs/images/")
+    print("\nDone. Screenshots saved to docs/images/ (Portuguese) and docs/images/en/ (English)")
 
 
 if __name__ == "__main__":
