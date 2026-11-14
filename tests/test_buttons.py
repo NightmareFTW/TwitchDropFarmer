@@ -937,12 +937,13 @@ class TestLoginButton(_WindowCase):
         self.window.config.remember_session = True
 
     # ---------------------------------------------------------------- the button itself
-    def test_the_button_sits_in_the_free_corner_next_to_the_right_tabs(self):
+    def test_the_button_has_a_row_of_its_own_above_the_right_tabs_not_the_tab_bars_corner(self):
+        """As the tab widget's corner widget it was squeezed into the tab bar and sat on the pane's frame lines."""
         w = self.window
-        corner = w.tabs_right.cornerWidget(Qt.Corner.TopRightCorner)
 
-        self.assertIs(corner, w.login_corner)  # a wrapper that centres the button in the tab bar's height
-        self.assertIs(w.btn_smart_login.parentWidget(), corner)
+        self.assertIsNone(w.tabs_right.cornerWidget(Qt.Corner.TopRightCorner))
+        self.assertIsNone(w.tabs_right.cornerWidget(Qt.Corner.TopLeftCorner))
+        self.assertIs(w.btn_smart_login.parentWidget(), w.tabs_right.parentWidget())  # same panel, outside the tabs
 
     def test_the_button_says_log_in_and_then_who_is_signed_in(self):
         w = self.window
@@ -2082,37 +2083,47 @@ class TestButtonsAreNotClipped(_WindowCase):
         for _ in range(4):
             self.app.processEvents()
 
-    def corner_geometry(self) -> dict[str, int]:
+    def placement(self) -> dict[str, int]:
+        """Where the button is, relative to the tab widget below it (window coordinates)."""
         from PySide6.QtCore import QPoint
 
         w = self.window
-        button, bar = w.btn_smart_login, w.tabs_right.tabBar()
-        top = button.mapTo(w.tabs_right, QPoint(0, 0)).y()
-        bar_top = bar.mapTo(w.tabs_right, QPoint(0, 0)).y()
+        button, tabs = w.btn_smart_login, w.tabs_right
+        b = button.mapTo(w, QPoint(0, 0))
+        t = tabs.mapTo(w, QPoint(0, 0))
         return {
-            "above": bar_top - top,  # > 0: pokes out above the tab bar
-            "below": top + button.height() - (bar_top + bar.height()),  # > 0: pokes out below, onto the pane's frame
-            "right_edge_gap": w.tabs_right.width() - (button.mapTo(w.tabs_right, QPoint(0, 0)).x() + button.width()),
+            "gap_to_tabs": t.y() - (b.y() + button.height()),  # free space between the button and the tab widget
+            "right_gap": (t.x() + tabs.width()) - (b.x() + button.width()),  # to the right edge of the panel
+            "left_gap": b.x() - t.x(),
+            "top": b.y(),
         }
 
-    def test_the_signed_in_button_stays_inside_the_tab_bar_and_off_the_frame_lines(self):
-        """It was taller than the bar: it stuck out above and below, over the top line of the pane."""
+    MIN_GAP = 4  # px of free space between the button and the lines of the tab widget
+
+    def test_the_signed_in_button_is_clear_of_the_tab_widgets_lines(self):
+        """It sat on top of the frame lines (and then touched them); now it has a row and the layout's spacing."""
         self.settle()
 
-        geometry = self.corner_geometry()
+        where = self.placement()
 
-        self.assertLessEqual(geometry["above"], 0, geometry)
-        self.assertLessEqual(geometry["below"], 0, geometry)
-        self.assertGreaterEqual(geometry["right_edge_gap"], 0, geometry)
+        self.assertGreaterEqual(where["gap_to_tabs"], self.MIN_GAP, where)
+        self.assertGreaterEqual(where["top"], 0, where)  # not pushed out of the window either
+
+    def test_it_stays_inside_the_panel_on_the_right_without_touching_its_edge_line(self):
+        self.settle()
+
+        where = self.placement()
+
+        self.assertGreaterEqual(where["right_gap"], 0, where)
+        self.assertGreater(where["left_gap"], 0, where)
 
     def test_the_whole_name_is_visible(self):
         self.settle()
         w = self.window
 
         self.assertGreaterEqual(w.btn_smart_login.width(), w.btn_smart_login.sizeHint().width())
-        self.assertGreaterEqual(w.login_corner.width(), w.btn_smart_login.width())
 
-    def test_the_button_stays_inside_the_bar_in_both_states_and_both_languages(self):
+    def test_it_is_clear_of_the_lines_in_both_states_and_both_languages(self):
         w = self.window
         for language in ("en", "pt_PT"):
             w.language_picker.setCurrentIndex(w.language_picker.findData(language))
@@ -2123,16 +2134,22 @@ class TestButtonsAreNotClipped(_WindowCase):
                 )
                 w._update_auth_status()
                 self.settle()
-                geometry = self.corner_geometry()
-                self.assertLessEqual(geometry["above"], 0, (language, logged, geometry))
-                self.assertLessEqual(geometry["below"], 0, (language, logged, geometry))
+                where = self.placement()
+                self.assertGreaterEqual(where["gap_to_tabs"], self.MIN_GAP, (language, logged, where))
+                self.assertGreaterEqual(where["right_gap"], 0, (language, logged, where))
 
-    def test_the_slimmer_button_is_still_as_tall_as_its_text_needs(self):
-        """Fitting the bar must not bring the clipping back (the bottom of the letters)."""
+    def test_the_button_keeps_the_height_its_text_needs(self):
+        """No squeezing: the bottom of letters like "g" must not be cut."""
         self.settle()
         w = self.window
 
         self.assertGreaterEqual(w.btn_smart_login.height(), w.btn_smart_login.sizeHint().height())
+
+    def test_it_is_as_tall_as_the_other_buttons_so_it_looks_like_one_of_them(self):
+        self.settle()
+        w = self.window
+
+        self.assertEqual(w.btn_smart_login.height(), w.btn_save_log.height())
 
     def test_it_still_holds_with_a_bigger_font_as_on_another_machine(self):
         """The height a button needs depends on the font of the machine; a fixed number would clip it there.
@@ -2164,9 +2181,8 @@ class TestButtonsAreNotClipped(_WindowCase):
         self.settle()
 
         self.assertEqual(self.clipped_buttons(), [])
-        geometry = self.corner_geometry()
-        self.assertLessEqual(geometry["above"], 0, geometry)  # the bar grows with the font, the button follows
-        self.assertLessEqual(geometry["below"], 0, geometry)
+        where = self.placement()
+        self.assertGreaterEqual(where["gap_to_tabs"], self.MIN_GAP, where)  # a bigger font moves the tabs down with it
 
     def test_it_holds_in_english_and_in_every_theme(self):
         w = self.window

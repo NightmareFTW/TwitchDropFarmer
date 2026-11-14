@@ -2908,19 +2908,17 @@ class MainWindow(QMainWindow):
 
         self.tabs_right.addTab(farming_tab, "")
         self.tabs_right.addTab(campaigns_tab, "")
-        # The free corner next to the tabs: one click signs in (or opens the window that explains how).
+        # One click signs in (or opens the window that explains how). It has a row of its own above the tabs:
+        # as the tab widget's corner widget it was squeezed into the tab bar's height and sat on the frame
+        # lines of the pane, and no padding fixes that on every machine (the bar's height depends on the
+        # font and the screen scale). In a layout row it keeps its normal height and the layout's spacing.
         self.btn_smart_login = QPushButton()
         self.btn_smart_login.clicked.connect(self.handle_smart_login)
-        # A themed button (7px of padding) is a little taller than the tab bar, so it poked out above and
-        # below it and sat on top of the frame lines of the pane. A slimmer padding keeps it inside the bar;
-        # the wrapper centres it vertically in whatever height the bar has on this machine.
-        self.btn_smart_login.setStyleSheet("padding: 3px 12px;")
-        self.login_corner = QWidget()
-        corner_layout = QHBoxLayout(self.login_corner)
-        corner_layout.setContentsMargins(8, 0, 2, 0)
-        corner_layout.setSpacing(0)
-        corner_layout.addWidget(self.btn_smart_login, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.tabs_right.setCornerWidget(self.login_corner, Qt.Corner.TopRightCorner)
+        account_row = QHBoxLayout()
+        account_row.setContentsMargins(0, 0, 0, 0)
+        account_row.addStretch(1)
+        account_row.addWidget(self.btn_smart_login)
+        vbox.addLayout(account_row)
         vbox.addWidget(self.tabs_right, 3)
         log_row = QHBoxLayout()
         log_row.addWidget(self.log_label)
@@ -3058,18 +3056,6 @@ class MainWindow(QMainWindow):
             self.btn_login.setEnabled(True)
         self.btn_edit_oauth.setEnabled(bool(self.client.login_state.oauth_token))
 
-    @staticmethod
-    def _fit_button_height(button: QPushButton) -> None:
-        """Make sure a button is at least as tall as its text needs.
-
-        A tab widget squeezes its corner widget to the height of the tab bar, which is a few pixels
-        less than a themed button needs, and the bottom of letters like "g" got cut off. What a
-        button needs depends on the font of the machine it runs on, so it is asked, not guessed.
-        """
-        needed = button.sizeHint().height()
-        if button.minimumHeight() != needed:
-            button.setMinimumHeight(needed)
-
     def _refresh_login_button(self) -> None:
         state = self.client.login_state
         if state.logged_in:
@@ -3079,7 +3065,6 @@ class MainWindow(QMainWindow):
         else:
             self.btn_smart_login.setText(self._t("login_button"))
             self.btn_smart_login.setToolTip(self._t("login_button_tip_out"))
-        self._fit_button_height(self.btn_smart_login)
 
     def _update_auth_status(self) -> None:
         self._refresh_login_button()
@@ -3445,8 +3430,6 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, name: str) -> None:
         self.setStyleSheet(THEMES.get(name, THEMES["twitch"]))
-        if hasattr(self, "btn_smart_login"):
-            self._fit_button_height(self.btn_smart_login)
 
     def _with_errors(self, fn: Callable[[], None]) -> None:
         try:

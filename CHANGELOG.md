@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.72] - 2026-11-14
+
+### Fixed
+
+- **O botão «Sessão: …» continuava encostado às linhas do layout.** A 2.2.69 encolheu-o e centrou-o na
+  barra dos separadores, mas no Windows (letra e escala do ecrã maiores) a barra é tão alta como o botão e
+  ele voltava a tocar na linha de baixo e na da direita. Nenhum *padding* resolve isto em todas as máquinas,
+  porque a altura da barra depende do tipo de letra e da escala. O botão deixou de ser o «canto» da barra:
+  tem agora **uma linha própria acima dos separadores**, alinhada à direita, com a altura normal dos outros
+  botões e o espaçamento do layout à volta. Os testes medem o espaço livre até à linha dos separadores, nos
+  dois estados (com e sem sessão), em PT e EN e com um tipo de letra maior, e falham se o botão voltar ao canto.
+- Removido o ajuste de altura que só existia por causa do canto (`_fit_button_height`). Capturas de ecrã
+  do README refeitas.
+
 ## [2.2.71] - 2026-11-14
 
 Preparação para tornar o repositório público: nada de pessoal no código, README novo e capturas de ecrã
