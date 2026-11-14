@@ -52,10 +52,14 @@ Um jogo que acabou de começar só aparece no *Inventory* depois de a Twitch cre
 
 ### Pacote Windows (mais simples)
 
-1. Vai a [Releases](../../releases) e descarrega `TwitchDropFarmer-win64.zip`.
-2. Extrai a pasta toda (não só o `.exe`) e abre `TwitchDropFarmer.exe`.
+Precisas de Windows 10 ou 11 de 64 bits. Não é preciso instalar o Python nem o Visual C++: vêm no pacote.
 
-O pacote não está assinado, por isso o Windows SmartScreen pode avisar na primeira execução.
+1. Vai a [Releases](../../releases) e descarrega `TwitchDropFarmer-win64.zip` (cerca de 220 MB).
+2. Extrai a pasta toda (não só o `.exe`), para um sítio normal como `Documentos`, e abre `TwitchDropFarmer.exe`.
+
+O pacote não está assinado, por isso o Windows SmartScreen pode avisar na primeira execução («Mais informações» e
+«Executar mesmo assim»), e alguns antivírus podem desconfiar de programas empacotados com PyInstaller. Se o
+Windows mostrar «Falta VCRUNTIME140.dll» ou parecido, extraíste só o `.exe`: extrai a pasta toda.
 
 ### A partir do código-fonte
 

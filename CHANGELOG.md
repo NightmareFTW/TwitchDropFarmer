@@ -38,7 +38,9 @@ valores por omissão.
   (incluindo um que impede dados pessoais no repositório) e um fluxo de testes no GitHub Actions, que passa
   também no Windows (antes falhavam dois testes: um das fitas e o do arranque sem consola), e o *script* que
   constrói o pacote Windows, que rebentava num checkout limpo (como o do GitHub Actions) por listar uma pasta
-  `dist` que ainda não existia.
+  `dist` que ainda não existia. O fluxo de publicação passa a verificar o pacote antes de o publicar: confirma o
+  conteúdo do `.zip`, extrai-o numa pasta limpa e arranca a app com `--smoke-test` (constrói a janela sem sessão
+  e sem rede, numa pasta pessoal descartável) e só publica se isso funcionar.
 
 ### Conhecido
 

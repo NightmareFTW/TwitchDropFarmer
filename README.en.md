@@ -53,10 +53,15 @@ without data does it say "No active drops".
 
 ### Windows package (simplest)
 
-1. Go to [Releases](../../releases) and download `TwitchDropFarmer-win64.zip`.
-2. Extract the whole folder (not just the `.exe`) and open `TwitchDropFarmer.exe`.
+You need 64-bit Windows 10 or 11. Python and Visual C++ do not have to be installed: they come in the package.
 
-The package is not signed, so Windows SmartScreen may warn you the first time.
+1. Go to [Releases](../../releases) and download `TwitchDropFarmer-win64.zip` (about 220 MB).
+2. Extract the whole folder (not just the `.exe`) somewhere ordinary such as `Documents`, and open
+   `TwitchDropFarmer.exe`.
+
+The package is not signed, so Windows SmartScreen may warn you the first time ("More info" then "Run anyway"), and
+some antivirus programs may distrust programs packaged with PyInstaller. If Windows says "VCRUNTIME140.dll is
+missing" or similar, you extracted only the `.exe`: extract the whole folder.
 
 ### From source
 

@@ -80,7 +80,141 @@ def _install_hooks() -> None:
     threading.excepthook = _thread_exc
 
 
+def _smoke_report(path: str | None, report: dict) -> None:
+    """Write the smoke test's result where the release workflow can read it (the packaged app has no console)."""
+    import json
+
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    if path:
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError:
+            pass
+    if sys.stdout is not None:
+        try:
+            print(text)
+        except Exception:
+            pass
+
+
+def _smoke_checks(*, web: bool = False) -> tuple[bool, list[dict[str, object]]]:
+    """Everything a first start needs, without a session and without the network: the app's code and resources
+    are all in place, the window builds, and (with ``web``) the embedded browser can load a page.
+
+    A bundle that lacks a module, an icon or the browser engine fails here, in the release workflow, instead of on
+    someone's computer. Returns (all_ok, steps); it stops at the first failed step."""
+    import os
+    import tempfile
+
+    steps: list[dict[str, object]] = []
+
+    def run(name: str, check) -> bool:
+        try:
+            detail = check()
+        except BaseException as exc:  # a failing step must be reported, whatever it raises
+            steps.append({"step": name, "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
+            return False
+        steps.append({"step": name, "ok": True, "detail": detail or ""})
+        return True
+
+    # Nothing real is read or written: the app's data folder is the home folder, and this is a throw-away one.
+    home = tempfile.mkdtemp(prefix="tdf-smoke-")
+    os.environ["HOME"] = os.environ["USERPROFILE"] = home
+    state: dict[str, object] = {}
+
+    def import_app() -> str:
+        from . import __version__
+        from . import ui
+
+        state["ui"] = ui
+        return f"version {__version__}"
+
+    def assets() -> str:
+        ui = state["ui"]
+        missing = [name for name in ("icon.ico", "icon.png") if not (ui._ASSETS_DIR / name).is_file()]
+        if missing:
+            raise FileNotFoundError(f"{', '.join(missing)} not found in {ui._ASSETS_DIR}")
+        return str(ui._ASSETS_DIR)
+
+    def build_window() -> str:
+        import requests
+        from PySide6.QtWidgets import QApplication
+
+        ui = state["ui"]
+
+        def offline(*_args, **_kwargs):
+            raise requests.ConnectionError("the smoke test runs offline")
+
+        requests.Session.request = offline  # type: ignore[method-assign]
+
+        class NoDialogs:  # a dialog would wait for a click that nobody gives: report it instead
+            def __getattr__(self, name):
+                def blocked(*_a, **_k):
+                    raise RuntimeError(f"a dialog opened at start-up ({name})")
+
+                return blocked
+
+        ui.QMessageBox = NoDialogs()
+        app = QApplication.instance() or QApplication([])
+        window = ui.MainWindow()
+        window.show()
+        for _ in range(20):
+            app.processEvents()
+        title = window.windowTitle()
+        if not title:
+            raise RuntimeError("the main window has no title")
+        window.timer.stop()
+        window.client.segment_watcher.stop()
+        window.executor.shutdown(wait=False)
+        state["app"] = app
+        return f"window '{title}', {len(window.findChildren(ui.QPushButton))} buttons"
+
+    def web_page() -> str:
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+
+        app = state["app"]
+        profile = QWebEngineProfile(app)
+        page = QWebEnginePage(profile, app)
+        outcome: list[bool] = []
+        loop = QEventLoop()
+        page.loadFinished.connect(lambda ok: (outcome.append(bool(ok)), loop.quit()))
+        QTimer.singleShot(30_000, loop.quit)
+        page.load(QUrl("about:blank"))
+        loop.exec()
+        if not outcome:
+            raise TimeoutError("the browser engine did not load a blank page in 30 s")
+        if not outcome[0]:
+            raise RuntimeError("the browser engine reported a failed load")
+        return "blank page loaded"
+
+    ok = run("import the app", import_app) and run("resources are in the bundle", assets)
+    if ok:
+        ok = run("the main window builds", build_window)
+    if ok and web:
+        ok = run("the embedded browser loads a page", web_page)
+    return ok, steps
+
+
+def _smoke_test(argv: list[str]) -> int:
+    """``--smoke-test [FILE]`` (the app) or ``--smoke-test-web [FILE]`` (also the embedded browser); the report is
+    written to FILE as JSON. Exit code 0 = everything worked."""
+    import os
+
+    web = "--smoke-test-web" in argv
+    flag = "--smoke-test-web" if web else "--smoke-test"
+    index = argv.index(flag)
+    path = argv[index + 1] if index + 1 < len(argv) and not argv[index + 1].startswith("--") else None
+    ok, steps = _smoke_checks(web=web)
+    _smoke_report(path, {"ok": ok, "mode": "web" if web else "app", "steps": steps})
+    sys.stdout and sys.stdout.flush()
+    os._exit(0 if ok else 1)  # worker threads must not keep a diagnostic run alive
+
+
 def main() -> int:
+    if any(arg in sys.argv for arg in ("--smoke-test", "--smoke-test-web")):
+        return _smoke_test(sys.argv[1:])
     _install_hooks()
     # Set AppUserModelID so Windows groups taskbar windows under app identity.
     if sys.platform == "win32":

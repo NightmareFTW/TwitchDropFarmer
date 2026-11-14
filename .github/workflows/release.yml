@@ -32,6 +32,49 @@ jobs:
         shell: pwsh
         run: .\build_exe.ps1
 
+      - name: Check the zip has what a user needs
+        shell: pwsh
+        run: |
+          $zip = "dist/TwitchDropFarmer-win64.zip"
+          $listing = (tar.exe -tf $zip) -replace '\\', '/'
+          foreach ($needed in @(
+              "TwitchDropFarmer/TwitchDropFarmer.exe",
+              "TwitchDropFarmer/_internal/twitch_drop_farmer/assets/icon.ico",
+              "TwitchDropFarmer/_internal/twitch_drop_farmer/assets/icon.png")) {
+            if ($listing -notcontains $needed) { throw "Missing from the zip: $needed" }
+          }
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB)
+          Write-Host "zip: $mb MB, $($listing.Count) entries"
+          if ($mb -lt 100) { throw "The zip is only $mb MB: the Qt browser engine must be missing" }
+
+      - name: Smoke-test the app from the zip, unpacked in a clean folder
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          # What a user does: unpack the zip somewhere else and start the app. --smoke-test builds the main window
+          # (offscreen, no session, no network, a throw-away home folder) and writes a report.
+          $dest = Join-Path $env:RUNNER_TEMP "unzipped"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          tar.exe -xf dist/TwitchDropFarmer-win64.zip -C $dest
+          $exe = Join-Path $dest "TwitchDropFarmer\TwitchDropFarmer.exe"
+          $report = Join-Path $env:RUNNER_TEMP "smoke.json"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $process = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", $report) -Wait -PassThru
+          if (Test-Path $report) { Get-Content $report -Raw } else { Write-Host "No report was written" }
+          if ($process.ExitCode -ne 0) { throw "The packaged app failed its smoke test (exit code $($process.ExitCode))" }
+
+      - name: Check the embedded browser (information only)
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "unzipped\TwitchDropFarmer\TwitchDropFarmer.exe"
+          $report = Join-Path $env:RUNNER_TEMP "smoke-web.json"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $process = Start-Process -FilePath $exe -ArgumentList @("--smoke-test-web", $report) -Wait -PassThru
+          if (Test-Path $report) { Get-Content $report -Raw } else { Write-Host "No report was written" }
+          if ($process.ExitCode -ne 0) { throw "The embedded browser check failed (exit code $($process.ExitCode))" }
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -40,7 +83,6 @@ jobs:
 
       - name: Pick the release notes
         id: notes
-        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           # docs/releases/<tag>.md is the release text; without it GitHub generates one.
