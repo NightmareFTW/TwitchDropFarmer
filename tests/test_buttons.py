@@ -2278,5 +2278,215 @@ class TestAutoClaimIsOffAndExplained(_WindowCase):
         self.assertEqual(self.window.auto_claim_checkbox.toolTip(), "")
 
 
+class TestDropsWaitMessage(_WindowCase):
+    """A game that has just started to be farmed is not in the Inventory yet: say it is being waited for."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        w = self.window
+        w.timer.stop()
+        w._drops_wait_started.clear()
+        w._drops_wait_shown_for = ""
+        self.now = [1000.0]
+        patcher = patch.object(ui.time, "monotonic", side_effect=lambda: self.now[0])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(w.timer.stop)
+        w.language_picker.setCurrentIndex(w.language_picker.findData("pt_PT"))
+        w._retranslate_ui()
+
+    def new_game(self, name: str = "Brand New Game") -> DropCampaign:
+        """What the registry gives for a game nobody has credited yet: no drops, no minutes (0/0)."""
+        return DropCampaign(
+            id=f"external-{name}", game_name=name, title=name, starts_at=datetime.now(UTC) - timedelta(hours=1),
+            ends_at=datetime.now(UTC) + timedelta(days=5), status="ACTIVE", source="external_registry",
+        )
+
+    def farm_running(self) -> None:
+        self.window.timer.start(600_000)
+
+    def texts(self) -> list[str]:
+        lst = self.window.active_drops_list
+        return [lst.item(index).text() for index in range(lst.count())]
+
+    def show(self, campaign: DropCampaign) -> list[str]:
+        self.window._refresh_active_drops_panel(campaign)
+        return self.texts()
+
+    def minutes(self, count: float) -> None:
+        self.now[0] += count * 60
+
+    # ---------------------------------------------------------------- the waiting message
+    def test_it_waits_instead_of_saying_there_are_no_drops(self):
+        self.farm_running()
+
+        shown = self.show(self.new_game())
+
+        self.assertEqual(len(shown), 1)
+        self.assertIn("A aguardar a informação dos drops", shown[0])
+        self.assertNotIn("Sem drops activos", shown[0])
+
+    def test_it_says_why_it_takes_a_while(self):
+        self.farm_running()
+
+        self.assertIn("depois de creditar os primeiros minutos", self.show(self.new_game())[0])
+
+    def test_it_is_still_waiting_a_minute_before_the_time_is_up(self):
+        self.farm_running()
+        self.show(self.new_game())
+
+        self.minutes(ui.DROPS_WAIT_SEC / 60 - 1)
+
+        self.assertIn("A aguardar", self.show(self.new_game())[0])
+
+    def test_when_nothing_appears_in_time_it_says_there_are_no_active_drops(self):
+        self.farm_running()
+        self.show(self.new_game())
+
+        self.minutes(ui.DROPS_WAIT_SEC / 60)
+
+        self.assertEqual(self.show(self.new_game()), ["Sem drops activos para mostrar."])
+
+    def test_the_wait_is_fifteen_minutes(self):
+        self.assertEqual(ui.DROPS_WAIT_SEC, 15 * 60)
+
+    def test_it_is_in_english_too(self):
+        w = self.window
+        w.language_picker.setCurrentIndex(w.language_picker.findData("en"))
+        w._retranslate_ui()
+        self.farm_running()
+
+        shown = self.show(self.new_game())
+
+        self.assertIn("Waiting for the drops information", shown[0])
+        self.minutes(16)
+        self.assertEqual(self.show(self.new_game()), ["No active drops to display."])
+
+    # ---------------------------------------------------------------- when the data arrives
+    def test_the_drops_replace_the_message_as_soon_as_they_appear(self):
+        self.farm_running()
+        game = self.new_game()
+        self.show(game)
+
+        game.drops = [{"id": "d", "name": "Reward", "required_minutes": 60, "current_minutes": 1, "claimed": False}]
+        game.required_minutes, game.progress_minutes = 60, 1
+        shown = self.show(game)
+
+        self.assertEqual([text for text in shown if text], [])  # a real drop card, no text item at all
+        self.assertEqual(self.window.active_drops_list.count(), 1)
+        self.assertEqual(self.window._drops_wait_shown_for, "")
+
+    def test_campaign_level_progress_alone_is_enough_to_stop_waiting(self):
+        """Twitch's integrity check often leaves only the aggregate minutes: that is data."""
+        self.farm_running()
+        game = self.new_game()
+        self.show(game)
+
+        game.required_minutes, game.progress_minutes = 120, 3
+        self.show(game)
+
+        self.assertEqual([text for text in self.texts() if "aguardar" in text], [])
+
+    def test_the_wait_of_a_game_that_got_data_is_forgotten(self):
+        """Once it has data its clock is dropped, so losing the data later starts a fresh wait, not an expired one."""
+        self.farm_running()
+        game = self.new_game()
+        self.show(game)
+        game.required_minutes = 120
+        self.show(game)
+        self.assertNotIn(game.id, self.window._drops_wait_started)
+
+    # ---------------------------------------------------------------- when it must not wait
+    def test_with_the_farm_stopped_nothing_is_coming_so_it_does_not_wait(self):
+        shown = self.show(self.new_game())
+
+        self.assertEqual(shown, ["Sem drops activos para mostrar."])
+
+    def test_stopping_the_farm_clears_the_waits_so_the_next_start_waits_again(self):
+        self.farm_running()
+        game = self.new_game()
+        self.show(game)
+        self.minutes(20)
+        self.assertEqual(self.show(game), ["Sem drops activos para mostrar."])
+
+        self.window.timer.stop()
+        self.show(game)  # farm stopped
+        self.farm_running()  # started again
+
+        self.assertIn("A aguardar", self.show(game)[0])
+
+    def test_no_campaign_at_all_is_not_a_wait(self):
+        self.farm_running()
+
+        self.window._refresh_active_drops_panel(None)
+
+        self.assertEqual(self.texts(), ["Sem drops activos para mostrar."])
+
+    def test_each_game_has_its_own_clock(self):
+        self.farm_running()
+        first, second = self.new_game("First"), self.new_game("Second")
+        self.show(first)
+        self.minutes(14)
+
+        self.assertIn("A aguardar", self.show(second)[0])  # just started: a fresh 15 minutes
+        self.minutes(2)
+        self.assertEqual(self.show(first), ["Sem drops activos para mostrar."])  # 16 min on this one
+        self.assertIn("A aguardar", self.show(second)[0])  # only 2 min on this one
+
+    # ---------------------------------------------------------------- the repaint when time is up
+    def test_the_minute_tick_repaints_when_the_wait_is_over_even_if_no_data_came(self):
+        """Nothing else refreshes the panel while nothing is credited, so the tick has to do it."""
+        w = self.window
+        self.farm_running()
+        game = self.new_game()
+        self.show(game)
+        w._refresh_farming_now = MagicMock()
+        w._current_farm_decision = MagicMock(return_value=_decision(game))
+        w._heartbeat_future = None
+        w._snap_future = None
+        w.client.streamless_watch_heartbeat = MagicMock(return_value=False)
+        w.client.segment_watcher.set_channel = MagicMock()
+
+        w._streamless_heartbeat_tick()
+        w._refresh_farming_now.assert_not_called()  # still within the wait
+
+        self.minutes(16)
+        w._streamless_heartbeat_tick()
+
+        w._refresh_farming_now.assert_called_once()
+
+    def test_the_tick_does_not_repaint_every_minute_when_nothing_is_being_waited_for(self):
+        w = self.window
+        self.farm_running()
+        w._refresh_farming_now = MagicMock()
+        w._current_farm_decision = MagicMock(return_value=_decision(_campaign("Elden Ring")))
+        w._heartbeat_future = None
+        w._snap_future = None
+        w.client.streamless_watch_heartbeat = MagicMock(return_value=False)
+        w.client.segment_watcher.set_channel = MagicMock()
+
+        for _ in range(5):
+            w._streamless_heartbeat_tick()
+            self.minutes(1)
+
+        w._refresh_farming_now.assert_not_called()
+
+    def test_the_real_farming_panel_shows_the_wait_for_a_new_target(self):
+        """Through the real refresh: the farm picks a game without data and the panel is the waiting one."""
+        w = self.window
+        game = self.new_game()
+        w.latest_snapshot = FarmSnapshot(
+            campaigns=[game], decisions=[_decision(game)], available_games=[game.game_name], available_channels=[],
+        )
+        w._forced_farm_campaign_id = game.id
+        self.addCleanup(setattr, w, "latest_snapshot", None)
+        self.addCleanup(setattr, w, "_forced_farm_campaign_id", "")
+        self.farm_running()
+
+        w._refresh_farming_now()
+
+        self.assertIn("A aguardar", " ".join(self.texts()))
+
+
 if __name__ == "__main__":
     unittest.main()

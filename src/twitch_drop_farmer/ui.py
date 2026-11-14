@@ -119,6 +119,11 @@ RIBBON_UNCHECKED   = ("A VERIFICAR", "#95a5a6")  # grey  – canais ainda não c
 AUTO_CLAIM_RETRY_SEC = 900
 AUTO_CLAIM_BACKOFF_FACTOR = 4
 AUTO_CLAIM_MAX_ATTEMPTS = 3
+# A game that has just started to be farmed is not in the Inventory until Twitch has credited its first
+# minutes (about 2-3 min in the logs), so "Active drops" says it is waiting instead of "none". After this long
+# without any data it says there are none. It matches the stall monitor (default timeout 30 min), which
+# changes channel at half of it: by then the app has itself given up on the channel it was waiting on.
+DROPS_WAIT_SEC = 15 * 60
 
 # Forced campaign refreshes (manual button, no-progress recovery...) are spaced at least this far apart.
 FORCED_REFRESH_MIN_SEC = 120.0
@@ -901,6 +906,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "active_drops_group": "Drops activos",
         "active_drops_group_game": "Drops activos de {game}",
         "active_drops_empty": "Sem drops activos para mostrar.",
+        "active_drops_waiting": "A aguardar a informação dos drops…\nA Twitch só os mostra depois de creditar os primeiros minutos de farm.",
         "active_drops_claimed": "Resgatado",
         "active_drops_progress": "{current}/{required} min",
         "active_drops_subscription_hint": "Esta campanha exige subscrição activa para resgatar.",
@@ -1309,6 +1315,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "active_drops_group": "Active drops",
         "active_drops_group_game": "Active drops for {game}",
         "active_drops_empty": "No active drops to display.",
+        "active_drops_waiting": "Waiting for the drops information…\nTwitch only lists them once the first minutes of farming have been credited.",
         "active_drops_claimed": "Claimed",
         "active_drops_progress": "{current}/{required} min",
         "active_drops_subscription_hint": "This campaign requires an active subscription to redeem drops.",
@@ -2144,6 +2151,9 @@ class MainWindow(QMainWindow):
         self._sticky_campaign_id: str = ""
         self._streamless_game: str = ""
         self._streamless_campaign_id: str = ""
+        # campaign id -> when its "waiting for the drops" message first showed (see DROPS_WAIT_SEC)
+        self._drops_wait_started: dict[str, float] = {}
+        self._drops_wait_shown_for: str = ""
         self._last_display_decision: FarmDecision | None = None
         self._announced_ready_drops: set[str] = set()
         # Nothing used to listen to the alert manager, so no alert was ever shown.
@@ -4209,8 +4219,31 @@ class MainWindow(QMainWindow):
             self.active_drops_list.addItem(self._t("active_drops_subscription_hint"))
             has_items = True
 
-        if not has_items:
+        if has_items:
+            self._drops_wait_started.pop(active_campaign.id, None)
+            self._drops_wait_shown_for = ""
+        elif self._waiting_for_drops(active_campaign):
+            self.active_drops_list.addItem(self._t("active_drops_waiting"))
+            self._drops_wait_shown_for = active_campaign.id
+        else:
+            self._drops_wait_shown_for = ""
             self.active_drops_list.addItem(self._t("active_drops_empty"))
+
+    def _waiting_for_drops(self, campaign: DropCampaign) -> bool:
+        """True while a campaign being farmed has no drop data yet and DROPS_WAIT_SEC has not run out.
+
+        The clock starts when the message first shows for that campaign, and only while the farm is
+        running: with the farm stopped nothing is coming, so the plain "no active drops" is the truth.
+        """
+        if not self.timer.isActive():
+            self._drops_wait_started.clear()
+            return False
+        self._drops_wait_started.setdefault(campaign.id, time.monotonic())
+        return self._drops_wait_open(campaign.id)
+
+    def _drops_wait_open(self, campaign_id: str) -> bool:
+        started = self._drops_wait_started.get(campaign_id)
+        return started is not None and time.monotonic() - started < DROPS_WAIT_SEC
 
     def _reason_text(self, decision: FarmDecision) -> str:
         if decision.reason_code == "game_filtered":
@@ -4938,6 +4971,8 @@ class MainWindow(QMainWindow):
             return
 
         self._streamless_no_target_logged = False
+        if self._drops_wait_shown_for and not self._drops_wait_open(self._drops_wait_shown_for):
+            self._refresh_farming_now()  # the wait is over: "waiting" becomes "no active drops"
         channel_login = decision.stream.login
         previous_channel = self._streamless_channel
         previous_campaign_id, previous_game = self._streamless_campaign_id, self._streamless_game

@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.70] - 2026-11-14
+
+### Changed
+
+- **«Drops activos» já não diz «Sem drops activos» a um jogo que acabou de começar a farmar.** Um jogo
+  novo não aparece no Inventory enquanto a Twitch não creditar os primeiros minutos (cerca de 2-3 min
+  nos logs), e o painel mostrava «Sem drops activos para mostrar» como se o jogo não tivesse drops.
+  Agora mostra «A aguardar a informação dos drops…» (com a razão) durante 15 minutos. Se passado esse
+  tempo continuar sem dados, aí sim diz «Sem drops activos para mostrar». Os 15 min coincidem com o
+  momento em que o monitor de bloqueios (tempo limite de 30 min) muda de canal.
+  - Só espera com o farm a correr; parado, não há nada a chegar e diz logo que não há drops.
+  - Cada jogo tem o seu relógio, e o relógio recomeça se o farm for parado e iniciado de novo.
+  - Assim que aparece qualquer informação (um drop, ou só os minutos da campanha) a mensagem é
+    substituída; e o painel é redesenhado ao fim da espera mesmo que nada tenha chegado.
+
 ## [2.2.69] - 2026-11-14
 
 ### Changed
