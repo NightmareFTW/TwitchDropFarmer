@@ -164,10 +164,7 @@ def _smoke_checks(*, web: bool = False) -> tuple[bool, list[dict[str, object]]]:
         title = window.windowTitle()
         if not title:
             raise RuntimeError("the main window has no title")
-        window.timer.stop()
-        window.client.segment_watcher.stop()
-        window.executor.shutdown(wait=False)
-        state["app"] = app
+        state["app"], state["window"] = app, window
         return f"window '{title}', {len(window.findChildren(ui.QPushButton))} buttons"
 
     def web_page() -> str:
@@ -177,6 +174,7 @@ def _smoke_checks(*, web: bool = False) -> tuple[bool, list[dict[str, object]]]:
         app = state["app"]
         profile = QWebEngineProfile(app)
         page = QWebEnginePage(profile, app)
+        state["profile"], state["page"] = profile, page
         outcome: list[bool] = []
         loop = QEventLoop()
         page.loadFinished.connect(lambda ok: (outcome.append(bool(ok)), loop.quit()))
@@ -189,11 +187,48 @@ def _smoke_checks(*, web: bool = False) -> tuple[bool, list[dict[str, object]]]:
             raise RuntimeError("the browser engine reported a failed load")
         return "blank page loaded"
 
-    ok = run("import the app", import_app) and run("resources are in the bundle", assets)
-    if ok:
-        ok = run("the main window builds", build_window)
-    if ok and web:
-        ok = run("the embedded browser loads a page", web_page)
+    def take_down() -> None:
+        """Close things the way the app does when the person closes the window (its closeEvent stops the timers, the
+        stream watcher and the thread pools), and release the browser page before its profile. Ending the process with
+        Qt objects still alive crashes it (exit code 0xC0000005 on Windows): not what a user's exit looks like."""
+        from PySide6.QtCore import QCoreApplication, QEvent
+
+        app = state.get("app")
+        if app is None:
+            return
+
+        def settle() -> None:
+            # deleteLater() objects are only deleted by their own event type, which processEvents() leaves alone
+            # unless the event loop that asked for it is running again.
+            for _ in range(5):
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                app.processEvents()
+
+        for name in ("page", "profile"):  # the page first: a profile must not be released while it has a page
+            obj = state.pop(name, None)
+            if obj is not None:
+                obj.deleteLater()
+                settle()
+        window = state.pop("window", None)
+        if window is not None:
+            window.timer.stop()
+            window.streamless_timer.stop()
+            window.close()
+            window.deleteLater()
+        settle()
+
+    try:
+        ok = run("import the app", import_app) and run("resources are in the bundle", assets)
+        if ok:
+            ok = run("the main window builds", build_window)
+        if ok and web:
+            ok = run("the embedded browser loads a page", web_page)
+    finally:
+        try:
+            take_down()
+        except BaseException as exc:  # reported, but the steps above already say what worked
+            steps.append({"step": "close the window", "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
+            ok = False
     return ok, steps
 
 
@@ -206,10 +241,15 @@ def _smoke_test(argv: list[str]) -> int:
     flag = "--smoke-test-web" if web else "--smoke-test"
     index = argv.index(flag)
     path = argv[index + 1] if index + 1 < len(argv) and not argv[index + 1].startswith("--") else None
+    import threading
+
+    # A hang is a failure too: if the process is still here after a minute, end it with a non-zero code.
+    watchdog = threading.Timer(60.0, lambda: os._exit(3))
+    watchdog.daemon = True
+    watchdog.start()
     ok, steps = _smoke_checks(web=web)
     _smoke_report(path, {"ok": ok, "mode": "web" if web else "app", "steps": steps})
-    sys.stdout and sys.stdout.flush()
-    os._exit(0 if ok else 1)  # worker threads must not keep a diagnostic run alive
+    return 0 if ok else 1  # a normal return: the interpreter then shuts down in order, like a user's exit
 
 
 def main() -> int:

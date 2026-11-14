@@ -78,12 +78,20 @@ class TestSmokeTestFailures(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertFalse(steps[0]["ok"])
 
-    def test_the_exit_code_is_not_zero_when_a_step_fails(self):
-        with patch.object(entry, "_smoke_checks", return_value=(False, [{"step": "x", "ok": False, "detail": "boom"}])), \
-                patch.object(entry, "_smoke_report"), patch.object(entry.os if hasattr(entry, "os") else os, "_exit") as exit_:
-            entry._smoke_test(["--smoke-test"])
+    def test_the_exit_code_is_not_zero_when_a_step_fails_and_zero_when_all_pass(self):
+        with patch.object(entry, "_smoke_report"):
+            with patch.object(entry, "_smoke_checks", return_value=(False, [{"step": "x", "ok": False, "detail": "boom"}])):
+                self.assertEqual(entry._smoke_test(["--smoke-test"]), 1)
+            with patch.object(entry, "_smoke_checks", return_value=(True, [])):
+                self.assertEqual(entry._smoke_test(["--smoke-test"]), 0)
 
-        exit_.assert_called_once_with(1)
+    def test_the_report_goes_to_the_file_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "report.json"
+            with patch.object(entry, "_smoke_checks", return_value=(True, [{"step": "x", "ok": True, "detail": ""}])):
+                entry._smoke_test(["--smoke-test", str(target)])
+
+            self.assertTrue(json.loads(target.read_text(encoding="utf-8"))["ok"])
 
 
 class TestNormalStartIsUnchanged(unittest.TestCase):
