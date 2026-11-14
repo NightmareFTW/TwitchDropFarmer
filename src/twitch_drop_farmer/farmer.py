@@ -133,6 +133,8 @@ class FarmEngine:
         self.focus_campaign_ids: set[str] = set()
         # The game to continue with after a restart (see set_preferred_game).
         self.preferred_game = ""
+        # Campaigns already announced as finished in this run: the engine sees them on every poll.
+        self._announced_complete: set[str] = set()
         # The channel being watched right now is kept while it stays valid (see
         # _channel_priority), and a channel that stopped crediting progress is skipped for a
         # while (see penalize_channel). Stall detection itself lives in farm_health.py.
@@ -404,8 +406,9 @@ class FarmEngine:
 
             if campaign.all_drops_claimed:
                 self._note_completed(campaign)
-                # Raise completion alert if enabled
-                if self.config.alert_farm_complete:
+                # Raise completion alert if enabled, once per campaign (it used to come back every hour)
+                if self.config.alert_farm_complete and campaign.id not in self._announced_complete:
+                    self._announced_complete.add(campaign.id)
                     self.alert_manager.raise_alert(
                         AlertType.FARM_COMPLETE,
                         AlertSeverity.INFO,

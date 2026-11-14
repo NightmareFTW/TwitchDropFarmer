@@ -66,6 +66,73 @@ class TestExpiringAlertInTheEngine(unittest.TestCase):
         self.assertEqual(self.poll_times([[ended]]), [])
 
 
+class TestFinishedAlertIsOncePerCampaign(unittest.TestCase):
+    """The overnight log: "Where Winds Meet - Drop completado!" at 05h, 06h, 07h, 08h, 09h..."""
+
+    def engine(self, campaigns):
+        from twitch_drop_farmer.config import AppConfig
+        from twitch_drop_farmer.farmer import FarmEngine
+
+        manager = AlertManager(dedupe_window_sec=0)  # the manager lets everything through: only the engine decides
+        self.delivered: list[str] = []
+        manager.register_callback(lambda alert: self.delivered.append(alert.message))
+        client = MagicMock()
+        client.consume_diagnostics.return_value = []
+        client.fetch_campaigns.side_effect = lambda **_kw: list(campaigns)
+        engine = FarmEngine(client, AppConfig(watchdog_enabled=False, alert_farm_complete=True))
+        engine.alert_manager = manager
+        return engine
+
+    @staticmethod
+    def finished(name: str) -> DropCampaign:
+        now = datetime.now(UTC)
+        return DropCampaign(
+            id=f"id-{name}", game_name=name, title=name, starts_at=now - timedelta(days=3), ends_at=now + timedelta(days=1),
+            status="ACTIVE", required_minutes=120, progress_minutes=120, all_drops_claimed=True, has_watchable_drops=True,
+            drops=[{"id": "d", "name": "r", "required_minutes": 120, "current_minutes": 120, "claimed": True}],
+        )
+
+    def test_a_finished_campaign_is_announced_once_not_on_every_poll(self):
+        engine = self.engine([self.finished("Sea of Thieves")])
+
+        for _ in range(12):  # an hour and a half of polls
+            engine.poll(force_campaigns=True)
+
+        self.assertEqual(len(self.delivered), 1)
+
+    def test_each_finished_campaign_is_announced_once(self):
+        engine = self.engine([self.finished("A"), self.finished("B"), self.finished("C")])
+
+        for _ in range(5):
+            engine.poll(force_campaigns=True)
+
+        self.assertEqual(len(self.delivered), 3)
+
+    def test_a_campaign_that_finishes_later_is_still_announced(self):
+        late = self.finished("Late")
+        late.all_drops_claimed, late.progress_minutes = False, 60
+        campaigns = [self.finished("Early"), late]
+        engine = self.engine(campaigns)
+        engine.poll(force_campaigns=True)
+        engine.poll(force_campaigns=True)
+        self.assertEqual(len(self.delivered), 1)  # only "Early" so far
+
+        late.all_drops_claimed, late.progress_minutes = True, 120  # it finishes while the app runs
+        engine.poll(force_campaigns=True)
+        engine.poll(force_campaigns=True)
+
+        self.assertEqual(len(self.delivered), 2)
+        self.assertTrue(any("Late" in message for message in self.delivered))
+
+    def test_it_stays_off_when_the_user_turned_the_alert_off(self):
+        engine = self.engine([self.finished("A")])
+        engine.config.alert_farm_complete = False
+
+        engine.poll(force_campaigns=True)
+
+        self.assertEqual(self.delivered, [])
+
+
 class TestWording(unittest.TestCase):
     """The user does not want "completado": say "concluído" (or "completo")."""
 

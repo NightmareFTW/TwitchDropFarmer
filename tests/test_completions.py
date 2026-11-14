@@ -145,6 +145,26 @@ class TestMemory(unittest.TestCase):
 
                 self.assertEqual(len(CompletionMemory(self.path, clock=self.clock)), 0)
 
+    def test_two_threads_writing_at_once_leave_a_valid_file_with_everything(self):
+        """The engine's worker thread and the window's thread both record and save."""
+        import threading
+
+        def work(offset: int) -> None:
+            for index in range(40):
+                self.memory.record(f"Game {offset}-{index}", ends_at=SNAP_END + timedelta(days=index), drops=1, reason=REASON_COMPLETED)
+                self.memory.save()
+
+        threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.memory.save()
+
+        again = CompletionMemory(self.path, clock=self.clock)
+        self.assertEqual(len(again), 8 * 40)
+        self.assertEqual([p.name for p in self.path.parent.glob("*.tmp")], [])
+
     def test_an_empty_game_name_stores_nothing(self):
         self.assertFalse(self.memory.record("", ends_at=SNAP_END, drops=1, reason=REASON_COMPLETED))
 

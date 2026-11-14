@@ -444,6 +444,14 @@ _INTEGRITY_TOKEN_TTL_SECONDS = 240.0
 BOX_ART_RETRY_SEC = 6 * 3600.0
 BOX_ART_RETRY_AFTER_ERROR_SEC = 300.0
 
+# ViewerDropsDashboard answers "failed integrity check" on every try for an account Twitch distrusts: two
+# failing requests per 10-minute cycle (120 in a night), never any data. Once it is known to be rejected it is
+# not asked again for this long, unless the user asks for a full refresh, a new login is made, or the browser
+# harvested an integrity token that may change the answer.
+DASHBOARD_BLOCK_BACKOFF_SEC = 3600.0
+
+_CAMPAIGN_CACHE_WRITE_LOCK = threading.Lock()
+
 INVENTORY_QUERY = {
     "operationName": "Inventory",
     "variables": {"fetchRewardCampaigns": False},
@@ -597,6 +605,8 @@ class TwitchClient:
         self._box_art_failures: dict[tuple[str, str], float] = {}  # (scope, game) -> when to try again
         self._box_art_error_count = 0  # network errors seen while resolving covers (see _remember_box_art_failure)
         self._box_art_clock: Callable[[], float] = time.monotonic
+        self._dashboard_blocked_until = 0.0  # see DASHBOARD_BLOCK_BACKOFF_SEC
+        self._dashboard_blocked_response: dict[str, Any] = {}  # the rejection to replay while backing off
         # What the registry says each game's drops need (subscription or watch time), kept on disk.
         self._registry_rewards = RewardCache(REGISTRY_REWARDS_FILE)
         # The campaigns the app saw finished, and the ones that credited nothing (see completions.py).
@@ -779,6 +789,7 @@ class TwitchClient:
         if auth_token and (not self.login_state.oauth_token or not self.login_state.token_valid):
             if auth_token != self.login_state.oauth_token:
                 self.login_state.token_valid = False
+                self._forget_dashboard_block()
             self.login_state.oauth_token = auth_token
             self._apply_oauth_token(auth_token)
 
@@ -1338,6 +1349,7 @@ class TwitchClient:
         token = token.replace("OAuth ", "").strip()
         self.login_state.oauth_token = token
         self.login_state.token_valid = False
+        self._forget_dashboard_block()
         self._apply_oauth_token(token)
         self.validate_oauth_token()
         self.save_cookies()
@@ -2441,9 +2453,22 @@ class TwitchClient:
             return now + timedelta(days=30), now + timedelta(days=60), "UPCOMING", ""
         return now - timedelta(hours=1), now + timedelta(days=30), "ACTIVE", ""
 
+    def _dashboard_backoff_active(self) -> bool:
+        # getattr: the same convention as _browser_integrity_block_active (a client built without __init__)
+        return (
+            bool(getattr(self, "_dashboard_blocked_response", None))
+            and time.monotonic() < getattr(self, "_dashboard_blocked_until", 0.0)
+            and not self._current_integrity_token()
+        )
+
+    def _forget_dashboard_block(self) -> None:
+        self._dashboard_blocked_until = 0.0
+        self._dashboard_blocked_response = {}
+
     def inventory_recently_ok(self, max_age_sec: float = 180.0) -> bool:
         """True if the Inventory answered lately. "No campaign of mine is in it" only means something then."""
-        return self._inventory_ok_at is not None and time.monotonic() - self._inventory_ok_at <= max_age_sec
+        answered_at = getattr(self, "_inventory_ok_at", None)
+        return answered_at is not None and time.monotonic() - answered_at <= max_age_sec
 
     def remember_completed(self, campaign: DropCampaign, reason: str = REASON_COMPLETED) -> bool:
         """Keep a finished campaign so it is not taken for a new one once Twitch stops listing it.
@@ -4104,9 +4129,12 @@ class TwitchClient:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             payload = [self._campaign_to_jsonable(c) for c in campaigns]
-            tmp = CAMPAIGN_CACHE_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload), encoding="utf-8")
-            os.replace(tmp, CAMPAIGN_CACHE_FILE)
+            # fetch_campaigns() runs on the background thread and on the main thread (a manual refresh), so two
+            # saves can overlap; they share one temp file name, and without this lock they overwrote each other.
+            with _CAMPAIGN_CACHE_WRITE_LOCK:
+                tmp = CAMPAIGN_CACHE_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(payload), encoding="utf-8")
+                os.replace(tmp, CAMPAIGN_CACHE_FILE)
         except Exception:
             pass
 
@@ -4282,17 +4310,33 @@ class TwitchClient:
         self._note(f"Inventory returned {len(ongoing_campaigns)} in-progress campaign(s).")
 
         campaigns_response: dict[str, Any] = {}
-        try:
-            attempted_response = self._post_gql(CAMPAIGNS_QUERY, client_profile="android")
-            if isinstance(attempted_response, dict):
-                campaigns_response = attempted_response
-        except requests.RequestException as exc:
-            self._note(f"ViewerDropsDashboard query failed: {exc}")
+        replayed = False
+        if not full_scan and self._dashboard_backoff_active():
+            campaigns_response = self._dashboard_blocked_response
+            replayed = True
+            minutes = max(1, int(self._dashboard_blocked_until - time.monotonic()) // 60)
+            self._note(
+                "ViewerDropsDashboard: o integrity check rejeitou-o há pouco; "
+                f"o pedido não se repete antes de ~{minutes} min (\"Actualizar dashboard\" tenta já)."
+            )
+        else:
+            try:
+                attempted_response = self._post_gql(CAMPAIGNS_QUERY, client_profile="android")
+                if isinstance(attempted_response, dict):
+                    campaigns_response = attempted_response
+            except requests.RequestException as exc:
+                self._note(f"ViewerDropsDashboard query failed: {exc}")
         dashboard_errors = self._graphql_error_messages(campaigns_response)
         dashboard_integrity_blocked = any(
             "failed integrity check" in message.casefold()
             for message in dashboard_errors
         )
+        if not replayed:
+            if dashboard_integrity_blocked and campaigns_response:
+                self._dashboard_blocked_until = time.monotonic() + DASHBOARD_BLOCK_BACKOFF_SEC
+                self._dashboard_blocked_response = campaigns_response
+            else:
+                self._forget_dashboard_block()  # answered (or failed for another reason): ask again next time
         if not campaigns_response:
             self._note("ViewerDropsDashboard returned no payload; continuing to fallback logic.")
             campaigns_response = {}

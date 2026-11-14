@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,6 +58,8 @@ class CompletionMemory:
         self._path = path
         self._clock = clock
         self._entries: list[dict] = []
+        # The engine's worker thread and the window's thread both write it.
+        self._lock = threading.RLock()
         self.load()
 
     # ----------------------------------------------------------------- disk
@@ -79,10 +82,11 @@ class CompletionMemory:
         self._entries = kept
 
     def save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"campaigns": self._entries}, indent=1), encoding="utf-8")
-        os.replace(tmp, self._path)
+        with self._lock:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"campaigns": self._entries}, indent=1), encoding="utf-8")
+            os.replace(tmp, self._path)
 
     # ----------------------------------------------------------------- writing
     def record(self, game_name: str, *, ends_at: datetime, drops: int, reason: str) -> bool:
@@ -90,6 +94,10 @@ class CompletionMemory:
         key = loose_game_key(game_name)
         if not key:
             return False
+        with self._lock:
+            return self._record(key, game_name, ends_at, drops, reason)
+
+    def _record(self, key: str, game_name: str, ends_at: datetime, drops: int, reason: str) -> bool:
         existing = self._find(key, ends_at)
         if existing is not None:
             if existing["reason"] == REASON_NO_CREDIT and reason == REASON_COMPLETED:
@@ -111,9 +119,10 @@ class CompletionMemory:
 
     def forget_no_credit(self) -> int:
         """Drop the inferences ("it credited nothing") so those campaigns are tried again."""
-        before = len(self._entries)
-        self._entries = [entry for entry in self._entries if entry["reason"] != REASON_NO_CREDIT]
-        return before - len(self._entries)
+        with self._lock:
+            before = len(self._entries)
+            self._entries = [entry for entry in self._entries if entry["reason"] != REASON_NO_CREDIT]
+            return before - len(self._entries)
 
     # ----------------------------------------------------------------- reading
     def is_completed(self, game_name: str, *, ends_at: datetime, drops: int = 0) -> bool:

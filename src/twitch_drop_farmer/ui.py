@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from dataclasses import dataclass
 import hashlib
 import logging
@@ -94,7 +94,7 @@ from .farmer import FarmEngine, FarmSnapshot
 from .models import DropCampaign, FarmDecision
 from .twitch_client import TwitchClient, is_placeholder_box_art
 from .energy_profiles import AVAILABLE_PROFILES, EnergyProfile, get_default_profile, get_profile_by_name
-from .alerts import AlertManager, AlertSeverity, AlertType, get_alert_manager
+from .alerts import AlertManager, AlertSeverity, AlertType, get_alert_manager  # noqa: F401 (AlertManager is used by tests as ui.AlertManager)
 from . import __version__, updater
 
 logger = logging.getLogger(__name__)

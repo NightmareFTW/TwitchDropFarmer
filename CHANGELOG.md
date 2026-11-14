@@ -6,6 +6,42 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.68] - 2026-11-14
+
+Auditoria completa (logs reais, análise estática, *fuzz* e simulação longa). O que se encontrou e corrigiu:
+
+### Fixed
+
+- **«Campanha Concluída» repetia-se de hora a hora** para cada campanha concluída (no log da noite,
+  Where Winds Meet às 05h, 06h, 07h, 08h e 09h). O motor vê a campanha concluída em todos os ciclos
+  e o gestor de alertas só trava repetições durante uma hora. Agora cada campanha é anunciada **uma
+  vez por execução**, e uma que conclua mais tarde continua a ser anunciada.
+- **120 pedidos a falhar numa noite.** O `ViewerDropsDashboard` é rejeitado («failed integrity check»)
+  em todas as tentativas e a app repetia-o 2 vezes a cada ciclo de 10 min, sem nunca obter dados.
+  Depois da primeira rejeição, o pedido não se repete durante 1 hora (cerca de 10 pedidos por noite
+  em vez de 120; o resto do ciclo corre exactamente como antes, com a mesma resposta). Volta a
+  perguntar logo se: carregas em «Actualizar dashboard», se iniciares sessão com outro token, ou se o
+  browser tiver apanhado um token de integridade.
+- **Duas escritas ao mesmo tempo estragavam ficheiros.** A memória de campanhas concluídas é escrita
+  pela *thread* do motor e pela da janela, e a cache de campanhas por duas chamadas de
+  `fetch_campaigns` (a de fundo e a de uma actualização manual), que partilham o mesmo ficheiro
+  temporário: sem trava, a segunda gravação perdia-se em silêncio (4 de 24 numa experiência) e o
+  ficheiro ficava inválido enquanto se sobrepunham. Ambas têm agora um *lock*; os testes falham sem
+  ele.
+- Imports sem uso retirados do `ui.py`.
+
+### Verified (sem alterações)
+
+- Logs das 2.2.64 e 2.2.65 (cerca de 14 h): 667 heartbeats com mediana de 59 s; o único buraco foi
+  uma falha da tua ligação (6 min, 02:55–03:01), de que a app recuperou sozinha e avisou; os 404 de
+  *playlists* eram canais que acabaram, e a farm passou a outro.
+- Análise estática (`pyflakes`): nenhum nome indefinido.
+- *Fuzz*: 4 000 páginas do registo mutadas, 3 000 JSONs de sessão, 500 ficheiros de memória e de
+  cache corrompidos e nomes de jogos extremos: nenhuma excepção inesperada.
+- Simulação de 3 600 ciclos do motor e da janela (6 sementes, campanhas que terminam e voltam como
+  «fantasmas» do registo): nunca se escolheu uma campanha concluída, nunca houve um salto de jogo
+  com a campanha ainda farmável, e nunca mais de 14 consultas de canais num ciclo.
+
 ## [2.2.67] - 2026-11-14
 
 ### Fixed
