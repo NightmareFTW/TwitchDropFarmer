@@ -36,7 +36,9 @@ valores por omissão.
 - **Definições guardadas automaticamente**, botões auditados um a um, e texto que já não é cortado.
 - **Projecto**: README em PT-PT e EN, capturas de ecrã com dados fictícios, mais de 600 testes automáticos
   (incluindo um que impede dados pessoais no repositório) e um fluxo de testes no GitHub Actions, que passa
-  também no Windows (antes falhavam dois testes: um das fitas e o do arranque sem consola).
+  também no Windows (antes falhavam dois testes: um das fitas e o do arranque sem consola), e o *script* que
+  constrói o pacote Windows, que rebentava num checkout limpo (como o do GitHub Actions) por listar uma pasta
+  `dist` que ainda não existia.
 
 ### Conhecido
 

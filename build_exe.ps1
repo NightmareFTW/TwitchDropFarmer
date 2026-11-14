@@ -22,7 +22,10 @@ Write-Host "Using Python: $python"
 
 & $python -m pip install --upgrade pip pyinstaller
 
-Get-ChildItem -Path $distDir -Filter "*.zip" -File | Remove-Item -Force
+# A fresh checkout (the release runner) has no dist\ folder yet: listing it would stop the script.
+if (Test-Path $distDir) {
+    Get-ChildItem -Path $distDir -Filter "*.zip" -File | Remove-Item -Force
+}
 
 if (Test-Path $archivePath) {
     Remove-Item $archivePath -Force

@@ -2509,6 +2509,15 @@ class TestRibbonsFit(_WindowCase):
 
     RIBBONS = [getattr(ui, name) for name in dir(ui) if name.startswith("RIBBON_") and isinstance(getattr(ui, name), tuple)]
 
+    def needs_real_fonts(self) -> None:
+        """A runner with no fonts gives every glyph the same width (one em) and draws nothing: what is measured and
+        painted there says nothing about the real thing, so those checks are skipped on it."""
+        from PySide6.QtGui import QFontMetricsF
+
+        metrics = QFontMetricsF(ui.ribbon_text_font())
+        if metrics.horizontalAdvance("iiii") > 0.6 * metrics.horizontalAdvance("WWWW"):
+            self.skipTest("no proportional font on this machine (every glyph has the same width)")
+
     def drawn_width(self, text: str) -> float:
         """How wide the text is once drawn: measured at the reference size, then scaled."""
         from PySide6.QtGui import QFontMetricsF
@@ -2519,6 +2528,7 @@ class TestRibbonsFit(_WindowCase):
         return ui.RIBBON_FONT_REF_PX * ui.ribbon_text_scale(text)
 
     def test_every_ribbon_text_fits_the_strip(self):
+        """Holds with any font, even one where every glyph is a full em wide."""
         self.assertGreaterEqual(len(self.RIBBONS), 8)
         for text, _colour in self.RIBBONS:
             self.assertLessEqual(self.drawn_width(text), ui.RIBBON_TEXT_MAX_WIDTH + 0.01, text)
@@ -2528,6 +2538,7 @@ class TestRibbonsFit(_WindowCase):
         self.assertLess(self.effective_px("SUBSCRIÇÃO"), ui.RIBBON_FONT_MAX_PX)
 
     def test_no_known_ribbon_text_is_shrunk_below_a_readable_size(self):
+        self.needs_real_fonts()
         for text, _colour in self.RIBBONS:
             self.assertGreaterEqual(self.effective_px(text), ui.RIBBON_FONT_MIN_PX, text)
 
@@ -2536,11 +2547,10 @@ class TestRibbonsFit(_WindowCase):
 
         self.assertLessEqual(self.drawn_width(text), ui.RIBBON_TEXT_MAX_WIDTH + 0.01)
 
-    def test_it_is_measured_large_so_the_font_rounding_of_small_sizes_cannot_matter(self):
-        """CI on Windows: at 6 to 8 px every glyph is rounded up to a whole pixel, so "LIGAR CONTA" measured 66 px
-        even at 6 px and no smaller size made it fit. Simulated here: below 12 px a glyph is never narrower than
-        6 px. The text only fits if it is measured at the large reference size and scaled."""
-        class WindowsLikeMetrics:
+    def test_it_is_measured_large_so_the_rounding_of_small_sizes_cannot_matter(self):
+        """Simulated: below 12 px a glyph is never narrower than 6 px (what a runner measured: 66 px for "LIGAR
+        CONTA" at 6 px). Searching small sizes cannot fit it; measuring at the large reference size and scaling can."""
+        class RoundingMetrics:
             def __init__(self, font):
                 self.pixels = font.pixelSize()
 
@@ -2548,10 +2558,10 @@ class TestRibbonsFit(_WindowCase):
                 per_glyph = self.pixels * 0.62
                 return len(text) * (per_glyph if self.pixels >= 12 else max(per_glyph, 6.0))
 
-        with patch.object(ui, "QFontMetricsF", WindowsLikeMetrics):
+        with patch.object(ui, "QFontMetricsF", RoundingMetrics):
             for text, _colour in self.RIBBONS:
                 scale = ui.ribbon_text_scale(text)
-                self.assertLessEqual(WindowsLikeMetrics(ui.ribbon_text_font()).horizontalAdvance(text) * scale,
+                self.assertLessEqual(RoundingMetrics(ui.ribbon_text_font()).horizontalAdvance(text) * scale,
                                      ui.RIBBON_TEXT_MAX_WIDTH + 0.01, text)
                 self.assertGreaterEqual(ui.RIBBON_FONT_REF_PX * scale, ui.RIBBON_FONT_MIN_PX, text)
 
@@ -2569,38 +2579,40 @@ class TestRibbonsFit(_WindowCase):
         from PySide6.QtGui import QColor, QImage, QPixmap
 
         art = QPixmap(ui.GameCard.CARD_W, ui.GameCard.CARD_H)
-        art.fill(QColor("#101015"))  # dark, so any bright pixel near the corner is the ribbon's text
+        art.fill(QColor("#101015"))
         card = ui.GameCard("k", "Some Game", art, ribbon=ribbon)
         image = QImage(card.size(), QImage.Format.Format_ARGB32)
         image.fill(QColor("#101015"))
         card.render(image)
         return image
 
-    def bright_pixels(self, image):
-        """(x, y) of the near-white pixels in the top-left square, where the ribbon is."""
+    def text_pixels(self, text, colour):
+        """(x, y) of the pixels the ribbon text changes: the card painted with the text minus the same card with
+        an empty ribbon (so the border, the fill and any colour are cancelled out, whatever the font's anti-aliasing)."""
         from PySide6.QtGui import QColor
 
+        with_text, without = self.painted_card((text, colour)), self.painted_card(("", colour))
         size = ui.RIBBON_SIZE + 12
-        found = []
+        changed = []
         for y in range(size):
             for x in range(size):
-                colour = QColor(image.pixel(x, y))
-                if min(colour.red(), colour.green(), colour.blue()) > 215:
-                    found.append((x, y))
-        return found
+                a, b = QColor(with_text.pixel(x, y)), QColor(without.pixel(x, y))
+                if abs(a.red() - b.red()) + abs(a.green() - b.green()) + abs(a.blue() - b.blue()) > 60:
+                    changed.append((x, y))
+        return changed
 
     def test_every_ribbon_text_is_painted_and_stays_inside_the_triangle(self):
-        """The painting itself: the white text is there, none of it spills past the diagonal edge, and it is not
-        cut off by the card's edges (too long a text is, because the text runs from the left edge to the top one)."""
-        baseline = set(self.bright_pixels(self.painted_card(None)))  # the card's own light border line
-        for ribbon in self.RIBBONS:
-            with self.subTest(ribbon=ribbon[0]):
-                text_pixels = [p for p in self.bright_pixels(self.painted_card(ribbon)) if p not in baseline]
+        """The painting itself: the text is there, none of it spills past the diagonal edge, and it is not cut off by
+        the card's edges (too long a text is, because it runs from the left edge towards the top one)."""
+        self.needs_real_fonts()
+        for text, colour in self.RIBBONS:
+            with self.subTest(ribbon=text):
+                pixels = self.text_pixels(text, colour)
 
-                self.assertGreater(len(text_pixels), 15, "the text was not painted")
-                outside = [(x, y) for x, y in text_pixels if x + y > ui.RIBBON_SIZE + 2]
+                self.assertGreater(len(pixels), 15, "the text was not painted")
+                outside = [(x, y) for x, y in pixels if x + y > ui.RIBBON_SIZE + 2]
                 self.assertEqual(outside, [], "text painted beyond the ribbon's diagonal edge")
-                cut = [(x, y) for x, y in text_pixels if x == 0 or y == 0]
+                cut = [(x, y) for x, y in pixels if x == 0 or y == 0]
                 self.assertEqual(cut, [], "text cut off by the card's top or left edge")
 
 

@@ -108,7 +108,9 @@ class TestBackoff(_Case):
 
         remaining = self.client._dashboard_blocked_until - tc.time.monotonic()
         self.assertGreater(remaining, 3500)
-        self.assertLessEqual(remaining, 3600)
+        # Two clock readings in a row can be identical (Windows' monotonic clock ticks every ~16 ms): the
+        # difference is then 3600 plus floating-point noise, not a hair under it.
+        self.assertLessEqual(remaining, 3600 + 1e-6)
 
     def test_a_refresh_asked_by_the_user_always_asks(self):
         self.cycle()

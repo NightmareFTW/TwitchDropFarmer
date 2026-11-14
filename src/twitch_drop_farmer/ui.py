@@ -135,8 +135,9 @@ def ribbon_text_scale(text: str) -> float:
     """The factor that takes ribbon_text_font() down to the size that fits the strip (at most the 8 px size).
 
     The width is measured on the large font and scaled, instead of trying 8, 7, 6 px until the text fits:
-    at those sizes Windows rounds every glyph's width up to whole pixels, so the text measures wider than it
-    is drawn and no smaller size shrinks it (CI on Windows: "LIGAR CONTA" was 66 px even at 6 px).
+    small sizes are measured with rounded glyph widths, so no smaller size is guaranteed to shrink the text
+    (on a Windows CI runner without fonts every glyph is one em wide: "LIGAR CONTA" was 66 px at 6 px and
+    never fitted). Measured large and scaled, it fits whatever the font.
     """
     width = QFontMetricsF(ribbon_text_font()).horizontalAdvance(text)
     natural = RIBBON_FONT_MAX_PX / RIBBON_FONT_REF_PX
