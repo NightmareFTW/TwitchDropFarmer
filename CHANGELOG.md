@@ -6,6 +6,41 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.2.71] - 2026-11-14
+
+Preparação para tornar o repositório público: nada de pessoal no código, README novo e capturas de ecrã
+com dados fictícios.
+
+### Added
+
+- **Teste que procura dados pessoais** (`tests/test_no_personal_data.py`): falha se algum ficheiro seguido
+  pelo git tiver endereços de email (fora os de *no-reply* e de exemplo), caminhos de pasta de utilizador
+  reais (`C:\Users\<nome>`, `/home/<nome>`), valores com forma de token da Twitch ou IDs de conta reais.
+  Termos específicos de cada pessoa (o nome de utilizador, por exemplo) não ficam no repositório: lêem-se,
+  se existir, de `tests/.private_terms`, que o git ignora. Verificado por mutação (um email plantado no
+  README faz o teste falhar).
+- `.gitignore` passa a cobrir os ficheiros que contêm dados da conta (`config.json`, `session*.json`,
+  caches, `logs/`, `log-*.txt`, `.env`, `*.pem`, `*.key`, `*.har`).
+
+### Changed
+
+- **README (PT-PT e EN) reescrito** para reflectir a aplicação de hoje: o que faz e como funciona, instalação
+  (pacote Windows e código-fonte), primeiros passos, porque é que o *claim* automático vem desligado, que
+  ficheiros ficam no computador e com quem a app fala, limitações conhecidas, resolução de problemas,
+  desenvolvimento e aviso. Já não fixa um número de versão nem repete o histórico (que está no CHANGELOG).
+- **Capturas de ecrã novas**, com jogos, canais e drops fictícios. `tools/take_screenshots.py` corre agora
+  com uma pasta pessoal temporária e sem rede, por isso nunca lê nem mostra a conta de quem a corre (antes
+  usava a configuração real e fotografava ecrãs vazios da 2.0.24).
+- `SECURITY.md`: deixa de indicar `2.0.x` como a versão suportada e lista os ficheiros de sessão actuais.
+
+### Fixed
+
+- **As fitas de estado dos cartões cortavam o texto.** «CONCLUÍDO», «SEM CANAIS», «LIGAR CONTA» e outras
+  perdiam a primeira e a última letra por não caberem na faixa diagonal. A fita passou de 58 para 70 px e o
+  tipo de letra ajusta-se ao texto (de 8 px até 6 px, medido com as métricas reais da máquina).
+- Nome de utilizador, ID de conta e nome de um canal reais que estavam em testes foram substituídos por
+  valores neutros.
+
 ## [2.2.70] - 2026-11-14
 
 ### Changed

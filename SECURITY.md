@@ -2,9 +2,9 @@
 
 ## Supported Versions
 
-- `2.0.x`: Supported
+- The latest release: Supported
 - `main`: Best-effort support during active development
-- Older versions: Not supported
+- Older releases: Not supported (please update first)
 
 ## Reporting a Vulnerability
 
@@ -31,9 +31,9 @@ Include in your report:
 
 This project processes local authentication/session artifacts. Do not commit or share:
 
-- `cookies.json`
-- `campaign_cache.json`
+- `cookies.json` and `session.json` (they hold the login token in plain text)
+- `config.json` and the other files in `~/.twitch-drop-farmer`
 - Session exports (JSON)
-- `crash.log` or logs with tokens/cookies
+- Logs that were not saved with the app's "Save log" button (it removes tokens and cookies; anything else may not)
 
-Before opening issues, redact all sensitive values.
+Before opening issues, redact all sensitive values, including your Twitch login name and user id.

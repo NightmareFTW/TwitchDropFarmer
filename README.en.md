@@ -2,106 +2,67 @@
 
 [PT-PT](README.md) | [EN](README.en.md)
 
-A Python + PySide6 desktop app to automate Twitch Drops farming with local control, campaign filters, and automatic channel rotation.
+A desktop app (Python + PySide6) that farms **Twitch Drops** for you: it picks the campaign, keeps your watch
+time counting without opening any video, recovers by itself when something stalls, and tells you when a drop
+is ready to claim. Everything runs on your own computer.
 
-Current version: `2.2.41`
+> **Independent project, not affiliated with Twitch.** Automating viewing may go against the platform's terms of
+> service, and Twitch can change or block what this app relies on at any time. Use it at your own risk. More in
+> [Known limitations](#known-limitations) and [Disclaimer](#disclaimer).
 
-## About the project
+![Dashboard](docs/images/ui-dashboard.png)
 
-Twitch Drop Farmer has evolved into a more resilient and predictable farming client:
+*The screenshots use demo data (made-up games and channels), never a real account.*
 
-- Dashboard states now reflect real campaign outcomes (Active, Not started, No stream, Completed, Lost, Subscription required).
-- Manual game targeting is now sticky and avoids unexpected automatic switches.
-- Filters are reorganized into sub-tabs with search and bulk actions (select/clear all and visible).
-- Farming context remains clearer even when a valid stream is temporarily unavailable.
-- Automation is designed for stable local operation without external service dependencies.
-- Diagnostics and update checks provide clearer status and compact test reporting.
+## What it does
 
-## Highlights
+- **Finds campaigns**, active and upcoming. When Twitch refuses the dashboard ("failed integrity check"), it uses
+  the public [twitchdrops.app](https://twitchdrops.app) registry to know what exists and keeps farming.
+- **Picks the best target** by campaign rules, eligibility and available channel (configurable priority, such as
+  "ending soonest"). You can **pin a game** from a dashboard card.
+- **Farms without opening a video**: it sends the watch heartbeats and follows the channel's stream in the
+  background, with few requests and energy profiles (Economic, Balanced, Aggressive).
+- **Recovers by itself**: a monitor spots campaigns that are not crediting, restarts, switches channel and, as a
+  last resort, gives up and sets the campaign aside. It remembers the campaigns you already finished so it does
+  not farm them again.
+- **Picks up where it left off**: it remembers the last game and, if the farm was running when you closed the app,
+  starts again by itself (can be turned off).
+- **Dashboard** with one card per game and a status ribbon: `FARMING`, `LIVE`, `A VERIFICAR` (checking),
+  `SEM CANAIS` (no channels), `LIGAR CONTA` (link account), `SUBSCRIÇÃO` (subscription), `CONCLUÍDO` (done),
+  `INATIVO` (inactive). Filters to hide subscription-only or inactive games.
+- **Filters**: whitelist and blacklist for games and channels, with search and bulk actions.
+- **Alerts** (and Windows notifications) for a drop ready to claim, a campaign about to expire, a farm without
+  progress, a channel that went offline, an invalid session and connection errors.
+- **Easy sign-in**: the **Log in** button explains each step; optionally it remembers the session on this computer.
+- **Diagnostics and log**: a system diagnostic, and "Save log" writes a file with tokens and cookies **removed**,
+  ready to share.
+- Interface in **English** and **Portuguese (Portugal)**, with several themes.
 
-- Automatic campaign discovery (active and upcoming)
-- Best-target farming selection logic
-- Auto-switch between channels
-- Whitelist and blacklist filters (games and channels)
-- Manual and automatic drop redemption
-- Real-time farming status (game, campaign, channel, progress, ETA)
-- Durable session JSON import/export mode
+## How it works
 
-## What's new in 2.2.41
+1. It reads your *Inventory* and the Twitch dashboard with your session to know your real progress.
+2. It picks a channel with active drops for the game and sends the watch heartbeats, without playing video.
+3. It checks in the *Inventory* that the minutes are really being credited. If not, it escalates: restarts the
+   connection, switches channel, and finally moves on to the next campaign.
 
-- Fixed the Filters whitelist hiding already-selected games with no active campaign — it now shows all configured games.
-- New field to add games to the whitelist manually, even when Twitch withholds the full catalog.
+A game that has just started is not in the *Inventory* until Twitch has credited its first minutes (normally 2 to
+3 minutes). Until then "Active drops" says it is **waiting** for the information, and only after 15 minutes
+without data does it say "No active drops".
 
-## What's new in 2.2.40
+## Installation
 
-- Fixed the Filters tab only showing games already in the whitelist.
-- Disk-persisted campaign cache: the full game catalog now survives app restarts.
+### Windows package (simplest)
 
-## What's new in 2.2.39
+1. Go to [Releases](../../releases) and download `TwitchDropFarmer-win64.zip`.
+2. Extract the whole folder (not just the `.exe`) and open `TwitchDropFarmer.exe`.
 
-- Dashboard notice + "Refresh dashboard" tooltip explaining what to do when a game's drops don't load.
-- Full PT-PT (pre-1990 orthography) and EN translation review, with fixed accents.
-- Fixed the "About" dialog showing literal `\n-` instead of line breaks; text rewritten and refreshed.
+The package is not signed, so Windows SmartScreen may warn you the first time.
 
-## What's new in 2.2.38
+### From source
 
-- New "Showing X/Y whitelisted games" counter on the dashboard.
+You need Python 3.10 or newer (from [python.org](https://www.python.org); avoid the Anaconda one).
 
-## What's new in 2.2.37
-
-- "Refresh dashboard" button now runs a full whitelist detail scan instead of just 8 campaigns per cycle.
-
-## What's new in 2.2.36
-
-- Per-drop detail fetching now prioritizes the selected/active farm target instead of just soonest-ending order.
-
-## What's new in 2.2.35
-
-- Fixed a 2.2.34 regression: the on-disk persistent profile made the browser fallback stop finding campaigns after many restarts. Reverted to an in-memory profile (reused within a single run).
-
-## What's new in 2.2.34
-
-- Persistent, shared browser profile across fallback calls instead of a fresh one every time.
-- Client-Integrity token harvested from the browser is reused on direct requests for a few minutes.
-- Circuit breaker skips redundant DropCampaignDetails retries when integrity is already confirmed blocked for the cycle.
-
-## What's new in 2.2.33
-
-- `[HH:MM:SS]` timestamps on every log line.
-- Campaign cache now merges instead of replacing — whitelisted games outside the actively farmed one fill in over time.
-
-## What's new in 2.2.32
-
-- Fixed browser-fallback log spam from overlapping async calls, and reduced the per-campaign detail fetch cost so it no longer delays the streamless heartbeat.
-
-## What's new in 2.2.31
-
-- The invisible browser fallback (no window, ever) now also visits each active campaign's detail page, capturing real per-drop progress instead of only summary data.
-
-## What's new in 2.2.30
-
-- **[CRITICAL]** Fixed an empty `Client-Id` on every direct GraphQL request (Inventory, ViewerDropsDashboard, DropCampaignDetails), which made Twitch's integrity check always fail and forced the slow browser fallback. Restored Twitch's real public Client-IDs — the app should now work without opening any browser.
-
-## What's new in 2.2.29
-
-- Fixed the "Active drops" panel showing "No active drops to display" even while a campaign is being actively farmed — it now shows aggregate progress when Twitch doesn't return per-drop detail.
-
-## What's new in 2.2.28
-
-- Fixed a global false-positive "subscription required" warning on the dashboard, active-drops list, and hide-sub-only checkbox count — campaigns with missing per-drop metadata (browser fallback) are no longer confused with subscription-only ones.
-
-## What's new in 2.2.27
-
-- Fixed false critical OAuth diagnostic failures for durable session users.
-- Diagnostics now run in a safe mode without rendered browser fallback in worker threads.
-- Added compact diagnostic report table (`Test | Status | Time | Message`).
-- Improved subscription-only hiding logic for campaigns with missing actionable metadata.
-- Dashboard grid now compacts correctly after hidden-game filtering.
-- Fixed manual target behavior so selected games stay selected reliably.
-
-## Quick Start
-
-### Windows (PowerShell)
+Windows (PowerShell):
 
 ```powershell
 python -m venv .venv
@@ -111,7 +72,7 @@ $env:PYTHONPATH="src"
 python -m twitch_drop_farmer
 ```
 
-### Linux/macOS
+Linux / macOS:
 
 ```bash
 python -m venv .venv
@@ -120,80 +81,131 @@ python -m pip install -r requirements.txt
 PYTHONPATH=src python -m twitch_drop_farmer
 ```
 
-## Build EXE (Windows)
+On Windows you can also double-click `TwitchDropFarmer.pyw`, which opens the app without a console window.
+Windows is the main target; other systems should work (PySide6) but are not tested the same way.
+
+## Getting started
+
+1. Click **Log in** (top-right corner) and follow the steps. If you tick "Remember the session on this computer",
+   next time the button signs in by itself.
+2. In **Filters**, tick the games you want to farm (if you tick none, every active game can be farmed).
+3. In **Dashboard**, click a card to pin a game, or let the app choose.
+4. Click **Start farm**. Progress, channel and time to the next drop appear under "Farming now".
+5. When the "Drop ready" notice appears, claim it at
+   [twitch.tv/drops/inventory](https://www.twitch.tv/drops/inventory).
+
+### Other ways to sign in (Account tab)
+
+- **Quick token**: paste only the value of your browser's `auth-token` cookie (no cookie name, no `OAuth`
+  prefix), save and validate.
+- **Durable session**: export the session as JSON from the browser where you are signed in and import it in the
+  Account tab.
+
+## Redeeming drops
+
+**"Redeem drops automatically" is off by default**, for a reason: Twitch usually rejects claims made by this
+app ("failed integrity check"), while the same click on the website or on your phone works. Turning it on mostly
+produces failed attempts (each one a burst of requests that Twitch may see as automation). The most reliable
+choice is to claim at [twitch.tv/drops/inventory](https://www.twitch.tv/drops/inventory) when the app tells you.
+The "?" next to the option explains this inside the app. The **Redeem drops** button makes one manual attempt.
+
+## Your data and privacy
+
+Everything stays on your computer, in the `~/.twitch-drop-farmer` folder (on Windows,
+`C:\Users\<user>\.twitch-drop-farmer`):
+
+| File | What it holds |
+| --- | --- |
+| `config.json` | Your settings and game/channel lists |
+| `cookies.json` | The session cookie, **in plain text** |
+| `session.json` | The kept session, **only if you say yes** to "Remember the session" (deleted when turned off) |
+| `campaign_cache.json`, `registry_rewards.json`, `completed_campaigns.json` | Campaign caches (no secrets) |
+| `logs/` | The logs you save, with secrets removed |
+
+The app only talks to: Twitch (`twitch.tv` and its video and image servers), the public `twitchdrops.app`
+registry (read only), `api.github.com` (to check for a new version) and, to get game covers Twitch does not
+provide, DuckDuckGo, Google and Steam (with the **game name** only). There is no telemetry, no accounts of its
+own and no project servers.
+
+**Never share** `cookies.json`, `session.json` or a session JSON: whoever has them can sign in to your Twitch
+account. Before opening an issue, review the log ("Save log" already removes tokens and cookies). Security policy
+and responsible disclosure: [SECURITY.md](SECURITY.md).
+
+## Known limitations
+
+- Twitch may reject this app's requests with "failed integrity check". That is why automatic claiming is off by
+  default and why some games have no per-drop detail for the first few minutes.
+- **Subscription** drops cannot be farmed: they show the `SUBSCRIÇÃO` ribbon (and you can hide them).
+- A new game takes a few minutes to show information (see [How it works](#how-it-works)).
+- **Check for updates** only tells you whether a newer version exists; it does not download or install it.
+- This relies on Twitch behaviour that changes without notice: if something stops working, the GraphQL queries
+  may need updating.
+
+## Troubleshooting
+
+- `QtCore` DLL error on Windows: create the `.venv` with the official Python (python.org), not Anaconda's. If you
+  use Conda, install `PySide6` from `conda-forge`. If it persists, reinstall the Microsoft Visual C++
+  Redistributable and recreate the `.venv`.
+- The app icon is still out of date on Windows: run `tools\refresh_icon_cache.ps1` (or, non-interactively,
+  `powershell -ExecutionPolicy Bypass -File .\tools\refresh_icon_cache.ps1 -Force`).
+- A campaign is not crediting: wait a few minutes (see [How it works](#how-it-works)). If it stays that way, the
+  monitor switches channel and finally sets it aside. "Update dashboard" makes the app try again the ones it gave
+  up on.
+- You need to ask for help: use **Save log**, which creates a file with secrets removed, and attach it.
+
+## Development
+
+Tests (the interface runs without a screen with `QT_QPA_PLATFORM=offscreen`):
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
+```
+
+The tests include a check that no file tracked by git has e-mails, tokens, account ids or user paths. To make it
+look for terms of your own too (your username, for example), put them, one per line, in `tests/.private_terms`
+(ignored by git).
+
+Every change bumps the version in `src/twitch_drop_farmer/__init__.py` and adds an entry to the
+[CHANGELOG](CHANGELOG.md); a test fails if either is missing.
+
+Build the Windows package (it uses `onedir`, because a single `.exe` with Qt WebEngine would be huge):
 
 ```powershell
 .\build_exe.ps1
 ```
 
-Generated binary:
+It creates `dist\TwitchDropFarmer\TwitchDropFarmer.exe` and `dist\TwitchDropFarmer-win64.zip`. A `v*` tag makes
+GitHub Actions build the package and publish it in a release. The screenshots in this README are generated with
+`python tools/take_screenshots.py` (demo data, no network, and it does not read your configuration).
 
-- dist\TwitchDropFarmer\TwitchDropFarmer.exe
-- dist\TwitchDropFarmer-win64.zip
+```text
+src/twitch_drop_farmer/
+  __main__.py          start-up
+  ui.py                main window, dashboard, filters, settings
+  twitch_client.py     requests to Twitch (GraphQL, Inventory, heartbeats) and to the public registry
+  farmer.py            engine: target, campaign and channel selection
+  farm_health.py       stall monitor and recovery
+  stream_watcher.py    background following of the channel's stream
+  completions.py       memory of the campaigns already finished
+  registry_rewards.py  what the registry says each drop needs (watch time or a subscription)
+  login_dialog.py      the "Log in" window
+  alerts.py            alerts and notifications
+  config.py            settings and file paths
+  energy_profiles.py   energy profiles
+  diagnostic.py        system diagnostic
+  log_export.py        saving the log without secrets
+  updater.py           new-version check
+  models.py, game_names.py
+tests/                 automated tests
+tools/                 helper tools (screenshots, probes, icon)
+```
 
-Notes:
+## Disclaimer
 
-- The build now uses `onedir` to avoid an oversized single-file executable with Qt WebEngine.
-- The generated ZIP is the recommended release artifact for distribution.
-
-## GitHub Releases
-
-- `v*` tags can now trigger an automated Windows release build through GitHub Actions.
-- The release publishes `TwitchDropFarmer-win64.zip` as an asset.
-- Release notes for this version: `docs/releases/v2.2.41.en.md` and `docs/releases/v2.2.41.pt-PT.md`.
-
-## Authentication
-
-Click **Log in** (top right): the window explains each step. If you tick “Remember the
-session on this computer”, the button signs you in by itself next time.
-
-Or use your Twitch auth-token cookie value inside the app (Account tab).
-
-- Paste only the cookie value
-- Do not include the cookie name
-- Do not include the OAuth prefix
-
-Durable session alternative:
-
-- Import session JSON in the Account tab.
-- Save and refresh.
-
-## Privacy and Security
-
-- Credentials and session artifacts are stored locally.
-- Sensitive data must never be published in issues or commits.
-- The repository includes ignore rules to prevent common local data leaks.
-- Responsible disclosure policy: `SECURITY.md`.
-
-## Screenshots
-
-### Dashboard
-
-![Dashboard](docs/images/ui-dashboard.png)
-
-### Farming View
-
-![Farming View](docs/images/ui-farming.png)
-
-### Campaigns View
-
-![Campaigns View](docs/images/ui-campaigns.png)
-
-### Settings View
-
-![Settings View](docs/images/ui-settings.png)
-
-## Troubleshooting
-
-- App icon still looks stale on Windows:
-	- Run `tools\\refresh_icon_cache.ps1` in PowerShell to clear icon cache and restart Explorer.
-	- Non-interactive alternative: `powershell -ExecutionPolicy Bypass -File .\\tools\\refresh_icon_cache.ps1 -Force`
-
-## Notes
-
-- Twitch APIs and GraphQL behavior may change over time.
-- If endpoints change, query hashes and parsing logic may need updates.
+This project is not affiliated with or endorsed by Twitch. It relies on endpoints that can change or be blocked
+without notice, and using automation may violate Twitch's terms of service and lead to restrictions on your
+account. It is provided as is, without warranty, and all responsibility for its use is yours.
 
 ## License
 
-This project is licensed under the MIT License. See LICENSE for details.
+MIT License. See [LICENSE](LICENSE).

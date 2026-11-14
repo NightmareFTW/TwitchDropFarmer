@@ -2488,5 +2488,36 @@ class TestDropsWaitMessage(_WindowCase):
         self.assertIn("A aguardar", " ".join(self.texts()))
 
 
+class TestRibbonsFit(_WindowCase):
+    """The status ribbon on a game card is a small diagonal strip: long words lost their first and last letters."""
+
+    RIBBONS = [getattr(ui, name) for name in dir(ui) if name.startswith("RIBBON_") and isinstance(getattr(ui, name), tuple)]
+
+    def width(self, text: str) -> int:
+        from PySide6.QtGui import QFontMetrics
+
+        return QFontMetrics(ui.ribbon_font(text)).horizontalAdvance(text)
+
+    def test_every_ribbon_text_fits_the_strip(self):
+        self.assertGreaterEqual(len(self.RIBBONS), 8)
+        for text, _colour in self.RIBBONS:
+            self.assertLessEqual(self.width(text), ui.RIBBON_TEXT_MAX_WIDTH, text)
+
+    def test_a_short_word_keeps_the_full_size_and_a_long_one_is_shrunk(self):
+        self.assertEqual(ui.ribbon_font("LIVE").pixelSize(), ui.RIBBON_FONT_MAX_PX)
+        self.assertLess(ui.ribbon_font("SUBSCRIÇÃO").pixelSize(), ui.RIBBON_FONT_MAX_PX)
+
+    def test_the_text_is_never_shrunk_below_a_readable_size(self):
+        for text in ("A TEXT FAR TOO LONG FOR ANY RIBBON", "LIGAR CONTA"):
+            self.assertGreaterEqual(ui.ribbon_font(text).pixelSize(), ui.RIBBON_FONT_MIN_PX, text)
+
+    def test_the_text_is_bold(self):
+        self.assertTrue(ui.ribbon_font("LIVE").bold())
+
+    def test_the_strip_is_long_enough_for_the_text_not_just_the_font_small_enough(self):
+        """The ribbon grew from 58 to 70 px: with the old size even 6 px text would not have fitted."""
+        self.assertGreaterEqual(ui.RIBBON_TEXT_MAX_WIDTH, 50)
+
+
 if __name__ == "__main__":
     unittest.main()

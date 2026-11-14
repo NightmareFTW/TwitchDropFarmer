@@ -53,3 +53,19 @@ TwitchDropFarmer/.vscode/
 /_internal/
 /TwitchDropFarmer.exe
 
+# Personal data: the app keeps these under ~/.twitch-drop-farmer, and they must never be committed
+config.json
+session.json
+session*.json
+registry_rewards.json
+completed_campaigns.json
+campaign_cache.json
+logs/
+log-*.txt
+.env
+.env.*
+*.har
+*.pem
+*.key
+# Optional list of account-specific terms that tests/test_no_personal_data.py must never find in the repo
+tests/.private_terms

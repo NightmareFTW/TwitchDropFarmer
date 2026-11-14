@@ -21,7 +21,7 @@ import requests
 
 import PySide6
 from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, QPoint, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygon
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygon
 
 
 def _resolve_assets_dir() -> Path:
@@ -112,6 +112,24 @@ RIBBON_SUB         = ("SUBSCRIÇÃO", "#e67e22")  # orange  – campanha apenas 
 RIBBON_DONE        = ("CONCLUÍDO",  "#2980b9")  # blue    – todos os drops já obtidos
 RIBBON_INACTIVE    = ("INATIVO",   "#7f8c8d")  # gray    – campanha futura, expirada ou sem dados
 RIBBON_UNCHECKED   = ("A VERIFICAR", "#95a5a6")  # grey  – canais ainda não consultados (ver FarmEngine)
+
+# The ribbon is a triangle in the card's top-left corner (legs of RIBBON_SIZE px) with the text along its
+# diagonal. The strip is only so long: 9-11 letters at the old 8 px bold ("CONCLUÍDO", "SEM CANAIS",
+# "LIGAR CONTA") overflowed it and lost their first and last letters, so the size is fitted to the text.
+RIBBON_SIZE = 70
+RIBBON_TEXT_MAX_WIDTH = int((RIBBON_SIZE * 2 / 3 - 2 - 5.7) * 1.4142 - 4)  # inner edge of the text band
+RIBBON_FONT_MAX_PX, RIBBON_FONT_MIN_PX = 8, 6
+
+
+def ribbon_font(text: str) -> QFont:
+    """Bold, as large as fits the ribbon (RIBBON_FONT_MAX_PX down to RIBBON_FONT_MIN_PX pixels)."""
+    font = QFont()
+    font.setBold(True)
+    for pixels in range(RIBBON_FONT_MAX_PX, RIBBON_FONT_MIN_PX - 1, -1):
+        font.setPixelSize(pixels)
+        if QFontMetrics(font).horizontalAdvance(text) <= RIBBON_TEXT_MAX_WIDTH:
+            break
+    return font
 
 # Twitch's integrity check refuses the claim when it comes from this app, so a drop that
 # is ready stays ready. Each failed attempt is a burst of failing requests, so the retries for
@@ -283,7 +301,7 @@ class GameCard(QWidget):
         # -- diagonal ribbon (top-left) --
         if self._ribbon:
             ribbon_text, ribbon_hex = self._ribbon
-            ribbon_size = 58
+            ribbon_size = RIBBON_SIZE
             pts = QPolygon([QPoint(0, 0), QPoint(ribbon_size, 0), QPoint(0, ribbon_size)])
             painter.setBrush(QColor(ribbon_hex))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -291,12 +309,10 @@ class GameCard(QWidget):
             painter.save()
             painter.translate(ribbon_size // 3, ribbon_size // 3 - 2)
             painter.rotate(-45)
-            rib_font = QFont()
-            rib_font.setPixelSize(8)
-            rib_font.setBold(True)
-            painter.setFont(rib_font)
+            painter.setFont(ribbon_font(ribbon_text))
             painter.setPen(QColor("white"))
-            painter.drawText(QRect(-22, -7, 44, 14), Qt.AlignmentFlag.AlignCenter, ribbon_text)
+            half = RIBBON_TEXT_MAX_WIDTH // 2
+            painter.drawText(QRect(-half, -7, RIBBON_TEXT_MAX_WIDTH, 14), Qt.AlignmentFlag.AlignCenter, ribbon_text)
             painter.restore()
 
         # -- border (outside clip so it sits on the rounded edge) --
