@@ -24,9 +24,9 @@ valores por omissão.
   dashboard, e os drops que exigem subscrição são reconhecidos e podem ser ocultados.
 - **Iniciar sessão sem esforço**: um botão com uma janela que explica cada passo, e a opção de lembrar a
   sessão neste computador.
-- **Dashboard** com fitas de estado em cada cartão (`FARMING`, `LIVE`, `CONCLUÍDO`, `SEM CANAIS`...), filtros
-  para ocultar jogos só de subscrição ou inactivos, capas fiáveis e uma mensagem de espera para um jogo que
-  acabou de começar.
+- **Dashboard** com fitas de estado em cada cartão (`FARMING`, `LIVE`, `CONCLUÍDO`, `SEM CANAIS`...) cujo texto
+  cabe sempre inteiro, também no Windows, filtros para ocultar jogos só de subscrição ou inactivos, capas
+  fiáveis e uma mensagem de espera para um jogo que acabou de começar.
 - **Alertas que funcionam**: «Drop pronto», campanha a expirar, farm sem progresso, canal desligado, sessão
   inválida.
 - **Redimir drops automaticamente vem desligado**, com um «?» a explicar porquê: a Twitch costuma rejeitar o
@@ -35,7 +35,8 @@ valores por omissão.
   a verdade.
 - **Definições guardadas automaticamente**, botões auditados um a um, e texto que já não é cortado.
 - **Projecto**: README em PT-PT e EN, capturas de ecrã com dados fictícios, mais de 600 testes automáticos
-  (incluindo um que impede dados pessoais no repositório) e um fluxo de testes no GitHub Actions.
+  (incluindo um que impede dados pessoais no repositório) e um fluxo de testes no GitHub Actions, que passa
+  também no Windows (antes falhavam dois testes: um das fitas e o do arranque sem consola).
 
 ### Conhecido
 

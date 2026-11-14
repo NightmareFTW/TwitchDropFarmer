@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -172,6 +173,8 @@ class AlertManager:
         """Show desktop notification (Windows 10+ only)."""
         if sys.platform != "win32":
             return False
+        if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
+            return False  # no desktop to show it on (this is also how the tests run: they must not pop real toasts)
 
         try:
             from win10toast import ToastNotifier

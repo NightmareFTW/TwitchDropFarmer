@@ -323,6 +323,45 @@ class TestDropReadyAnnouncement(unittest.TestCase):
         self.assertEqual(len(manager.alerts), 2)
 
 
+class TestDesktopNotification(unittest.TestCase):
+    """The Windows toast. The CI runner (Windows) was popping real ones during the tests and ended with a
+    "WNDPROC return value cannot be converted to LRESULT" error from the toast's own thread."""
+
+    def alert(self):
+        from twitch_drop_farmer.alerts import Alert
+
+        return Alert(alert_type=AlertType.DROP_READY, severity=AlertSeverity.INFO, title="Title", message="Message")
+
+    def test_without_a_desktop_no_toast_is_made(self):
+        fake = MagicMock()
+        with patch("twitch_drop_farmer.alerts.sys.platform", "win32"), \
+             patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), \
+             patch.dict(sys.modules, {"win10toast": fake}):
+            shown = AlertManager().show_desktop_notification(self.alert())
+
+        self.assertFalse(shown)
+        fake.ToastNotifier.assert_not_called()
+
+    def test_on_windows_with_a_desktop_it_still_shows_the_toast(self):
+        fake = MagicMock()
+        env = {key: value for key, value in os.environ.items() if key != "QT_QPA_PLATFORM"}
+        with patch("twitch_drop_farmer.alerts.sys.platform", "win32"), \
+             patch.dict(os.environ, env, clear=True), \
+             patch.dict(sys.modules, {"win10toast": fake}):
+            shown = AlertManager().show_desktop_notification(self.alert())
+
+        self.assertTrue(shown)
+        fake.ToastNotifier.return_value.show_toast.assert_called_once()
+        self.assertEqual(fake.ToastNotifier.return_value.show_toast.call_args.kwargs["title"], "Title")
+
+    def test_it_is_not_attempted_outside_windows(self):
+        fake = MagicMock()
+        with patch("twitch_drop_farmer.alerts.sys.platform", "linux"), patch.dict(sys.modules, {"win10toast": fake}):
+            self.assertFalse(AlertManager().show_desktop_notification(self.alert()))
+
+        fake.ToastNotifier.assert_not_called()
+
+
 class TestAlertTranslations(unittest.TestCase):
     def test_every_alert_type_has_a_label_and_help_in_both_languages(self):
         for language in ("pt_PT", "en"):

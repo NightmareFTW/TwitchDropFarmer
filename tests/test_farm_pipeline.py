@@ -291,15 +291,23 @@ class TestFarmEnginePipeline(unittest.TestCase):
         windll.kernel32.GetConsoleWindow.assert_not_called()
 
     def test_launcher_main_frees_its_private_console_before_anything_else(self):
+        """On Windows main() would first look for a Python to relaunch the app with (and run it, in a subprocess,
+        as the CI runner did); that step is taken out, so the test is the same on every system."""
         module = _load_launcher_module()
-        calls = MagicMock()
+        for platform in ("linux", "win32"):
+            with self.subTest(platform=platform):
+                calls = MagicMock()
 
-        with patch.object(module, "_release_private_console", calls.release), \
-             patch.object(module, "_ensure_runtime_dependencies", side_effect=lambda root: calls.deps(root) and False), \
-             patch.object(module, "_show_error"):
-            self.assertEqual(module.main(), 1)  # stops at the dependency check: the real app is never started
+                with patch.object(module.sys, "platform", platform), \
+                     patch.object(module, "_release_private_console", calls.release), \
+                     patch.object(module, "_resolve_python_executable", return_value=None), \
+                     patch.object(module, "_should_launch_packaged_dist", return_value=False), \
+                     patch.object(module, "_run_python_module", side_effect=AssertionError("the app was started")), \
+                     patch.object(module, "_ensure_runtime_dependencies", side_effect=lambda root: calls.deps(root) and False), \
+                     patch.object(module, "_show_error"):
+                    self.assertEqual(module.main(), 1)  # stops at the dependency check: the real app is never started
 
-        self.assertEqual([c[0] for c in calls.mock_calls][:2], ["release", "deps"])
+                self.assertEqual([c[0] for c in calls.mock_calls][:2], ["release", "deps"])
 
     def test_launcher_survives_a_console_api_failure(self):
         module = _load_launcher_module()
